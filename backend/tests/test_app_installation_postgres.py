@@ -336,6 +336,66 @@ async def test_install_creates_one_durable_target_and_worker_applies_it(
         ) == 2
 
 
+async def test_fresh_install_queues_one_target_and_worker_applies_it(
+    monkeypatch, lifecycle_pool
+):
+    monkeypatch.setattr(worker, "get_pool", lambda: lifecycle_pool)
+    app_id = await _app(lifecycle_pool, "fresh-worker")
+    release_id = await _release(lifecycle_pool, app_id, "2.0.0")
+    vault_id = await _vault(lifecycle_pool, "fresh-worker")
+    async with lifecycle_pool.acquire() as conn:
+        installation_id = await conn.fetchval(
+            "INSERT INTO vault_app_installations(app_id,vault_id,lifecycle) VALUES($1,$2,'uninstalled') RETURNING id",
+            app_id,
+            vault_id,
+        )
+
+    fresh = await _command(
+        lifecycle_pool,
+        app_id,
+        vault_id,
+        release_id,
+        mode="fresh",
+    )
+    replay = await _command(
+        lifecycle_pool,
+        app_id,
+        vault_id,
+        release_id,
+        mode="fresh",
+    )
+    assert fresh["command_status"] == "accepted"
+    assert fresh["replayed"] is False
+    assert fresh["lifecycle"] == "installing"
+    assert replay["command_status"] == "already_applied"
+    assert replay["replayed"] is True
+
+    async with lifecycle_pool.acquire() as conn:
+        assert await conn.fetchval(
+            "SELECT count(*) FROM app_rollout_jobs AS job JOIN app_rollout_targets AS target ON target.job_id=job.id WHERE job.app_id=$1 AND target.installation_id=$2 AND job.release_id=$3 AND job.requested_by_kind='admin'",
+            app_id,
+            installation_id,
+            release_id,
+        ) == 1
+
+    for _ in range(3):
+        await worker.run_once()
+
+    async with lifecycle_pool.acquire() as conn:
+        state = await conn.fetchrow(
+            "SELECT lifecycle,current_release_id,desired_release_id FROM vault_app_installations WHERE id=$1",
+            installation_id,
+        )
+        assert await conn.fetchval(
+            "SELECT status FROM app_rollout_jobs WHERE app_id=$1 AND release_id=$2",
+            app_id,
+            release_id,
+        ) == "applied"
+    assert state["lifecycle"] == "active"
+    assert state["current_release_id"] == release_id
+    assert state["desired_release_id"] == release_id
+
+
 async def test_install_rollout_queue_failure_rolls_back_command(
     monkeypatch, lifecycle_pool
 ):
