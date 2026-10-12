@@ -7,6 +7,8 @@ specifically; the proxy has its own log in
 
 ## Unreleased
 
+## 0.16.2 — 2026-10-13
+
 ### Authentication
 
 - The bundled Keycloak's sign-in pages use AKB's login theme (`akb`, source in
@@ -124,14 +126,18 @@ specifically; the proxy has its own log in
   canonical active boolean, uses the authenticated user identity, checks live
   membership, and disables caching.
 
-## 0.16.2 — 2026-10-13
-
-### Fix installation execution
+### Installation execution
 
 - A newly accepted `install` or `fresh` command now persists one sealed,
   single-installation rollout job and its target in the same transaction as the
-  command acknowledgement. The existing worker executes the schema plan, so a
-  new installation becomes active without an app-wide rollout request.
+  command acknowledgement. The existing worker executes the schema plan, an
+  app-wide request skips installations that already have a queued target, and
+  a command cannot commit accepted without a job. The job records the
+  authenticated owner/admin command path.
+
+This compatible patch adds no schema migration. Existing SSO receipts remain
+unchanged unless the separate one-time upgrade workflow is run; Keycloak and
+frontend image updates are outside this installation rollout.
 
 ## 0.16.1 — 2026-09-27
 

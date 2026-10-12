@@ -577,13 +577,17 @@ async def command_installation(
                     result["command_status"] == "accepted"
                     and normalized_mode in {"install", "fresh"}
                 ):
-                    await app_rollout_service.enqueue_installation_rollout(
+                    queued = await app_rollout_service.enqueue_installation_rollout(
                         conn,
                         app_id,
                         vault_id,
                         result["installation_id"],
                         release_id,
                     )
+                    if queued is None:
+                        raise ConflictError(
+                            "Installation rollout could not be queued"
+                        )
     except asyncpg.UniqueViolationError:
         _record_command_error(
             action,

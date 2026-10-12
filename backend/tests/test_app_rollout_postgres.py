@@ -13,6 +13,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 
+from app.exceptions import ConflictError, ValidationError
 from app.services import app_rollout_service as rollout
 from app.services import app_rollout_worker as worker
 from app.services import app_resource_service as resources
@@ -173,6 +174,98 @@ async def test_rollout_request_is_idempotent_and_worker_resumes_backfill(monkeyp
             assert await conn.fetchval("SELECT status FROM app_rollout_jobs WHERE id=$1", uuid.UUID(first["job_id"])) == "applied"
             assert await conn.fetchval("SELECT count(*) FROM vt_rollout__orders WHERE flag IS NULL") == 0
             assert await conn.fetchval("SELECT lifecycle FROM vault_app_installations WHERE id=$1", installation_id) == "active"
+
+
+async def test_app_rollout_does_not_duplicate_a_pending_installation_target(monkeypatch):
+    async with _fresh_database() as pool:
+        monkeypatch.setattr(rollout, "get_pool", lambda: pool)
+        manifest, checksum = _manifest("pending-install")
+        async with pool.acquire() as conn:
+            app_id = await conn.fetchval(
+                "INSERT INTO app_definitions(app_key) VALUES($1) RETURNING id",
+                "pending-install",
+            )
+            release_id = await conn.fetchval(
+                "INSERT INTO app_releases(app_id,version,manifest,manifest_checksum) VALUES($1,'2.0.0',$2::jsonb,$3) RETURNING id",
+                app_id,
+                json.dumps(manifest),
+                checksum,
+            )
+            vault_id = await conn.fetchval(
+                "INSERT INTO vaults(name,git_path) VALUES($1,$2) RETURNING id",
+                f"pending-install-{uuid.uuid4().hex[:8]}",
+                "/tmp/pending-install.git",
+            )
+            installation_id = await conn.fetchval(
+                "INSERT INTO vault_app_installations(app_id,vault_id,desired_release_id,lifecycle) VALUES($1,$2,$3,'installing') RETURNING id",
+                app_id,
+                vault_id,
+                release_id,
+            )
+            await conn.execute(
+                "INSERT INTO installation_grants(installation_id,generation,capabilities,issuer,status) VALUES($1,1,$2,'test','active')",
+                installation_id,
+                ["installation:read"],
+            )
+            async with conn.transaction():
+                queued = await rollout.enqueue_installation_rollout(
+                    conn,
+                    app_id,
+                    vault_id,
+                    installation_id,
+                    release_id,
+                )
+        assert queued is not None
+        assert queued["status"] == "pending"
+
+        newer_checksum = rollout.manifest_checksum(manifest, version="3.0.0")
+        async with pool.acquire() as conn:
+            newer_release_id = await conn.fetchval(
+                "INSERT INTO app_releases(app_id,version,manifest,manifest_checksum) VALUES($1,'3.0.0',$2::jsonb,$3) RETURNING id",
+                app_id,
+                json.dumps(manifest),
+                newer_checksum,
+            )
+
+        with pytest.raises(ValidationError, match="No installation requires"):
+            await rollout.request_rollout(
+                app_id,
+                release_id=release_id,
+                manifest_checksum_value=checksum,
+                idempotency_key=str(uuid.uuid4()),
+                requested_by_kind="admin",
+                correlation_id="pending-install",
+                actor="operator",
+                actor_id="operator",
+            )
+
+        # A different app-wide desired release must still see this pending
+        # fresh install and fail its preflight instead of silently skipping it.
+        with pytest.raises(ConflictError, match="fresh-install preflight failed"):
+            await rollout.request_rollout(
+                app_id,
+                release_id=newer_release_id,
+                manifest_checksum_value=newer_checksum,
+                idempotency_key=str(uuid.uuid4()),
+                requested_by_kind="admin",
+                correlation_id="pending-install-newer-release",
+                actor="operator",
+                actor_id="operator",
+            )
+
+        async with pool.acquire() as conn:
+            assert await conn.fetchval(
+                "SELECT count(*) FROM app_rollout_jobs WHERE app_id=$1",
+                app_id,
+            ) == 1
+            assert await conn.fetchval(
+                "SELECT requested_by_kind FROM app_rollout_jobs WHERE app_id=$1",
+                app_id,
+            ) == "admin"
+            assert await conn.fetchval(
+                "SELECT count(*) FROM app_rollout_targets WHERE installation_id=$1",
+                installation_id,
+            ) == 1
 
 
 async def test_fresh_plan_creates_complete_descriptor_and_postflight_fingerprint(monkeypatch):

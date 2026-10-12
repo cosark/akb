@@ -939,7 +939,7 @@ async def enqueue_installation_rollout(
         release_id=release_id,
         manifest_checksum_value=checksum,
         idempotency_key=idempotency_key,
-        requested_by_kind="app",
+        requested_by_kind="admin",
         targets=[target],
         plans_by_installation={installation_id: plan},
     )
@@ -1017,6 +1017,19 @@ async def request_rollout(
                       LEFT JOIN app_installation_observed_states o ON o.installation_id=i.id
                      WHERE i.app_id=$1 AND i.lifecycle IN ('active','installing')
                        AND i.current_release_id IS DISTINCT FROM $2
+                       -- A command-owned job already executes this same desired release.
+                       -- Keep a different fresh-release request in the target set so
+                       -- fresh-install preflight rejects it instead of hiding intent.
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM app_rollout_targets queued_target
+                             JOIN app_rollout_jobs queued_job
+                               ON queued_job.id = queued_target.job_id
+                            WHERE queued_target.installation_id = i.id
+                              AND queued_target.state IN ('pending','running')
+                              AND queued_job.status IN ('pending','running')
+                              AND queued_job.release_id = $2
+                       )
                      ORDER BY i.created_at, i.id
                     """,
                     app_id,
