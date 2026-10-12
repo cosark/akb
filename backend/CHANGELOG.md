@@ -124,6 +124,15 @@ specifically; the proxy has its own log in
   canonical active boolean, uses the authenticated user identity, checks live
   membership, and disables caching.
 
+## 0.16.2 — 2026-10-13
+
+### Fix installation execution
+
+- A newly accepted `install` or `fresh` command now persists one sealed,
+  single-installation rollout job and its target in the same transaction as the
+  command acknowledgement. The existing worker executes the schema plan, so a
+  new installation becomes active without an app-wide rollout request.
+
 ## 0.16.1 — 2026-09-27
 
 ### Fix search fallback, concurrent bootstrap, and PostgreSQL role convergence

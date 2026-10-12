@@ -739,6 +739,212 @@ async def get_rollout(app_id: uuid.UUID | str, job_id: uuid.UUID | str) -> dict[
         return await _load_public_job(conn, app_id, job_id)
 
 
+async def _persist_rollout_job(
+    conn: Any,
+    *,
+    app_id: uuid.UUID,
+    release_id: uuid.UUID,
+    manifest_checksum_value: str,
+    idempotency_key: uuid.UUID,
+    requested_by_kind: str,
+    targets: list[Any],
+    plans_by_installation: dict[uuid.UUID, dict[str, Any]],
+) -> dict[str, Any]:
+    snapshot = await conn.fetchrow(
+        "INSERT INTO app_rollout_snapshots(app_id, requested_by_kind) VALUES($1,$2) RETURNING id, created_at",
+        app_id,
+        requested_by_kind,
+    )
+    assert snapshot is not None
+    for target in targets:
+        await conn.execute(
+            """INSERT INTO app_rollout_snapshot_targets(snapshot_id, app_id, installation_id, vault_id, desired_release_id, current_release_id, baseline_grant_generation, state) VALUES($1,$2,$3,$4,$5,$6,$7,'pending')""",
+            snapshot["id"],
+            app_id,
+            target["installation_id"],
+            target["vault_id"],
+            release_id,
+            target["current_release_id"],
+            target["grant_generation"],
+        )
+    await conn.execute("UPDATE app_rollout_snapshots SET sealed_at=NOW() WHERE id=$1", snapshot["id"])
+    job = await conn.fetchrow(
+        """INSERT INTO app_rollout_jobs(app_id, release_id, manifest_checksum, idempotency_key, snapshot_id, requested_by_kind) VALUES($1,$2,$3,$4,$5,$6) RETURNING id, created_at, updated_at, completed_at""",
+        app_id,
+        release_id,
+        manifest_checksum_value,
+        idempotency_key,
+        snapshot["id"],
+        requested_by_kind,
+    )
+    assert job is not None
+    for ordinal, target in enumerate(targets):
+        target_row = await conn.fetchrow(
+            "SELECT id FROM app_rollout_snapshot_targets WHERE snapshot_id=$1 AND installation_id=$2",
+            snapshot["id"],
+            target["installation_id"],
+        )
+        batch_no = 0 if ordinal == 0 else ((ordinal - 1) // 10) + 1
+        rollout_target = await conn.fetchrow(
+            """INSERT INTO app_rollout_targets(job_id, app_id, installation_id, snapshot_target_id, vault_id, release_id, ordinal, batch_no, is_canary) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id""",
+            job["id"],
+            app_id,
+            target["installation_id"],
+            target_row["id"],
+            target["vault_id"],
+            release_id,
+            ordinal,
+            batch_no,
+            ordinal == 0,
+        )
+        assert rollout_target is not None
+        for step in plans_by_installation[target["installation_id"]]["steps"]:
+            await conn.execute(
+                """INSERT INTO app_rollout_steps(job_id, target_id, installation_id, release_id, step_id, step_order, step_checksum, operation) VALUES($1,$2,$3,$4,$5,$6,$7,$8)""",
+                job["id"],
+                rollout_target["id"],
+                target["installation_id"],
+                release_id,
+                step["id"],
+                step["step_order"],
+                step["checksum"],
+                step["operation"],
+            )
+        await conn.execute(
+            """
+            UPDATE vault_app_installations
+               SET desired_release_id=$2,
+                   lifecycle=CASE WHEN current_release_id IS NULL
+                                  THEN 'installing' ELSE 'upgrading' END,
+                   blocked_reason=NULL
+             WHERE id=$1 AND app_id=$3
+            """,
+            target["installation_id"],
+            release_id,
+            app_id,
+        )
+    await conn.execute(
+        "INSERT INTO app_rollout_audit(job_id,app_id,action,outcome,reason_code) VALUES($1,$2,'request','accepted','accepted')",
+        job["id"],
+        app_id,
+    )
+    return await _load_public_job(conn, app_id, job["id"])
+
+
+async def enqueue_installation_rollout(
+    conn: Any,
+    app_id: uuid.UUID | str,
+    vault_id: uuid.UUID | str,
+    installation_id: uuid.UUID | str,
+    release_id: uuid.UUID | str,
+) -> dict[str, Any] | None:
+    """Persist a fresh-install job for exactly one installation in its command transaction."""
+
+    app_id = _as_uuid(app_id, field="app_id")
+    vault_id = _as_uuid(vault_id, field="vault_id")
+    installation_id = _as_uuid(installation_id, field="installation_id")
+    release_id = _as_uuid(release_id, field="release_id")
+    target = await conn.fetchrow(
+        """
+        SELECT installation.id AS installation_id, installation.vault_id,
+               installation.current_release_id, installation.desired_release_id,
+               installation.grant_generation, installation.lifecycle,
+               grant_row.status AS grant_status,
+               grant_row.generation AS active_generation
+          FROM vault_app_installations AS installation
+          LEFT JOIN LATERAL (
+              SELECT generation, status FROM installation_grants
+               WHERE installation_id=installation.id AND status='active'
+               ORDER BY generation DESC LIMIT 1
+          ) AS grant_row ON TRUE
+         WHERE installation.id=$3 AND installation.app_id=$1
+           AND installation.vault_id=$2
+         FOR UPDATE OF installation
+        """,
+        app_id,
+        vault_id,
+        installation_id,
+    )
+    if target is None:
+        raise NotFoundError("Installation", "not found")
+    if (
+        target["lifecycle"] != "installing"
+        or target["current_release_id"] is not None
+        or target["desired_release_id"] != release_id
+    ):
+        return None
+    if (
+        target["grant_status"] != "active"
+        or target["active_generation"] != target["grant_generation"]
+    ):
+        raise ConflictError("Installation grant changed before rollout was queued")
+
+    release = await conn.fetchrow(
+        "SELECT id, version, manifest, manifest_checksum FROM app_releases WHERE app_id=$1 AND id=$2",
+        app_id,
+        release_id,
+    )
+    if release is None:
+        raise NotFoundError("Release", "not found")
+    checksum = _hex(release["manifest_checksum"], field="manifest checksum")
+    manifest = validate_manifest(release["manifest"], checksum, version=release["version"])
+    app_key = await conn.fetchval("SELECT app_key FROM app_definitions WHERE id=$1", app_id)
+    if app_key is None:
+        raise NotFoundError("App", "not found")
+    if manifest["app_key"] != app_key:
+        raise ConflictError("Release manifest app_key does not match the app definition")
+    try:
+        plan = select_transition_plan(
+            manifest,
+            current_release_version=None,
+            current_schema_fingerprint=None,
+        )
+    except ValidationError as exc:
+        raise ConflictError("Fresh-install transition plan is unavailable") from exc
+    for step in plan["steps"]:
+        if step["operation"] == "create_table":
+            continue
+        owned = await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM app_owned_resources WHERE installation_id=$1 AND vault_id=$2 AND resource_kind='table' AND resource_key=$3 AND status='owned')",
+            installation_id,
+            vault_id,
+            step["payload"]["table"],
+        )
+        if not owned:
+            raise ConflictError("Fresh-install rollout preflight failed")
+
+    idempotency_key = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"akb-installation:{app_id}:{installation_id}:{release_id}:{target['grant_generation']}",
+    )
+    existing = await conn.fetchrow(
+        "SELECT id, release_id, manifest_checksum FROM app_rollout_jobs WHERE app_id=$1 AND idempotency_key=$2 FOR UPDATE",
+        app_id,
+        idempotency_key,
+    )
+    if existing is not None:
+        if existing["release_id"] != release_id or existing["manifest_checksum"] != checksum:
+            raise ConflictError("Installation rollout key conflicts with another release")
+        existing_targets = await conn.fetch(
+            "SELECT installation_id FROM app_rollout_targets WHERE job_id=$1",
+            existing["id"],
+        )
+        if len(existing_targets) != 1 or existing_targets[0]["installation_id"] != installation_id:
+            raise ConflictError("Installation rollout key does not match its target")
+        return await _load_public_job(conn, app_id, existing["id"])
+
+    return await _persist_rollout_job(
+        conn,
+        app_id=app_id,
+        release_id=release_id,
+        manifest_checksum_value=checksum,
+        idempotency_key=idempotency_key,
+        requested_by_kind="app",
+        targets=[target],
+        plans_by_installation={installation_id: plan},
+    )
+
+
 async def request_rollout(
     app_id: uuid.UUID | str,
     *,
@@ -856,58 +1062,16 @@ async def request_rollout(
                         )
                         if not owned:
                             raise ConflictError("Rollout preflight failed")
-                snapshot = await conn.fetchrow(
-                    "INSERT INTO app_rollout_snapshots(app_id, requested_by_kind) VALUES($1,$2) RETURNING id, created_at",
-                    app_id,
-                    requested_by_kind,
+                result = await _persist_rollout_job(
+                    conn,
+                    app_id=app_id,
+                    release_id=release_id,
+                    manifest_checksum_value=checksum,
+                    idempotency_key=key,
+                    requested_by_kind=requested_by_kind,
+                    targets=targets,
+                    plans_by_installation=plans_by_installation,
                 )
-                assert snapshot is not None
-                for target in targets:
-                    await conn.execute(
-                        """INSERT INTO app_rollout_snapshot_targets(snapshot_id, app_id, installation_id, vault_id, desired_release_id, current_release_id, baseline_grant_generation, state) VALUES($1,$2,$3,$4,$5,$6,$7,'pending')""",
-                        snapshot["id"], app_id, target["installation_id"], target["vault_id"], release_id, target["current_release_id"], target["grant_generation"],
-                    )
-                await conn.execute("UPDATE app_rollout_snapshots SET sealed_at=NOW() WHERE id=$1", snapshot["id"])
-                job = await conn.fetchrow(
-                    """INSERT INTO app_rollout_jobs(app_id, release_id, manifest_checksum, idempotency_key, snapshot_id, requested_by_kind) VALUES($1,$2,$3,$4,$5,$6) RETURNING id, created_at, updated_at, completed_at""",
-                    app_id, release_id, checksum, key, snapshot["id"], requested_by_kind,
-                )
-                assert job is not None
-                for ordinal, target in enumerate(targets):
-                    target_row = await conn.fetchrow(
-                        "SELECT id FROM app_rollout_snapshot_targets WHERE snapshot_id=$1 AND installation_id=$2",
-                        snapshot["id"], target["installation_id"],
-                    )
-                    batch_no = 0 if ordinal == 0 else ((ordinal - 1) // 10) + 1
-                    rollout_target = await conn.fetchrow(
-                        """INSERT INTO app_rollout_targets(job_id, app_id, installation_id, snapshot_target_id, vault_id, release_id, ordinal, batch_no, is_canary) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id""",
-                        job["id"], app_id, target["installation_id"], target_row["id"], target["vault_id"], release_id, ordinal, batch_no, ordinal == 0,
-                    )
-                    assert rollout_target is not None
-                    for step in plans_by_installation[target["installation_id"]]["steps"]:
-                        await conn.execute(
-                            """INSERT INTO app_rollout_steps(job_id, target_id, installation_id, release_id, step_id, step_order, step_checksum, operation) VALUES($1,$2,$3,$4,$5,$6,$7,$8)""",
-                            job["id"], rollout_target["id"], target["installation_id"], release_id, step["id"], step["step_order"], step["checksum"], step["operation"],
-                        )
-                    await conn.execute(
-                        """
-                        UPDATE vault_app_installations
-                           SET desired_release_id=$2,
-                               lifecycle=CASE WHEN current_release_id IS NULL
-                                              THEN 'installing' ELSE 'upgrading' END,
-                               blocked_reason=NULL
-                         WHERE id=$1 AND app_id=$3
-                        """,
-                        target["installation_id"],
-                        release_id,
-                        app_id,
-                    )
-                await conn.execute(
-                    "INSERT INTO app_rollout_audit(job_id,app_id,action,outcome,reason_code) VALUES($1,$2,'request','accepted','accepted')",
-                    job["id"],
-                    app_id,
-                )
-                result = await _load_public_job(conn, app_id, job["id"])
     except (ConflictError, ValidationError, NotFoundError):
         record_app_audit("app.rollout.request", correlation_id=correlation_id, outcome="error", reason="rejected", actor=actor, actor_id=actor_id, app_id=app_id)
         raise
