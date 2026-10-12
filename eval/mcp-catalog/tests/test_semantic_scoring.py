@@ -10,6 +10,7 @@ from mcp_catalog.execution import (
     ToolCallRecord,
     ToolCallRecorder,
     TrialOutcome,
+    _registered_readonly_observation,
     _finalize_semantic_metrics,
     _vault_skill_binding_digest,
     bind_tool_calls,
@@ -247,6 +248,12 @@ def _relation_lifecycle_trace(
     wrong_browse_vault: bool = False,
     wrong_browse_uri: bool = False,
     browse_uri: bool = False,
+    browse_root: bool = False,
+    root_browse_has_collection: bool = True,
+    reverse_verifications: bool = False,
+    omit_stage: str | None = None,
+    extra_browse_after_unlink: bool = True,
+    unlink_before_prior_read: bool = False,
 ):
     left_uri = "akb://catalog-bench-relations/coll/notes/doc/left.md"
     right_uri = "akb://catalog-bench-relations/coll/notes/doc/right.md"
@@ -269,7 +276,21 @@ def _relation_lifecycle_trace(
     }
     skipped_content_reads = {"verify_left_document", "verify_right_document"}
     calls = []
-    for attempt in task.expected_material_attempts:
+    attempts = list(task.expected_material_attempts)
+    if unlink_before_prior_read:
+        read_index = next(index for index, attempt in enumerate(attempts) if attempt.stage_id == "read_relation_1")
+        unlink_index = next(index for index, attempt in enumerate(attempts) if attempt.stage_id == "delete_relation_1")
+        attempts[read_index], attempts[unlink_index] = attempts[unlink_index], attempts[read_index]
+    if reverse_verifications:
+        last_mutation = max(
+            index
+            for index, attempt in enumerate(attempts)
+            if attempt.logical_operation not in {"read", "list", "search"}
+        )
+        attempts = [*attempts[: last_mutation + 1], *reversed(attempts[last_mutation + 1 :])]
+    for attempt in attempts:
+        if attempt.stage_id == omit_stage:
+            continue
         if attempt.stage_id in skipped_content_reads:
             continue
         arguments = dict(attempt.arguments)
@@ -298,20 +319,37 @@ def _relation_lifecycle_trace(
                 arguments["collection"] = "unrelated"
             if wrong_browse_vault:
                 arguments["vault"] = "other-vault"
+        if attempt.stage_id == "verify_collection" and browse_root:
+            arguments = {
+                "action": "browse",
+                "depth": -1,
+                "uri": "akb://catalog-bench-relations",
+            }
         if attempt.stage_id == "verify_collection" and wrong_browse_uri:
             arguments["uri"] = "akb://catalog-bench-relations/coll/unrelated"
+        result_preview = None
+        if attempt.stage_id == "verify_collection" and browse_root:
+            collection_uri = (
+                "akb://catalog-bench-relations/coll/notes"
+                if root_browse_has_collection
+                else "akb://catalog-bench-relations/coll/unrelated"
+            )
+            result_preview = json.dumps(
+                {"items": [{"type": "collection", "uri": collection_uri, "name": collection_uri.rsplit("/", 1)[-1]}]},
+                separators=(",", ":"),
+            )
         result_fields = {"uri": source_by_stage[attempt.stage_id]} if attempt.stage_id in source_by_stage else {}
         calls.append(
             ToolCallRecord(
                 order=len(calls) + 1,
                 tool_name=(
                     "akb_discover"
-                    if attempt.stage_id == "verify_collection" and browse_pair
+                    if attempt.stage_id == "verify_collection" and (browse_pair or browse_root)
                     else tool_by_stage[attempt.stage_id]
                 ),
                 canonical_operation=(
                     "akb_discover"
-                    if attempt.stage_id == "verify_collection" and browse_pair
+                    if attempt.stage_id == "verify_collection" and (browse_pair or browse_root)
                     else tool_by_stage[attempt.stage_id]
                 ),
                 logical_operation=attempt.logical_operation,
@@ -325,9 +363,10 @@ def _relation_lifecycle_trace(
                 transport_succeeded=True,
                 server_succeeded=True,
                 result_fields=result_fields,
+                result_preview=result_preview,
             )
         )
-        if attempt.stage_id == "delete_relation_1":
+        if attempt.stage_id == "delete_relation_1" and extra_browse_after_unlink:
             browse_arguments = {
                 "uri": "akb://catalog-bench-relations/coll/notes",
                 "depth": -1,
@@ -404,17 +443,55 @@ def test_relation_workflow_accepts_alternate_public_reads_and_rejects_wrong_edge
     complete = _relation_lifecycle_trace(task)
     wrong_document = _relation_lifecycle_trace(task, wrong_document=True)
     wrong_relation = _relation_lifecycle_trace(task, wrong_relation=True)
-    wrong_collection = _relation_lifecycle_trace(task, wrong_collection=True)
-    browse_pair = _relation_lifecycle_trace(task, browse_pair=True)
-    wrong_pair_vault = _relation_lifecycle_trace(task, browse_pair=True, wrong_browse_vault=True)
-    wrong_pair_collection = _relation_lifecycle_trace(task, browse_pair=True, wrong_collection=True)
+    wrong_collection = _relation_lifecycle_trace(task, wrong_collection=True, extra_browse_after_unlink=False)
+    browse_pair = _relation_lifecycle_trace(task, browse_pair=True, extra_browse_after_unlink=False)
+    browse_root = _relation_lifecycle_trace(task, browse_root=True, extra_browse_after_unlink=False)
+    browse_root_missing_collection = _relation_lifecycle_trace(
+        task,
+        browse_root=True,
+        root_browse_has_collection=False,
+        extra_browse_after_unlink=False,
+    )
+    reverse_verifications = _relation_lifecycle_trace(
+        task,
+        reverse_verifications=True,
+        extra_browse_after_unlink=False,
+    )
+    missing_unlinked_check = _relation_lifecycle_trace(
+        task,
+        reverse_verifications=True,
+        omit_stage="verify_unlinked_relationships",
+        extra_browse_after_unlink=False,
+    )
+    out_of_order_mutation = _relation_lifecycle_trace(
+        task,
+        unlink_before_prior_read=True,
+        extra_browse_after_unlink=False,
+    )
+    wrong_pair_vault = _relation_lifecycle_trace(
+        task,
+        browse_pair=True,
+        wrong_browse_vault=True,
+        extra_browse_after_unlink=False,
+    )
+    wrong_pair_collection = _relation_lifecycle_trace(
+        task,
+        browse_pair=True,
+        wrong_collection=True,
+        extra_browse_after_unlink=False,
+    )
     conflicting_uri_vault = _relation_lifecycle_trace(
         task,
         browse_pair=True,
         browse_uri=True,
         wrong_browse_vault=True,
+        extra_browse_after_unlink=False,
     )
-    wrong_browse_uri = _relation_lifecycle_trace(task, wrong_browse_uri=True)
+    wrong_browse_uri = _relation_lifecycle_trace(
+        task,
+        wrong_browse_uri=True,
+        extra_browse_after_unlink=False,
+    )
 
     assert complete.state_contract_passed is True
     assert complete.tool_outcome_match is True
@@ -431,6 +508,18 @@ def test_relation_workflow_accepts_alternate_public_reads_and_rejects_wrong_edge
     assert browse_pair.result_binding_accuracy is True
     assert browse_pair.multi_step_ordering is True
     assert browse_pair.success is True
+    assert browse_root.result_binding_accuracy is True
+    assert browse_root.success is True
+    assert browse_root_missing_collection.result_binding_accuracy is False
+    assert browse_root_missing_collection.success is False
+    assert reverse_verifications.multi_step_ordering is True
+    assert reverse_verifications.result_binding_accuracy is True
+    assert reverse_verifications.success is True
+    assert missing_unlinked_check.multi_step_ordering is False
+    assert missing_unlinked_check.result_binding_accuracy is False
+    assert missing_unlinked_check.success is False
+    assert out_of_order_mutation.multi_step_ordering is False
+    assert out_of_order_mutation.success is False
     assert wrong_pair_vault.result_binding_accuracy is False
     assert wrong_pair_collection.result_binding_accuracy is False
     assert conflicting_uri_vault.result_binding_accuracy is False
@@ -827,6 +916,71 @@ def test_relation_recorder_preserves_pending_stage_when_scoped_read_has_extra_ar
     ]
 
     assert observed == [expected for *_, expected in sequence]
+
+
+def test_relation_recorder_matches_post_unlink_observations_out_of_order() -> None:
+    task = _tasks()["collection-relation-lifecycle-ko"]
+    recorder = ToolCallRecorder(operation_map={}, secrets=(), task=task)
+    vault = "catalog-bench-relations"
+    collection_uri = f"akb://{vault}/coll/notes"
+    left_uri = f"{collection_uri}/doc/left.md"
+    right_uri = f"{collection_uri}/doc/right.md"
+    sequence = [
+        ("akb_create_vault", "create", "vault", {"name": vault}, "create_vault_1"),
+        ("akb_create_collection", "create", "collection", {"vault": vault, "path": "notes"}, "create_collection_1"),
+        ("akb_put", "create", "document", {"vault": vault, "collection": "notes", "title": "left", "content": "left"}, "create_document_1"),
+        ("akb_put", "create", "document", {"vault": vault, "collection": "notes", "title": "right", "content": "right"}, "create_document_2"),
+        ("akb_link", "update", "relation", {"relation": "related_to", "source": left_uri, "target": right_uri}, "update_relation_1"),
+        ("akb_relations", "read", "relation", {"direction": "both", "uri": left_uri}, "read_relation_1"),
+        ("akb_relations", "read", "relation", {"direction": "both", "uri": right_uri}, None),
+        ("akb_unlink", "delete", "relation", {"relation": "related_to", "source": left_uri, "target": right_uri}, "delete_relation_1"),
+        ("akb_get", "read", "document", {"uri": left_uri}, None),
+        ("akb_get", "read", "document", {"uri": right_uri}, None),
+        ("akb_relations", "read", "relation", {"direction": "both", "uri": left_uri}, "verify_unlinked_relationships"),
+        ("akb_relations", "read", "relation", {"direction": "both", "uri": right_uri}, None),
+        ("akb_browse", "list", "document", {"depth": 0, "uri": collection_uri}, "verify_collection"),
+    ]
+
+    observed = [
+        recorder._stage_id_for_material_call(name, operation, resource, arguments)
+        for name, operation, resource, arguments, _expected_stage in sequence
+    ]
+
+    assert observed == [expected for *_, expected in sequence]
+
+
+def test_stdio_local_registered_parent_browse_is_a_safe_follow_up() -> None:
+    task = _tasks()["stdio-local-ko"]
+    arguments = {
+        "depth": 0,
+        "uri": "akb://catalog-bench-vault-authorization",
+    }
+    browse = ToolCallRecord(
+        order=4,
+        tool_name="akb_browse",
+        canonical_operation="akb_browse",
+        logical_operation="list",
+        resource_type="document",
+        operation_kind="preparatory",
+        raw_model_args=arguments,
+        server_args=arguments,
+        effective_server_args=arguments,
+        raw_args_valid=True,
+        server_args_equal_raw=True,
+        transport_succeeded=True,
+        server_succeeded=True,
+    )
+    wrong_vault_arguments = {"depth": 0, "uri": "akb://unregistered-vault"}
+    wrong_vault = browse.model_copy(
+        update={
+            "raw_model_args": wrong_vault_arguments,
+            "server_args": wrong_vault_arguments,
+            "effective_server_args": wrong_vault_arguments,
+        }
+    )
+
+    assert _registered_readonly_observation(browse, task, [browse]) is True
+    assert _registered_readonly_observation(wrong_vault, task, [wrong_vault]) is False
 
 
 def test_post_completion_read_is_efficiency_only_and_finalize_roundtrip_is_idempotent() -> None:

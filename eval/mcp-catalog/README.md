@@ -181,11 +181,11 @@ Pass it with `run-paired --amendment /private/run/akb-361-continuation.json`.
 Paths may be absolute or relative to the operator file.
 
 AKB-361's tool-guidance remeasurement is a separate selection-bound run. Supply
-AKB-361's currently authorized 14-identity `selection-v6.json` and a new summary
+AKB-361's currently authorized 14-identity `selection-v7.json` and a new summary
 path with `--selection` and `--selection-summary-output`. The selection pins six
 prior candidate tool failures, eight successful controls, two immutable parent
-artifact hashes, and issue revision `9abc158b4a70ddf684e3332d47b4dd2c7d723fac`
-and content hash `a9ec2f3ae9bedbc3023066546f1c39c54d4d37651703b233d1547873c1492fe9`.
+artifact hashes, and issue revision `774621eccd157d955d489d50d8a9f5177d604ce1`
+and content hash `97b77a3514ef4e3a3c4a142508f750b1dc5d192514a5b173c54db87546f9bf7d`.
 The runner
 executes only those 14 identities in both arms (28 new model trials), retains
 the original repeat indices and `akb-358-v1` counterbalanced arm order, and runs
@@ -205,8 +205,8 @@ without requiring them to parse as new `TrialOutcome` objects.
 
 The checkpoint records a read-only preflight of the selection file hash, both
 parent hashes, 14 identities, the six/eight role counts, and the fixed budget.
-The new shared ledger starts at zero and stops at `$40.9416020808`, calculated
-from the `$50` session cap less the pinned `$9.0583979192` prior spend basis.
+The new shared ledger starts at zero and stops at `$40.8415197492`, calculated
+from the `$50` session cap less the pinned `$9.1584802508` prior spend basis.
 The `$0.10` per-trial cap and 300-second request timeout remain in force. No
 total request-count or overall wall-time limit applies to this sample.
 

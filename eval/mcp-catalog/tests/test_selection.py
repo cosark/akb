@@ -104,8 +104,8 @@ def _selection_fixture(
         "selected_trials": selected,
         "budget": {
             "session_max_usd": "50",
-            "prior_conservative_spend_usd": "9.0583979192",
-            "new_execution_limit_usd": "40.9416020808",
+            "prior_conservative_spend_usd": "9.1584802508",
+            "new_execution_limit_usd": "40.8415197492",
             "per_trial_usd": "0.10",
             "request_timeout_seconds": 300,
         },
@@ -123,8 +123,8 @@ def _selection_fixture(
 def test_approved_selection_pins_latest_authority_two_parents_and_14_identities() -> None:
     assert selection_module.APPROVED_AUTHORIZATION == {
         "uri": "akb://reef-akb/coll/issues/doc/akb-361.md",
-        "revision": "9abc158b4a70ddf684e3332d47b4dd2c7d723fac",  # pragma: allowlist secret
-        "content_sha256": "a9ec2f3ae9bedbc3023066546f1c39c54d4d37651703b233d1547873c1492fe9",  # pragma: allowlist secret
+        "revision": "774621eccd157d955d489d50d8a9f5177d604ce1",  # pragma: allowlist secret
+        "content_sha256": "97b77a3514ef4e3a3c4a142508f750b1dc5d192514a5b173c54db87546f9bf7d",  # pragma: allowlist secret
     }
     assert selection_module.APPROVED_PARENT_SHA256 == {
         "previous_baseline": "276e0dfdfdad58ce083f65b3ea0c21a22675f31d8a393995dace62b77eaa43a4",  # pragma: allowlist secret
@@ -158,8 +158,8 @@ def test_selection_validates_all_pinned_parent_rows_without_writing_them(
     assert preflight["role_counts"] == {"control": 8, "failure": 6}
     assert preflight["budget"] == {
         "session_max_usd": "50",
-        "prior_conservative_spend_usd": "9.0583979192",
-        "new_execution_limit_usd": "40.9416020808",
+        "prior_conservative_spend_usd": "9.1584802508",
+        "new_execution_limit_usd": "40.8415197492",
         "per_trial_usd": "0.10",
         "request_timeout_seconds": 300,
     }
@@ -350,11 +350,11 @@ def test_selection_requires_the_approved_plan_and_budget_in_the_operator_file(
     document = json.loads(selection.path.read_text(encoding="utf-8"))
     assert set(document) == {"schema_version", "authorization", "parents", "selected_trials", "budget"}
     assert selection.budget.session_max_usd == Decimal("50")
-    assert selection.budget.prior_conservative_spend_usd == Decimal("9.0583979192")
-    assert selection.budget.new_execution_limit_usd == Decimal("40.9416020808")
+    assert selection.budget.prior_conservative_spend_usd == Decimal("9.1584802508")
+    assert selection.budget.new_execution_limit_usd == Decimal("40.8415197492")
 
-    document["budget"]["prior_conservative_spend_usd"] = "8.56720104"
-    document["budget"]["new_execution_limit_usd"] = "41.43279896"
+    document["budget"]["prior_conservative_spend_usd"] = "9.0583979192"
+    document["budget"]["new_execution_limit_usd"] = "40.9416020808"
     selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
     with pytest.raises(ValueError, match="selection file is invalid"):
         selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
@@ -524,8 +524,8 @@ def test_selection_filters_schedules_and_hashes_its_pre_smoke_seal(
     assert seal["selection"]["authorization"] == selection.authorization.model_dump(mode="json")
     assert seal["selection"]["selected_identity_count"] == 14
     assert seal["selection"]["expected_model_trials"] == 28
-    assert seal["selection"]["budget"]["prior_conservative_spend_usd"] == "9.0583979192"
-    assert seal["selection"]["budget"]["new_execution_limit_usd"] == "40.9416020808"
+    assert seal["selection"]["budget"]["prior_conservative_spend_usd"] == "9.1584802508"
+    assert seal["selection"]["budget"]["new_execution_limit_usd"] == "40.8415197492"
     assert set(seal["selection"]["parents"]) == {"previous_baseline", "previous_candidate"}
     assert seal["paired_order_mode"] == manifest.paired_order
     assert seal["paired_order_seed"] == manifest.paired_order_seed
@@ -631,7 +631,7 @@ async def test_cli_uses_new_selection_ledger_and_writes_separate_summary(
     assert len(captured) == 2
     ledger = captured[0]["shared_ledger"]
     assert captured[1]["shared_ledger"] is ledger
-    assert ledger.total_cost_limit_usd == Decimal("40.9416020808")
+    assert ledger.total_cost_limit_usd == Decimal("40.8415197492")
     assert ledger.requests == 0
     assert ledger.cost_usd == Decimal("0")
     assert all(item["selection"].sha256 == selection.sha256 for item in captured)
