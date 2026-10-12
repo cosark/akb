@@ -271,7 +271,7 @@ const FILE_TOOLS = [
   },
   {
     name: "akb_get_file",
-    description: "Download a file from vault storage to a local path. Pass the file URI — `akb://{vault}[/coll/{coll_path}]/file/{uuid}` — from akb_browse or akb_put_file.",
+    description: 'Download a file from vault storage to a local path. Pass the file URI — `akb://{vault}[/coll/{coll_path}]/file/{uuid}` — from `akb_discover(action="browse")` or `akb_put_file`.',
     inputSchema: {
       type: "object",
       properties: {
