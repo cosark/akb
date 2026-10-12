@@ -382,8 +382,8 @@ def test_task_state_probes_use_observed_absence_and_supported_read_paths() -> No
         assert observations[2].probe.path == "/api/v1/documents/catalog-bench-relations/notes/right.md"
         relation_binding = observations[-1].probe.result_binding
         assert relation_binding is not None
-        assert (relation_binding.source_attempt, relation_binding.source_field, relation_binding.transform) == (
-            3,
+        assert (relation_binding.source_stage, relation_binding.source_field, relation_binding.transform) == (
+            "create_document_1",
             "uri",
             "uri_query",
         )

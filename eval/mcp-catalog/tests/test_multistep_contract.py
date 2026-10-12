@@ -109,6 +109,7 @@ def _call(
     *,
     result_fields: dict[str, str] | None = None,
     succeeded: bool = True,
+    stage_id: str | None = None,
 ) -> ToolCallRecord:
     return ToolCallRecord(
         order=order,
@@ -125,13 +126,15 @@ def _call(
         server_status_code=None if succeeded else 500,
         server_error_code=None if succeeded else "internal_error",
         result_fields=result_fields or {},
+        operation_kind="material",
+        stage_id=stage_id,
     )
 
 
 def _exact_calls() -> list[ToolCallRecord]:
     return [
-        _call(1, "akb_create_vault", "create", "vault", {"name": VAULT}),
-        _call(2, "akb_create_collection", "create", "collection", {"vault": VAULT, "path": COLLECTION}),
+        _call(1, "akb_create_vault", "create", "vault", {"name": VAULT}, stage_id="create_vault_1"),
+        _call(2, "akb_create_collection", "create", "collection", {"vault": VAULT, "path": COLLECTION}, stage_id="create_collection_1"),
         _call(
             3,
             "akb_put",
@@ -139,9 +142,10 @@ def _exact_calls() -> list[ToolCallRecord]:
             "document",
             {"vault": VAULT, "collection": COLLECTION, "title": TITLE, "content": CONTENT},
             result_fields={"uri": URI},
+            stage_id="create_document_1",
         ),
-        _call(4, "akb_get", "read", "document", {"uri": URI}),
-        _call(5, "akb_provenance", "read", "document", {"uri": URI}),
+        _call(4, "akb_get", "read", "document", {"uri": URI}, stage_id="read_document_1"),
+        _call(5, "akb_provenance", "read", "document", {"uri": URI}, stage_id="read_document_2"),
     ]
 
 

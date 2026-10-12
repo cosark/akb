@@ -17,7 +17,7 @@ from .amendment import AmendmentPlan, CONTINUATION_RUN_CAP_USD
 from .contracts import ArmName, load_json
 from .evidence import write_json
 from .execution import BudgetLedger
-from .selection import NEW_EXECUTION_LIMIT_USD, ToolGuidanceSelection, build_selection_summary
+from .selection import ToolGuidanceSelection, build_selection_summary
 from .runner import (
     BenchmarkRunFailure,
     BenchmarkRunner,
@@ -336,7 +336,7 @@ async def run_paired(args: argparse.Namespace) -> int:
         total_cost_limit_usd=(
             CONTINUATION_RUN_CAP_USD
             if continuation is not None
-            else NEW_EXECUTION_LIMIT_USD
+            else selection.budget.new_execution_limit_usd
             if selection is not None
             else None
         ),
@@ -423,7 +423,7 @@ async def run_paired(args: argparse.Namespace) -> int:
         "max_total_cost_usd": baseline_manifest.budget.max_total_cost_usd,
     }
     if selection is not None:
-        paired_budget["new_execution_limit_usd"] = str(NEW_EXECUTION_LIMIT_USD)
+        paired_budget["new_execution_limit_usd"] = str(selection.budget.new_execution_limit_usd)
     runners = {"baseline": baseline_runner, "candidate": candidate_runner}
     outputs = {"baseline": args.baseline_output, "candidate": args.candidate_output}
     for arm, artifact in artifacts.items():

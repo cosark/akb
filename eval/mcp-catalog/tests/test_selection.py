@@ -57,32 +57,23 @@ def _selection_fixture(
             "task_id": task_id,
             "repeat_index": repeat_index,
             "role": role,
-            "parent_lineage": lineage,
+            "parent_lineage": "previous",
         }
-        for (model_class, transport, task_id, repeat_index), (role, lineage)
+        for (model_class, transport, task_id, repeat_index), role
         in selection_module._ROLE_BY_IDENTITY.items()
     ]
     parent_bindings: dict[str, dict[str, str]] = {}
-    parent_hashes: dict[str, str] = {}
     tmp_path.mkdir(parents=True, exist_ok=True)
-    for name in (
-        "recovery_baseline",
-        "recovery_candidate",
-        "original_baseline",
-        "original_candidate",
-    ):
-        arm = "baseline" if name.endswith("_baseline") else "candidate"
-        lineage = "original" if name.startswith("original_") else "recovery"
+    for arm in ("baseline", "candidate"):
+        name = f"previous_{arm}"
         rows = []
         for trial in selected:
-            if trial["parent_lineage"] != lineage:
-                continue
             rows.append(
                 {
                     **{key: trial[key] for key in ("model_class", "transport", "task_id", "repeat_index")},
                     "arm": arm,
                     "success": not (arm == "candidate" and trial["role"] == "failure"),
-                    "failure_kind": "tool" if arm == "candidate" and trial["role"] == "failure" else "none",
+                    "failure_kind": "none",
                 }
             )
         artifact = {
@@ -98,19 +89,24 @@ def _selection_fixture(
         raw = json.dumps(artifact, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         path.write_bytes(raw)
         digest = hashlib.sha256(raw).hexdigest()
-        parent_hashes[name] = digest
         parent_bindings[name] = {"path": str(path), "sha256": digest}
-    monkeypatch.setattr(selection_module, "_PARENT_SHA256", parent_hashes)
 
     document = {
         "schema_version": 1,
         "authorization": {
-            "uri": selection_module.AUTHORIZATION_URI,
-            "revision": selection_module.AUTHORIZATION_REVISION,
-            "content_sha256": selection_module.AUTHORIZATION_CONTENT_SHA256,
+            "uri": "akb://reef-akb/coll/issues/doc/akb-361.md",
+            "revision": "a" * 40,
+            "content_sha256": "b" * 64,
         },
         "parents": parent_bindings,
         "selected_trials": selected,
+        "budget": {
+            "session_max_usd": "50",
+            "prior_conservative_spend_usd": str(selection_module.PRIOR_SPEND_USD),
+            "new_execution_limit_usd": str(selection_module.NEW_EXECUTION_LIMIT_USD),
+            "per_trial_usd": "0.10",
+            "request_timeout_seconds": 300,
+        },
     }
     selection_path = tmp_path / "selection.json"
     selection_path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -131,10 +127,37 @@ def test_selection_validates_all_pinned_parent_rows_without_writing_them(
     loaded = selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
 
     assert loaded.sha256 == selection.sha256
-    assert len(loaded.selected_trials) == 16
-    assert sum(trial.role == "failure" for trial in loaded.selected_trials) == 8
+    assert len(loaded.selected_trials) == 14
+    assert sum(trial.role == "failure" for trial in loaded.selected_trials) == 6
     assert sum(trial.role == "control" for trial in loaded.selected_trials) == 8
     assert {name: Path(item["path"]).read_bytes() for name, item in loaded.parents.items()} == parent_bytes
+
+
+def test_failure_role_requires_candidate_failure_without_constraining_failure_kind(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, tasks, selection = _selection_fixture(tmp_path, monkeypatch)
+    candidate_path = Path(selection.parents["previous_candidate"]["path"])
+    candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+    candidate_failures = [
+        row
+        for run in candidate["runs"].values()
+        for row in run["trials"]
+        if not row["success"]
+    ]
+    assert candidate_failures
+    assert all(row["failure_kind"] == "none" for row in candidate_failures)
+    selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
+
+    candidate_failures[0]["success"] = True
+    raw = json.dumps(candidate, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    candidate_path.write_bytes(raw)
+    document = json.loads(selection.path.read_text(encoding="utf-8"))
+    document["parents"]["previous_candidate"]["sha256"] = hashlib.sha256(raw).hexdigest()
+    selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+    with pytest.raises(ValueError, match="prior candidate failure"):
+        selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
 
 
 def test_selection_requires_the_approved_streamlake_primary_route(
@@ -181,44 +204,16 @@ def test_relative_parent_paths_resolve_from_the_selection_file(
     assert all(Path(parent["path"]).is_absolute() for parent in loaded.parents.values())
 
 
-def test_selection_validates_the_approved_plan_provenance_fields(
+def test_selection_requires_the_minimal_approved_plan_and_exact_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manifest, tasks, selection = _selection_fixture(tmp_path, monkeypatch)
     document = json.loads(selection.path.read_text(encoding="utf-8"))
-    for trial in document["selected_trials"]:
-        if trial["role"] == "failure":
-            trial["prior_candidate_failure_kind"] = "tool"
-        else:
-            trial["prior_both_arms_success"] = True
-    document.update(
-        {
-            "purpose": "tool_guidance_regression",
-            "selected_identity_count": 16,
-            "new_trial_count": 32,
-            "smoke_trial_count": 8,
-            "comparison": "fresh flat baseline versus corrected mixed candidate",
-            "prepared_at": "2026-10-12T00:52:00.192696+00:00",
-            "budget": {
-                "session_max_usd": 50,
-                "prior_conservative_spend_usd": "8.56720104",
-                "new_execution_limit_usd": "41.43279896",
-                "per_trial_usd": "0.10",
-                "request_timeout_seconds": 300,
-                "request_count_limit": None,
-                "wall_time_stop_limit": None,
-            },
-        }
-    )
+    assert set(document) == {"schema_version", "authorization", "parents", "selected_trials", "budget"}
+    document["budget"]["new_execution_limit_usd"] = "41.2500298149"
     selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    loaded = selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
-
-    assert len(loaded.selected_trials) == 16
-    document["budget"]["new_execution_limit_usd"] = "41.43279897"
-    selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
-    with pytest.raises(ValueError, match="invalid"):
+    with pytest.raises(ValueError, match="budget"):
         selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
 
 
@@ -251,7 +246,7 @@ def test_selection_rejects_parent_drift_and_budget_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manifest, tasks, selection = _selection_fixture(tmp_path, monkeypatch)
-    parent = Path(selection.parents["recovery_baseline"]["path"])
+    parent = Path(selection.parents["previous_baseline"]["path"])
     parent.write_bytes(parent.read_bytes() + b" ")
     with pytest.raises(ValueError, match="SHA-256"):
         selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
@@ -276,25 +271,18 @@ def test_selection_filters_schedules_and_hashes_its_pre_smoke_seal(
     planned = runner._planned_keys(manifest.arm_source_revisions["baseline"])
     coordinator = PairedArmCoordinator(manifest, tasks, selection=selection)
 
-    assert len(planned) == 16
-    assert sum(map(len, coordinator._schedule.values())) == 32
+    assert len(planned) == 14
+    assert sum(map(len, coordinator._schedule.values())) == 28
     assert all(selection.contains(key.model_class, key.transport, key.task_id, key.repeat_index) for key in planned.values())
     runtime = {"source_revision": manifest.arm_source_revisions["baseline"], "artifact_versions": {}}
     seal = runner._local_pre_smoke_seal(runtime, {})
     assert seal["selection"]["selection_sha256"] == selection.sha256
-    assert seal["selection"]["authorization"] == {
-        "uri": selection_module.AUTHORIZATION_URI,
-        "revision": selection_module.AUTHORIZATION_REVISION,
-        "content_sha256": selection_module.AUTHORIZATION_CONTENT_SHA256,
-    }
-    assert seal["selection"]["provider_recovery_authorization"] == {
-        "uri": selection_module.AUTHORIZATION_URI,
-        "revision": selection_module.PROVIDER_RECOVERY_AUTHORIZATION_REVISION,
-        "content_sha256": selection_module.PROVIDER_RECOVERY_AUTHORIZATION_CONTENT_SHA256,
-    }
+    assert seal["selection"]["authorization"] == selection.authorization.model_dump(mode="json")
     changed = selection.__class__(
         path=selection.path,
         sha256="f" * 64,
+        authorization=selection.authorization,
+        budget=selection.budget,
         parents=selection.parents,
         selected_trials=selection.selected_trials,
         parent_results=selection.parent_results,
@@ -333,7 +321,7 @@ async def test_selection_resume_restores_contiguous_terminal_arm_events(
     await coordinator.register_arm("baseline", reused["baseline"])
     await coordinator.register_arm("candidate", reused["candidate"])
 
-    assert len(coordinator.evidence()["events"]) == 32
+    assert len(coordinator.evidence()["events"]) == 28
     assert coordinator.evidence()["complete"] is True
 
 
@@ -385,7 +373,7 @@ async def test_cli_uses_new_selection_ledger_and_writes_separate_summary(
     assert len(captured) == 2
     ledger = captured[0]["shared_ledger"]
     assert captured[1]["shared_ledger"] is ledger
-    assert ledger.total_cost_limit_usd == Decimal("41.43279896")
+    assert ledger.total_cost_limit_usd == Decimal("41.2500298148")
     assert ledger.requests == 0
     assert ledger.cost_usd == Decimal("0")
     assert all(item["selection"].sha256 == selection.sha256 for item in captured)
@@ -393,4 +381,4 @@ async def test_cli_uses_new_selection_ledger_and_writes_separate_summary(
     summary = json.loads(args.selection_summary_output.read_text(encoding="utf-8"))
     assert summary["status"] == "incomplete"
     assert summary["adopt_eligible"] is False
-    assert summary["expected_new_model_trials"] == 32
+    assert summary["expected_new_model_trials"] == 28

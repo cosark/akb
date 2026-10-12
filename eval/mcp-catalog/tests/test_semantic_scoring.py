@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from mcp_catalog.contracts import load_task_corpus
-from mcp_catalog.execution import ToolCallRecord, TrialOutcome
+from mcp_catalog.execution import ToolCallRecord, TrialOutcome, _vault_skill_binding_digest
 from mcp_catalog.runtime import StateObservation
 from mcp_catalog.state import evaluate_state_contract
 
@@ -23,6 +23,7 @@ def _record(order: int, raw: dict[str, object]) -> ToolCallRecord:
         tool_name=str(raw["tool_name"]),
         logical_operation=str(raw["logical_operation"]),
         resource_type=raw.get("resource_type", "unknown"),
+        operation_kind=raw.get("operation_kind", "unknown"),
         raw_model_args=arguments,
         server_args=arguments,
         effective_server_args=arguments,
@@ -31,6 +32,13 @@ def _record(order: int, raw: dict[str, object]) -> ToolCallRecord:
         transport_succeeded=True,
         server_succeeded=bool(raw.get("succeeded", True)),
         server_error_code=raw.get("error_code"),
+        stage_id=raw.get("stage_id"),
+        vault_skill_binding_sha256=raw.get(
+            "vault_skill_binding_sha256",
+            _vault_skill_binding_digest(str(raw["tool_name"]), arguments, str(raw.get("ack_token") or raw.get("retry_ack")))
+            if raw.get("ack_token") or raw.get("retry_ack")
+            else None,
+        ),
         vault_skill_ack=raw.get("ack_token"),
         vault_skill_retry_ack=raw.get("retry_ack"),
     )

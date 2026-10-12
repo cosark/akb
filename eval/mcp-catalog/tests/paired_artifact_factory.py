@@ -401,14 +401,15 @@ def _make_outcome(
 ) -> TrialOutcome:
     material_calls: list[ToolCallRecord] = []
     if task.expected_material_attempts:
+        material_calls_by_stage: dict[str, ToolCallRecord] = {}
         for index, expected in enumerate(task.expected_material_attempts, start=1):
             arguments = deepcopy(expected.arguments)
             for argument, filename in expected.local_file_arguments.items():
                 arguments[argument] = str(FIXTURE_ROOT / filename)
             for binding in task.expected_result_bindings:
-                if binding.target_attempt != index:
+                if binding.target_stage != expected.stage_id:
                     continue
-                source = material_calls[binding.source_attempt - 1].result_fields[binding.source_field]
+                source = material_calls_by_stage[binding.source_stage].result_fields[binding.source_field]
                 arguments[binding.target_argument] = (
                     source if binding.relation == "equals" else f"reference:{source}:complete"
                 )
@@ -432,13 +433,15 @@ def _make_outcome(
                             *(
                                 binding.source_field
                                 for binding in task.expected_result_bindings
-                                if binding.source_attempt == index
+                                if binding.source_stage == expected.stage_id
                             ),
                         }
                     },
                     order=index,
+                    stage_id=expected.stage_id,
                 )
             )
+            material_calls_by_stage[expected.stage_id] = material_calls[-1]
     else:
         for index, expected in enumerate(task.expected_material_outcomes, start=1):
             material_calls.append(
@@ -561,6 +564,7 @@ def _tool_call(
     error_code: str | None,
     result_fields: dict[str, str],
     order: int,
+    stage_id: str | None = None,
 ) -> ToolCallRecord:
     route = _route_for(
         task,
@@ -595,6 +599,7 @@ def _tool_call(
             error="server call was not observed",
             result_preview=None,
             result_fields={},
+            stage_id=stage_id,
         )
     route_spec = getattr(route, arm)
     if route_spec.action is not None:
@@ -621,6 +626,7 @@ def _tool_call(
         error=None if succeeded else "synthetic expected server error",
         result_preview="synthetic confirmed result",
         result_fields=result_fields,
+        stage_id=stage_id,
     )
 
 

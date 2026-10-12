@@ -20,6 +20,7 @@ from urllib.parse import quote, unquote, urlsplit
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import ToolFailed
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.openrouter import OpenRouterModelSettings
@@ -242,6 +243,9 @@ class ToolCallRecord(BaseModel):
     server_succeeded: bool = False
     server_status_code: int | None = Field(default=None, ge=100, le=599)
     server_error_code: str | None = None
+    server_error_identity: dict[str, str] = Field(default_factory=dict)
+    stage_id: str | None = None
+    vault_skill_binding_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     error: str | None = None
     result_preview: str | None = None
     result_fields: dict[str, str] = Field(default_factory=dict, max_length=MAX_CAPTURED_RESULT_FIELDS)
@@ -586,33 +590,31 @@ def _resource_matches(actual: ResourceType, expected: ResourceType | None) -> bo
 
 
 def _sequence_target_mismatches(
-    material_calls: list[ToolCallRecord],
+    stage_calls: list[ToolCallRecord],
     task: TaskManifest,
 ) -> set[int]:
     mismatches: set[int] = set()
-    dynamic_by_attempt: dict[int, set[str]] = defaultdict(set)
+    dynamic_by_stage: dict[str, set[str]] = defaultdict(set)
     for binding in task.expected_result_bindings:
-        dynamic_by_attempt[binding.target_attempt].add(binding.target_argument)
-    for attempt_index, (call, expected) in enumerate(
-        zip(material_calls, task.expected_material_attempts),
-        start=1,
-    ):
+        dynamic_by_stage[binding.target_stage].add(binding.target_argument)
+    for attempt_index, (call, expected) in enumerate(zip(stage_calls, task.expected_material_attempts), start=1):
         if call.logical_operation != expected.logical_operation:
             continue
         arguments = _semantic_arguments(call)
         if arguments is None:
             mismatches.add(attempt_index)
             continue
-        ignored = set(expected.local_file_arguments) | dynamic_by_attempt[attempt_index] | {"_vault_skill_ack"}
+        ignored = set(expected.local_file_arguments) | dynamic_by_stage[expected.stage_id] | {"_vault_skill_ack"}
         comparable = {name: value for name, value in arguments.items() if name not in ignored}
         if not _arguments_include(comparable, expected.arguments):
             mismatches.add(attempt_index)
     return mismatches
 
 
-def _completion_index(task: TaskManifest, material_calls: list[ToolCallRecord]) -> int | None:
+def _completion_index(task: TaskManifest, tool_calls: list[ToolCallRecord]) -> int | None:
     """Return the one-based call order after which the requested work was complete."""
 
+    material_calls = [call for call in tool_calls if call.operation_kind == "material"]
     if task.stopping.completion == "immediate_response":
         return 0
     if task.stopping.completion == "clarification":
@@ -627,9 +629,10 @@ def _completion_index(task: TaskManifest, material_calls: list[ToolCallRecord]) 
                 return call.order
         return None
     if task.expected_material_attempts:
-        if len(material_calls) < len(task.expected_material_attempts):
+        stage_calls, stages_valid = _resolved_material_stage_calls(task, tool_calls)
+        if not stages_valid or len(stage_calls) < len(task.expected_material_attempts):
             return None
-        return material_calls[len(task.expected_material_attempts) - 1].order
+        return stage_calls[-1].order
     expected = {item.logical_operation for item in task.expected_material_outcomes}
     if expected:
         observed: set[str] = set()
@@ -644,7 +647,7 @@ def _completion_index(task: TaskManifest, material_calls: list[ToolCallRecord]) 
 
 
 def _fabricated_resource_claim_count(outcome: TrialOutcome, task: TaskManifest) -> int:
-    uri_pattern = re.compile(r"akb://[A-Za-z0-9][A-Za-z0-9._-]*(?:/[^\s)\]}>,'\"]+)?")
+    uri_pattern = re.compile(r"akb://[A-Za-z0-9][A-Za-z0-9._-]*(?:/[^\s)\]}>,'`\"]+)?")
     claimed = set(uri_pattern.findall(outcome.final_answer_text))
     if not claimed:
         return 0
@@ -677,23 +680,25 @@ def _finalize_semantic_metrics(outcome: TrialOutcome, task: TaskManifest) -> Non
         and call.logical_operation not in task.allowed_preparatory_operations
         for call in outcome.tool_calls
     )
-    target_mismatches = _sequence_target_mismatches(material_calls, task)
+    stage_calls, stages_valid = _resolved_material_stage_calls(task, outcome.tool_calls)
+    target_mismatches = _sequence_target_mismatches(stage_calls, task)
     target_mismatches.update(
         index
-        for index, call in enumerate(material_calls, start=1)
+        for index, call in enumerate(stage_calls, start=1)
         if not _expected_call_target_matches(call, task)
     )
     outcome.wrong_target_calls = len(target_mismatches)
     outcome.target_payload_accuracy = outcome.wrong_target_calls == 0 and outcome.wrong_resource_calls == 0
 
     if task.expected_material_attempts:
-        outcome.multi_step_ordering = len(material_calls) == len(task.expected_material_attempts) and all(
-            call.logical_operation == expected.logical_operation
+        outcome.multi_step_ordering = stages_valid and len(stage_calls) == len(task.expected_material_attempts) and all(
+            call.stage_id == expected.stage_id
+            and call.logical_operation == expected.logical_operation
             and _resource_matches(call.resource_type, expected.resource_type)
-            for call, expected in zip(material_calls, task.expected_material_attempts)
+            for call, expected in zip(stage_calls, task.expected_material_attempts)
         )
         outcome.result_binding_accuracy = all(
-            _material_result_binding_matches(binding, material_calls)
+            _material_result_binding_matches(binding, outcome.tool_calls)
             for binding in task.expected_result_bindings
         )
     else:
@@ -708,7 +713,7 @@ def _finalize_semantic_metrics(outcome: TrialOutcome, task: TaskManifest) -> Non
         "forbidden": not clarified,
     }[task.clarification.expectation]
 
-    completion = _completion_index(task, material_calls)
+    completion = _completion_index(task, outcome.tool_calls)
     allowed = set(task.stopping.allowed_follow_up_operations)
     if task.stopping.completion == "clarification":
         extra_calls = [call for call in material_calls if call.logical_operation not in allowed]
@@ -803,14 +808,14 @@ def has_server_instructions_evidence(
     outcome: TrialOutcome,
     expected_instructions: str | None = None,
 ) -> bool:
-    if expected_instructions is not None:
+    if expected_instructions is None:
+        if outcome.server_instructions_sha256 is None:
+            return False
+        expected_sha256 = outcome.server_instructions_sha256
+    else:
         if not expected_instructions.strip():
             return False
         expected_sha256 = hashlib.sha256(expected_instructions.encode("utf-8")).hexdigest()
-    else:
-        expected_sha256 = outcome.server_instructions_sha256
-        if expected_sha256 is None:
-            return False
     return (
         outcome.server_instructions_sha256 == expected_sha256
         and outcome.model_requests > 0
@@ -926,15 +931,19 @@ class _ObservedCall:
     surface_action: str | None = None
     logical_operation: str = "unknown"
     resource_type: ResourceType = "unknown"
+    operation_kind: Literal["preparatory", "material", "unknown"] = "unknown"
+    stage_id: str | None = None
     transport_succeeded: bool = False
     succeeded: bool = False
     status_code: int | None = None
     error_code: str | None = None
+    error_identity: dict[str, str] = field(default_factory=dict)
     error: str | None = None
     result_preview: str | None = None
     result_fields: dict[str, str] = field(default_factory=dict)
     vault_skill_ack: str | None = None
     vault_skill_retry_ack: str | None = None
+    vault_skill_binding_sha256: str | None = None
 
 
 def _public_route(
@@ -956,13 +965,25 @@ def _public_route(
     return matches[0] if len(matches) == 1 else None
 
 
-def _resolve_result_probe(probe: StateProbe, result_fields: list[dict[str, str]]) -> StateProbe:
+def _result_fields_by_stage(calls: list[Any]) -> dict[str, dict[str, str]]:
+    result: dict[str, dict[str, str]] = {}
+    for call in calls:
+        stage_id = getattr(call, "stage_id", None)
+        succeeded = getattr(call, "server_succeeded", getattr(call, "succeeded", False))
+        fields = getattr(call, "result_fields", {})
+        if isinstance(stage_id, str) and succeeded and isinstance(fields, dict):
+            result[stage_id] = fields
+    return result
+
+
+def _resolve_result_probe(probe: StateProbe, result_fields: dict[str, dict[str, str]]) -> StateProbe:
     binding = probe.result_binding
     if binding is None:
         return probe
-    if binding.source_attempt > len(result_fields):
-        raise RuntimeContractError("dynamic state probe result attempt is missing", stage="state_observation")
-    value = result_fields[binding.source_attempt - 1].get(binding.source_field)
+    fields = result_fields.get(binding.source_stage)
+    if fields is None:
+        raise RuntimeContractError("dynamic state probe result stage is missing", stage="state_observation")
+    value = fields.get(binding.source_field)
     if not isinstance(value, str) or not value:
         raise RuntimeContractError("dynamic state probe result field is missing", stage="state_observation")
     if binding.transform == "document_asset_id_from_url":
@@ -1002,14 +1023,14 @@ def _state_observation_record(observation: StateObservation) -> dict[str, Any]:
 
 def _trial_error_kinds(outcome: TrialOutcome, task: TaskManifest) -> list[str]:
     kinds: set[str] = set()
-    material_calls = [call for call in outcome.tool_calls if call.operation_kind == "material"]
     intended_error_calls: set[int] = set()
-    for index, expected in enumerate(task.expected_material_attempts):
-        if index >= len(material_calls) or expected.outcome == "success":
+    stage_calls, _stages_valid = _resolved_material_stage_calls(task, outcome.tool_calls)
+    for call, expected in zip(stage_calls, task.expected_material_attempts):
+        if expected.outcome == "success":
             continue
-        call = material_calls[index]
         if (
-            call.logical_operation == expected.logical_operation
+            call.stage_id == expected.stage_id
+            and call.logical_operation == expected.logical_operation
             and call.server_error_code == expected.error_code
             and (expected.status_code is None or call.server_status_code == expected.status_code)
         ):
@@ -1064,12 +1085,45 @@ class ToolCallRecorder:
         self.input_schemas: dict[str, dict[str, Any]] = {}
         self.material_calls: list[_ObservedCall] = []
         self.checkpoint_observations: list[dict[str, Any]] = []
+        self.next_expected_stage = 0
         self.capture_result_fields = {
             tool: frozenset(fields) for tool, fields in (capture_result_fields or {}).items()
         }
 
     def set_input_schemas(self, schemas: dict[str, dict[str, Any]]) -> None:
         self.input_schemas = schemas
+
+    def _stage_id_for_material_call(
+        self,
+        name: str,
+        logical_operation: str,
+        resource_type: ResourceType,
+        arguments: dict[str, Any],
+    ) -> str | None:
+        if self.task is None:
+            return None
+        bindings = self.task.expected_result_bindings
+        dynamic_arguments: dict[str, set[str]] = defaultdict(set)
+        for binding in bindings:
+            dynamic_arguments[binding.target_stage].add(binding.target_argument)
+        schema = self.input_schemas.get(name)
+        effective_arguments = (
+            canonicalize_arguments(arguments, schema) or {} if schema is not None else arguments
+        )
+        for index in range(self.next_expected_stage, len(self.task.expected_material_attempts)):
+            expected = self.task.expected_material_attempts[index]
+            if (
+                (expected.tool_name is not None and expected.tool_name != name)
+                or expected.logical_operation != logical_operation
+                or not _resource_matches(resource_type, expected.resource_type)
+            ):
+                continue
+            ignored = set(expected.local_file_arguments) | dynamic_arguments[expected.stage_id] | {"_vault_skill_ack"}
+            comparable = {key: value for key, value in effective_arguments.items() if key not in ignored}
+            if _arguments_include(comparable, expected.arguments):
+                self.next_expected_stage = index + 1
+                return expected.stage_id
+        return None
 
     async def __call__(self, _ctx: Any, call: Callable[..., Any], name: str, server_args: dict[str, Any]) -> Any:
         route = _public_route(
@@ -1085,12 +1139,23 @@ class ToolCallRecorder:
             else logical_operation_for(name, self.operation_map)
         )
         canonical_operation = route.operation if route is not None else None
-        operation_kind = "unknown"
+        operation_kind: Literal["preparatory", "material", "unknown"] = "unknown"
+        retry_ack = server_args.get("_vault_skill_ack")
+        stage_id = None
         if self.task is not None:
-            if logical_operation in self.task.allowed_preparatory_operations or server_args.get("_vault_skill_ack"):
+            if isinstance(retry_ack, str) and retry_ack:
                 operation_kind = "preparatory"
-            elif logical_operation in self.task.allowed_material_operations:
-                operation_kind = "material"
+            else:
+                stage_id = self._stage_id_for_material_call(
+                    name,
+                    logical_operation,
+                    route.resource_type if route is not None else "unknown",
+                    server_args,
+                )
+                if stage_id is not None or logical_operation in self.task.allowed_material_operations:
+                    operation_kind = "material"
+                elif logical_operation in self.task.allowed_preparatory_operations:
+                    operation_kind = "preparatory"
         observed = _ObservedCall(
             tool_name=name,
             server_args=_redact_vault_skill_ack(safe_json(server_args, self.secrets)),
@@ -1100,12 +1165,32 @@ class ToolCallRecorder:
             ),
             logical_operation=logical_operation,
             resource_type=route.resource_type if route is not None else "unknown",
+            operation_kind=operation_kind,
+            stage_id=stage_id,
             vault_skill_retry_ack=(
                 server_args.get("_vault_skill_ack")
                 if isinstance(server_args.get("_vault_skill_ack"), str)
                 else None
             ),
         )
+        if observed.vault_skill_retry_ack:
+            previous = next(
+                (
+                    item
+                    for item in reversed(self.calls)
+                    if item.error_code == "vault_skill_required"
+                    and item.tool_name == name
+                    and _semantic_arguments_from_dict(item.server_args)
+                    == _semantic_arguments_from_dict(server_args)
+                    and item.vault_skill_ack == observed.vault_skill_retry_ack
+                ),
+                None,
+            )
+            if previous is not None:
+                digest = _vault_skill_binding_digest(name, server_args, observed.vault_skill_retry_ack)
+                if digest == previous.vault_skill_binding_sha256:
+                    observed.vault_skill_binding_sha256 = digest
+                    observed.stage_id = previous.stage_id
         self.calls.append(observed)
         result: Any = None
         try:
@@ -1117,17 +1202,24 @@ class ToolCallRecorder:
             capture_fields = self.capture_result_fields.get(name, frozenset())
             observed.result_fields = _capture_structured_result_fields(result, capture_fields, self.secrets)
             preview = _redact_vault_skill_ack(safe_json(result, self.secrets))
-            result_text = (
-                canonical_json({"result_fields": observed.result_fields})
-                if capture_fields
-                else canonical_json(preview)
-            )
+            result_text = canonical_json(preview)
             observed.result_preview = result_text[:2000] + ("…" if len(result_text) > 2000 else "")
             return result
         except Exception as exc:
-            observed.transport_succeeded = False
-            observed.status_code, observed.error_code = error_details(exc)
-            observed.error = redact_exception(exc, self.secrets)
+            observed.transport_succeeded = isinstance(exc, ToolFailed)
+            observed.status_code, observed.error_code, observed.error_identity = error_details(
+                exc,
+                self.secrets,
+            )
+            if observed.error_code == "vault_skill_required":
+                observed.vault_skill_ack = _extract_vault_skill_ack_from_error(exc, self.secrets)
+                if observed.vault_skill_ack:
+                    observed.vault_skill_binding_sha256 = _vault_skill_binding_digest(
+                        name,
+                        server_args,
+                        observed.vault_skill_ack,
+                    )
+            observed.error = _redact_vault_skill_ack(redact_exception(exc, self.secrets))
             raise
         finally:
             if operation_kind == "material":
@@ -1143,7 +1235,7 @@ class ToolCallRecorder:
     async def _observe_checkpoint(self, checkpoint: StateCheckpointContract, attempt_index: int) -> dict[str, Any]:
         assert self.fixture is not None and self.token is not None
         try:
-            result_fields = [item.result_fields for item in self.material_calls]
+            result_fields = _result_fields_by_stage(self.calls)
             probe = _resolve_result_probe(checkpoint.probe, result_fields)
             observation = await self.fixture.observe(probe, token=self.token)
         except Exception as exc:
@@ -1224,17 +1316,54 @@ def _extract_vault_skill_ack(result: Any, secrets: tuple[str, ...]) -> str | Non
     return token if isinstance(token, str) and token else None
 
 
+def _extract_vault_skill_ack_from_error(error: BaseException, secrets: tuple[str, ...]) -> str | None:
+    for value in _embedded_json_values(str(error)):
+        if not isinstance(value, dict):
+            continue
+        vault_skill = value.get("vault_skill")
+        if isinstance(vault_skill, dict):
+            token = vault_skill.get("ack_token")
+            if isinstance(token, str) and token and token not in secrets:
+                return token
+    return None
+
+
+def _vault_skill_binding_digest(
+    tool_name: str,
+    arguments: dict[str, Any],
+    ack_token: str,
+) -> str:
+    public_arguments = {key: value for key, value in arguments.items() if key != "_vault_skill_ack"}
+    return hashlib.sha256(
+        canonical_json({"tool_name": tool_name, "arguments": public_arguments, "ack_token": ack_token}).encode("utf-8")
+    ).hexdigest()
+
+
 def _redact_vault_skill_ack(value: Any) -> Any:
     if isinstance(value, str):
         if "ack_token" not in value and "_vault_skill_ack" not in value:
             return value
-        try:
-            embedded = json.loads(value)
-        except json.JSONDecodeError:
-            return value
-        if isinstance(embedded, (dict, list)):
-            return canonical_json(_redact_vault_skill_ack(embedded))
-        return value
+        decoder = json.JSONDecoder()
+        cursor = 0
+        pieces: list[str] = []
+        changed = False
+        while cursor < len(value):
+            starts = [position for marker in "[{" if (position := value.find(marker, cursor)) >= 0]
+            if not starts:
+                pieces.append(value[cursor:])
+                break
+            start = min(starts)
+            pieces.append(value[cursor:start])
+            try:
+                embedded, end = decoder.raw_decode(value, start)
+            except json.JSONDecodeError:
+                pieces.append(value[start : start + 1])
+                cursor = start + 1
+                continue
+            pieces.append(canonical_json(_redact_vault_skill_ack(embedded)))
+            cursor = end
+            changed = True
+        return "".join(pieces) if changed else value
     if isinstance(value, dict):
         redacted = {
             str(key): "[redacted]" if key in {"ack_token", "_vault_skill_ack"} else _redact_vault_skill_ack(item)
@@ -1260,16 +1389,17 @@ def capture_result_fields_for_task(
 ) -> dict[str, list[str]]:
     fields: dict[str, set[str]] = defaultdict(set)
     requested = [
-        (attempt_index, field_name)
-        for attempt_index, attempt in enumerate(task.expected_material_attempts, start=1)
+        (attempt.stage_id, field_name)
+        for attempt in task.expected_material_attempts
         for field_name in attempt.capture_result_fields
     ]
     requested.extend(
-        (binding.source_attempt, binding.source_field)
+        (binding.source_stage, binding.source_field)
         for binding in task.expected_result_bindings
     )
-    for attempt_index, field_name in requested:
-        attempt = task.expected_material_attempts[attempt_index - 1]
+    attempts = {attempt.stage_id: attempt for attempt in task.expected_material_attempts}
+    for stage_id, field_name in requested:
+        attempt = attempts[stage_id]
         tool_names = (
             [attempt.tool_name]
             if attempt.tool_name is not None
@@ -1290,7 +1420,29 @@ def capture_result_fields_for_task(
     return {tool_name: sorted(names) for tool_name, names in fields.items()}
 
 
-def error_details(error: BaseException) -> tuple[int | None, str | None]:
+def _embedded_json_values(value: str) -> list[Any]:
+    decoder = json.JSONDecoder()
+    values: list[Any] = []
+    cursor = 0
+    while cursor < len(value):
+        starts = [position for marker in "[{" if (position := value.find(marker, cursor)) >= 0]
+        if not starts:
+            break
+        start = min(starts)
+        try:
+            embedded, end = decoder.raw_decode(value, start)
+        except json.JSONDecodeError:
+            cursor = start + 1
+            continue
+        values.append(embedded)
+        cursor = end
+    return values
+
+
+def error_details(
+    error: BaseException,
+    secrets: tuple[str, ...] = (),
+) -> tuple[int | None, str | None, dict[str, str]]:
     response = getattr(error, "response", None)
     status_code = getattr(error, "status_code", None) or getattr(response, "status_code", None)
     error_code = getattr(error, "code", None)
@@ -1307,6 +1459,21 @@ def error_details(error: BaseException) -> tuple[int | None, str | None]:
                 error_code = detail.get("code")
             error_code = error_code or payload.get("code")
     message = str(error)
+    identity: dict[str, str] = {}
+    for payload in _embedded_json_values(message):
+        if not isinstance(payload, dict):
+            continue
+        nested_error = payload.get("error")
+        payload_code = payload.get("code")
+        if payload_code is None and isinstance(nested_error, dict):
+            payload_code = nested_error.get("code")
+        if error_code is None and isinstance(payload_code, str):
+            error_code = payload_code
+        for source in (payload, nested_error if isinstance(nested_error, dict) else {}):
+            for key in ("vault", "name", "table", "collection", "uri", "slug", "resource"):
+                value = source.get(key)
+                if isinstance(value, str) and value and len(value) <= 512:
+                    identity[key] = redact_text(value, secrets)
     if status_code is None and "403" in message:
         status_code = 403
     if error_code is None:
@@ -1314,9 +1481,14 @@ def error_details(error: BaseException) -> tuple[int | None, str | None]:
             if candidate in message.casefold():
                 error_code = candidate
                 break
+    # PydanticAI raises ToolFailed only after receiving an MCP result with
+    # isError=true. That is a completed application error, not an HTTP error.
+    if isinstance(error, ToolFailed):
+        status_code = None
     return (
         status_code if isinstance(status_code, int) else None,
         error_code if isinstance(error_code, str) else None,
+        identity,
     )
 
 
@@ -1454,13 +1626,7 @@ class TrialLifecycle(CaseLifecycle[TaskManifest, TrialOutcome, dict[str, Any]]):
             self.output = ctx.output
             if self.repeat_index is not None:
                 ctx.output.repeat_index = self.repeat_index
-            material_calls = [
-                call
-                for call in self.output.tool_calls
-                if call.logical_operation in self.case.inputs.allowed_material_operations
-                and call.server_error_code != "vault_skill_required"
-            ]
-            result_fields = [call.result_fields for call in material_calls]
+            result_fields = _result_fields_by_stage(self.output.tool_calls)
             after: list[StateObservation] = []
             for expectation_set in self.case.inputs.expected_final_state.observation_sets:
                 try:
@@ -2214,12 +2380,7 @@ async def execute_smoke(
         server_instructions_sha256=server_instructions_sha256,
         model_input_evidence=model_input_evidence,
     )
-    material_calls = [
-        call for call in outcome.tool_calls
-        if call.logical_operation in task.allowed_material_operations
-        and call.server_error_code != "vault_skill_required"
-    ]
-    result_fields = [call.result_fields for call in material_calls]
+    result_fields = _result_fields_by_stage(outcome.tool_calls)
     after: list[StateObservation] = []
     for expectation in task.expected_final_state.observation_sets:
         try:
@@ -2630,6 +2791,7 @@ def bind_tool_calls(
                 surface_action=(getattr(route, arm).action if route is not None else None),
                 logical_operation=route.logical_operation if route is not None else "unknown",
                 resource_type=route.resource_type if route is not None else "unknown",
+                operation_kind=observed.operation_kind if observed else "unknown",
                 tool_exists=name in input_schemas if input_schemas is not None else observed is not None,
                 raw_model_args=raw_args,
                 server_args=observed.server_args if observed else None,
@@ -2647,6 +2809,9 @@ def bind_tool_calls(
                 server_succeeded=bool(observed and observed.succeeded),
                 server_status_code=observed.status_code if observed else None,
                 server_error_code=observed.error_code if observed else None,
+                server_error_identity=observed.error_identity if observed else {},
+                stage_id=observed.stage_id if observed else None,
+                vault_skill_binding_sha256=observed.vault_skill_binding_sha256 if observed else None,
                 error=(observed.error if observed else "server call was not observed"),
                 result_preview=observed.result_preview if observed else None,
                 result_fields=observed.result_fields if observed else {},
@@ -2670,6 +2835,7 @@ def bind_tool_calls(
                 surface_action=(getattr(route, arm).action if route is not None else None),
                 logical_operation=route.logical_operation if route is not None else "unknown",
                 resource_type=route.resource_type if route is not None else "unknown",
+                operation_kind=observed.operation_kind,
                 tool_exists=(
                     observed.tool_name in input_schemas if input_schemas is not None else True
                 ),
@@ -2682,6 +2848,9 @@ def bind_tool_calls(
                 server_succeeded=observed.succeeded,
                 server_status_code=observed.status_code,
                 server_error_code=observed.error_code,
+                server_error_identity=observed.error_identity,
+                stage_id=observed.stage_id,
+                vault_skill_binding_sha256=observed.vault_skill_binding_sha256,
                 error=observed.error,
                 result_preview=observed.result_preview,
                 result_fields=observed.result_fields,
@@ -2749,17 +2918,44 @@ def _arguments_include(actual: dict[str, Any] | None, expected: dict[str, Any]) 
             if key == "collection" and expected_value == "":
                 continue
             return False
-        actual_value = actual[key]
-        if isinstance(expected_value, dict):
-            if not isinstance(actual_value, dict) or not _arguments_include(actual_value, expected_value):
-                return False
-        elif actual_value != expected_value:
+        if not _argument_value_includes(actual[key], expected_value):
             return False
     return True
 
 
+def _argument_value_includes(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict):
+            return False
+        extras = set(actual) - set(expected)
+        optional_column_description = (
+            extras <= {"description"}
+            and "description" in extras
+            and isinstance(expected.get("name"), str)
+            and isinstance(expected.get("type"), str)
+        )
+        if extras and not optional_column_description:
+            return False
+        return _arguments_include(actual, expected)
+    if isinstance(expected, list):
+        return (
+            isinstance(actual, list)
+            and len(actual) == len(expected)
+            and all(_argument_value_includes(actual_item, expected_item) for actual_item, expected_item in zip(actual, expected, strict=True))
+        )
+    return actual == expected
+
+
 def _semantic_arguments(call: ToolCallRecord) -> dict[str, Any] | None:
     arguments = call.effective_server_args or call.server_args
+    if arguments is None:
+        return None
+    return _normalize_public_location(
+        {key: value for key, value in arguments.items() if key != "_vault_skill_ack"}
+    )
+
+
+def _semantic_arguments_from_dict(arguments: dict[str, Any] | None) -> dict[str, Any] | None:
     if arguments is None:
         return None
     return _normalize_public_location(
@@ -2774,11 +2970,20 @@ def _vault_skill_handshakes_are_valid(tool_calls: list[ToolCallRecord]) -> bool:
             if index + 1 >= len(tool_calls):
                 return False
             retry = tool_calls[index + 1]
+            token_matches = (
+                call.vault_skill_ack is None
+                and retry.vault_skill_retry_ack is None
+            ) or (
+                isinstance(call.vault_skill_ack, str)
+                and isinstance(retry.vault_skill_retry_ack, str)
+                and retry.vault_skill_retry_ack == call.vault_skill_ack
+            )
             if (
                 retry.tool_name != call.tool_name
                 or not retry.server_succeeded
-                or not call.vault_skill_ack
-                or retry.vault_skill_retry_ack != call.vault_skill_ack
+                or not token_matches
+                or not call.vault_skill_binding_sha256
+                or retry.vault_skill_binding_sha256 != call.vault_skill_binding_sha256
                 or _semantic_arguments(call) != _semantic_arguments(retry)
             ):
                 return False
@@ -2836,7 +3041,8 @@ def _material_attempt_matches(
         if name not in variable_arguments and name != "_vault_skill_ack"
     }
     if (
-        (expected.tool_name is not None and call.tool_name != expected.tool_name)
+        call.stage_id != expected.stage_id
+        or (expected.tool_name is not None and call.tool_name != expected.tool_name)
         or not _resource_matches(call.resource_type, expected.resource_type)
         or call.logical_operation != expected.logical_operation
         or not _arguments_include(static_arguments, expected.arguments)
@@ -2861,12 +3067,18 @@ def _material_attempt_matches(
 
 def _material_result_binding_matches(
     binding: ExpectedResultBinding,
-    material_calls: list[ToolCallRecord],
+    tool_calls: list[ToolCallRecord],
 ) -> bool:
-    if binding.source_attempt > len(material_calls) or binding.target_attempt > len(material_calls):
+    calls_by_stage = {
+        call.stage_id: call
+        for call in tool_calls
+        if call.stage_id is not None and call.server_succeeded
+    }
+    source_call = calls_by_stage.get(binding.source_stage)
+    target_call = calls_by_stage.get(binding.target_stage)
+    if source_call is None or target_call is None:
         return False
-    source = material_calls[binding.source_attempt - 1].result_fields.get(binding.source_field)
-    target_call = material_calls[binding.target_attempt - 1]
+    source = source_call.result_fields.get(binding.source_field)
     target_arguments = target_call.effective_server_args
     if target_arguments is None:
         target_arguments = target_call.server_args
@@ -2876,6 +3088,49 @@ def _material_result_binding_matches(
     if binding.relation == "equals":
         return target == source
     return source in target
+
+
+def _resolved_material_stage_calls(
+    task: TaskManifest,
+    tool_calls: list[ToolCallRecord],
+) -> tuple[list[ToolCallRecord], bool]:
+    expected_ids = [attempt.stage_id for attempt in task.expected_material_attempts]
+    if not expected_ids:
+        return [], True
+    expected_set = set(expected_ids)
+    groups: dict[str, list[ToolCallRecord]] = defaultdict(list)
+    ordered_ids: list[str] = []
+    valid = True
+    for call in tool_calls:
+        if call.stage_id is not None:
+            if call.stage_id not in expected_set:
+                valid = False
+                continue
+            groups[call.stage_id].append(call)
+            if call.stage_id not in ordered_ids:
+                ordered_ids.append(call.stage_id)
+        elif call.operation_kind == "material":
+            valid = False
+    if ordered_ids != expected_ids:
+        valid = False
+
+    resolved: list[ToolCallRecord] = []
+    for stage_id in expected_ids:
+        group = groups.get(stage_id, [])
+        if len(group) == 1:
+            resolved.append(group[0])
+            continue
+        if (
+            len(group) == 2
+            and group[0].server_error_code == "vault_skill_required"
+            and _vault_skill_handshakes_are_valid(group)
+        ):
+            resolved.append(group[1])
+            continue
+        valid = False
+        if group:
+            resolved.append(group[-1])
+    return resolved, valid and len(resolved) == len(expected_ids)
 
 
 def material_outcome_matches(
@@ -2891,22 +3146,23 @@ def material_outcome_matches(
     if not set(task.required_attempted_operations) <= attempted:
         return False, False
     if task.expected_material_attempts:
-        if len(material_calls) != len(task.expected_material_attempts):
+        stage_calls, stages_valid = _resolved_material_stage_calls(task, tool_calls)
+        if not stages_valid:
             return False, False
-        dynamic_arguments: dict[int, set[str]] = defaultdict(set)
+        dynamic_arguments: dict[str, set[str]] = defaultdict(set)
         for binding in task.expected_result_bindings:
-            dynamic_arguments[binding.target_attempt].add(binding.target_argument)
+            dynamic_arguments[binding.target_stage].add(binding.target_argument)
         attempts_match = all(
             _material_attempt_matches(
                 call,
                 expected,
-                dynamic_arguments=dynamic_arguments[index],
+                dynamic_arguments=dynamic_arguments[expected.stage_id],
                 consumer_root=consumer_root,
             )
-            for index, (call, expected) in enumerate(zip(material_calls, task.expected_material_attempts), 1)
+            for call, expected in zip(stage_calls, task.expected_material_attempts)
         )
         bindings_match = all(
-            _material_result_binding_matches(binding, material_calls)
+            _material_result_binding_matches(binding, tool_calls)
             for binding in task.expected_result_bindings
         )
         return attempts_match and bindings_match, False

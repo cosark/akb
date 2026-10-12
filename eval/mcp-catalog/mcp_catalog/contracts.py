@@ -149,7 +149,7 @@ class ContractModel(BaseModel):
 
 
 class StateProbeResultBinding(ContractModel):
-    source_attempt: int = Field(ge=1)
+    source_stage: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")
     source_field: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
     transform: Literal["document_asset_id_from_url", "publication_slug", "uri_query"]
 
@@ -384,6 +384,7 @@ class ExpectedMaterialOutcome(ContractModel):
 
 
 class ExpectedMaterialAttempt(ContractModel):
+    stage_id: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")
     logical_operation: str
     tool_name: str | None = Field(default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$")
     resource_type: ResourceType | None = None
@@ -431,18 +432,11 @@ class ExpectedMaterialAttempt(ContractModel):
 
 
 class ExpectedResultBinding(ContractModel):
-    source_attempt: int = Field(ge=1)
+    source_stage: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")
     source_field: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
-    target_attempt: int = Field(ge=1)
+    target_stage: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")
     target_argument: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
     relation: Literal["equals", "contains"] = "contains"
-
-    @model_validator(mode="after")
-    def validate_binding_order(self) -> ExpectedResultBinding:
-        if self.source_attempt >= self.target_attempt:
-            raise ValueError("material result bindings must reference an earlier attempt")
-        return self
-
 
 class ProviderRouting(ContractModel):
     order: list[str] = Field(min_length=1, max_length=1)
@@ -608,6 +602,10 @@ class TaskManifest(ContractModel):
         expected_attempt_operations = [item.logical_operation for item in self.expected_material_attempts]
         if not set(expected_attempt_operations) <= set(self.allowed_material_operations):
             raise ValueError("expected material attempts must be material operations")
+        stage_ids = [item.stage_id for item in self.expected_material_attempts]
+        if len(set(stage_ids)) != len(stage_ids):
+            raise ValueError("expected material stage identifiers must be unique")
+        stage_positions = {stage_id: index for index, stage_id in enumerate(stage_ids, start=1)}
         accepted_operations = set(self.allowed_preparatory_operations) | set(self.allowed_material_operations)
         if any(
             not set(behavior.required_operations) <= accepted_operations
@@ -641,23 +639,25 @@ class TaskManifest(ContractModel):
         ]
         if Counter(attempted_local_files) != Counter(self.fixture.local_files):
             raise ValueError("every fixture local file must be used by exactly one expected material attempt")
-        binding_targets: set[tuple[int, str]] = set()
+        binding_targets: set[tuple[str, str]] = set()
         for binding in self.expected_result_bindings:
-            if binding.target_attempt > len(self.expected_material_attempts) or binding.source_attempt > len(self.expected_material_attempts):
-                raise ValueError("material result binding attempt is outside the expected attempt sequence")
-            target = self.expected_material_attempts[binding.target_attempt - 1]
+            if binding.source_stage not in stage_positions or binding.target_stage not in stage_positions:
+                raise ValueError("material result binding references an unknown stage")
+            if stage_positions[binding.source_stage] >= stage_positions[binding.target_stage]:
+                raise ValueError("material result bindings must reference an earlier stage")
+            target = self.expected_material_attempts[stage_positions[binding.target_stage] - 1]
             if binding.target_argument in target.arguments or binding.target_argument in target.local_file_arguments:
                 raise ValueError("bound target arguments cannot also have static expected values")
-            target_key = (binding.target_attempt, binding.target_argument)
+            target_key = (binding.target_stage, binding.target_argument)
             if target_key in binding_targets:
                 raise ValueError("material result binding targets must be unique")
             binding_targets.add(target_key)
         captured_fields = {
-            (index, field_name)
-            for index, attempt in enumerate(self.expected_material_attempts, start=1)
+            (attempt.stage_id, field_name)
+            for attempt in self.expected_material_attempts
             for field_name in attempt.capture_result_fields
         } | {
-            (binding.source_attempt, binding.source_field)
+            (binding.source_stage, binding.source_field)
             for binding in self.expected_result_bindings
         }
         for observation in self.expected_final_state.observation_sets:
@@ -665,17 +665,19 @@ class TaskManifest(ContractModel):
             if probe_binding is not None and observation.check_before:
                 raise ValueError("result-bound state probes can only be checked after their source attempt")
             if probe_binding is not None and (
-                probe_binding.source_attempt > len(self.expected_material_attempts)
-                or (probe_binding.source_attempt, probe_binding.source_field) not in captured_fields
+                probe_binding.source_stage not in stage_positions
+                or (probe_binding.source_stage, probe_binding.source_field) not in captured_fields
             ):
                 raise ValueError("dynamic state probes must bind a captured result from an expected material attempt")
         for checkpoint in self.expected_final_state.checkpoints:
             checkpoint_binding = checkpoint.probe.result_binding
-            if checkpoint_binding is not None and checkpoint_binding.source_attempt > checkpoint.after_attempt:
+            if checkpoint_binding is not None and (
+                checkpoint_binding.source_stage not in stage_positions
+                or stage_positions[checkpoint_binding.source_stage] > checkpoint.after_attempt
+            ):
                 raise ValueError("state checkpoint bindings must reference an earlier material result")
             if checkpoint_binding is not None and (
-                checkpoint_binding.source_attempt > len(self.expected_material_attempts)
-                or (checkpoint_binding.source_attempt, checkpoint_binding.source_field) not in captured_fields
+                (checkpoint_binding.source_stage, checkpoint_binding.source_field) not in captured_fields
             ):
                 raise ValueError("dynamic state checkpoints must bind a captured material result")
         checkpoint_attempts = [item.after_attempt for item in self.expected_final_state.checkpoints]

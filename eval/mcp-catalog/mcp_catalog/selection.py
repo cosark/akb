@@ -12,69 +12,42 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
-from .contracts import (
-    BenchmarkRunManifest,
-    ContractModel,
-    ModelSpec,
-    TaskManifest,
-    Transport,
-)
+from .contracts import BenchmarkRunManifest, ContractModel, TaskManifest, Transport
 from .execution import TrialOutcome, has_measured_evidence, has_server_instructions_evidence
 from .pairing import planned_arm_order
 
-WORK_ITEM = "AKB-361"
-AUTHORIZATION_URI = "akb://reef-akb/coll/issues/doc/akb-361.md"
-AUTHORIZATION_REVISION = "006b373f989aaad7ce497912fab437741648d625"  # pragma: allowlist secret
-AUTHORIZATION_CONTENT_SHA256 = "0f5cb26f254f4eb2377b3798b9fe98a634e501196c2624200c53ed898899d1f8"  # pragma: allowlist secret
-PROVIDER_RECOVERY_AUTHORIZATION_REVISION = "79718e4da22a2cb1f3d82167000009a57963b90e"  # pragma: allowlist secret
-PROVIDER_RECOVERY_AUTHORIZATION_CONTENT_SHA256 = "c1379ac198acf601684c7c09ce71d2e99a95512381f0e31ec2a488e6822cab0b"  # pragma: allowlist secret
-SELECTION_SOURCE_SHA256 = "be0ef3c434e57c4af4b453558f73bd3fcff3237b9effae07840fe64c2699a762"  # pragma: allowlist secret
+SelectionIdentity = tuple[str, str, str, int]
+ParentLineage = Literal["previous"]
+ParentName = Literal["previous_baseline", "previous_candidate"]
+
 TOTAL_BUDGET_USD = Decimal("50")
-PRIOR_SPEND_USD = Decimal("8.56720104")
+PRIOR_SPEND_USD = Decimal("8.7499701852")
 NEW_EXECUTION_LIMIT_USD = TOTAL_BUDGET_USD - PRIOR_SPEND_USD
 PER_TRIAL_LIMIT_USD = Decimal("0.10")
 REQUEST_TIMEOUT_SECONDS = 300
 
-SelectionIdentity = tuple[str, str, str, int]
-ParentLineage = Literal["recovery", "original"]
-ParentName = Literal[
-    "recovery_baseline",
-    "recovery_candidate",
-    "original_baseline",
-    "original_candidate",
-]
-
-_PARENT_SHA256: dict[ParentName, str] = {
-    "recovery_baseline": "e42af85c5ef0456ed5ee3f93b718a44b5e7aa2690fcb9fc68f77c51c3546efd3",  # pragma: allowlist secret
-    "recovery_candidate": "11d3fe0445b9279b1a12016f34b004f7cfed9dcb668d506544f3b8759f030f54",  # pragma: allowlist secret
-    "original_baseline": "5df67aaa44e4ecd8ec5067f136184fcf18c5fbe558876cc39c9a414697d8dfb7",  # pragma: allowlist secret
-    "original_candidate": "28a23de2811a679b315c7069c4df2db8672218eb19da872aa41652d36db0d371",  # pragma: allowlist secret
-}
-
-_ROLE_BY_IDENTITY: dict[SelectionIdentity, tuple[Literal["failure", "control"], ParentLineage]] = {
-    ("primary", "http", "collection-relation-lifecycle-ko", 2): ("failure", "recovery"),
-    ("primary", "http", "table-schema-conflict-en", 2): ("failure", "recovery"),
-    ("primary", "stdio", "identity-access-ko", 2): ("failure", "recovery"),
-    ("primary", "stdio", "stdio-image-files-ko", 1): ("failure", "recovery"),
-    ("primary", "stdio", "stdio-local-en", 2): ("failure", "recovery"),
-    ("primary", "stdio", "table-publication-en", 1): ("failure", "recovery"),
-    ("primary", "stdio", "table-publication-ko", 1): ("failure", "recovery"),
-    ("primary", "stdio", "table-schema-conflict-en", 1): ("failure", "recovery"),
-    ("primary", "http", "exhaustive-inspection-ko", 1): ("control", "recovery"),
-    ("primary", "http", "ambiguous-clarification-ko", 2): ("control", "recovery"),
-    ("primary", "http", "exhaustive-inspection-en", 2): ("control", "recovery"),
-    ("primary", "http", "ambiguous-clarification-en", 2): ("control", "recovery"),
-    ("primary", "stdio", "exhaustive-inspection-ko", 2): ("control", "recovery"),
-    ("primary", "stdio", "stdio-local-ko", 2): ("control", "original"),
-    ("primary", "stdio", "exhaustive-inspection-en", 2): ("control", "recovery"),
-    ("primary", "stdio", "read-vaults-en", 2): ("control", "recovery"),
+_ROLE_BY_IDENTITY: dict[SelectionIdentity, Literal["failure", "control"]] = {
+    ("primary", "http", "collection-relation-lifecycle-ko", 2): "failure",
+    ("primary", "http", "table-schema-conflict-en", 2): "failure",
+    ("primary", "stdio", "stdio-image-files-ko", 1): "failure",
+    ("primary", "stdio", "table-publication-en", 1): "failure",
+    ("primary", "stdio", "table-publication-ko", 1): "failure",
+    ("primary", "stdio", "table-schema-conflict-en", 1): "failure",
+    ("primary", "http", "exhaustive-inspection-ko", 1): "control",
+    ("primary", "http", "ambiguous-clarification-ko", 2): "control",
+    ("primary", "http", "exhaustive-inspection-en", 2): "control",
+    ("primary", "http", "ambiguous-clarification-en", 2): "control",
+    ("primary", "stdio", "exhaustive-inspection-ko", 2): "control",
+    ("primary", "stdio", "stdio-local-ko", 2): "control",
+    ("primary", "stdio", "exhaustive-inspection-en", 2): "control",
+    ("primary", "stdio", "read-vaults-en", 2): "control",
 }
 
 
 class AuthorizationPin(ContractModel):
-    uri: Literal["akb://reef-akb/coll/issues/doc/akb-361.md"]
-    revision: Literal["006b373f989aaad7ce497912fab437741648d625"]
-    content_sha256: Literal["0f5cb26f254f4eb2377b3798b9fe98a634e501196c2624200c53ed898899d1f8"]
+    uri: str = Field(pattern=r"^akb://[a-z0-9][a-z0-9-]*/coll/issues/doc/[a-z0-9][a-z0-9-]*\.md$")
+    revision: str = Field(pattern=r"^[0-9a-f]{40}$")
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class ParentArtifact(ContractModel):
@@ -88,8 +61,6 @@ class SelectionBudget(ContractModel):
     new_execution_limit_usd: Decimal
     per_trial_usd: Decimal
     request_timeout_seconds: int
-    request_count_limit: None
-    wall_time_stop_limit: None
 
 
 class SelectedTrial(ContractModel):
@@ -99,8 +70,6 @@ class SelectedTrial(ContractModel):
     repeat_index: int = Field(ge=1)
     role: Literal["failure", "control"]
     parent_lineage: ParentLineage
-    prior_candidate_failure_kind: Literal["tool"] | None = None
-    prior_both_arms_success: Literal[True] | None = None
 
     @property
     def identity(self) -> SelectionIdentity:
@@ -111,58 +80,32 @@ class SelectionDocument(ContractModel):
     schema_version: Literal[1]
     authorization: AuthorizationPin
     parents: dict[ParentName, ParentArtifact]
-    selected_trials: list[SelectedTrial] = Field(min_length=1)
-    purpose: Literal["tool_guidance_regression"] | None = None
-    selected_identity_count: int | None = Field(default=None, ge=0)
-    new_trial_count: int | None = Field(default=None, ge=0)
-    smoke_trial_count: int | None = Field(default=None, ge=0)
-    comparison: str | None = None
-    prepared_at: str | None = Field(default=None, min_length=1)
-    budget: SelectionBudget | None = None
+    selected_trials: list[SelectedTrial] = Field(min_length=14, max_length=14)
+    budget: SelectionBudget
 
     @model_validator(mode="after")
     def validate_approved_selection(self) -> SelectionDocument:
-        if set(self.parents) != {
-            "recovery_baseline",
-            "recovery_candidate",
-            "original_baseline",
-            "original_candidate",
-        }:
-            raise ValueError("selection must pin all four approved parent artifacts")
-        if any(self.parents[name].sha256 != expected for name, expected in _PARENT_SHA256.items()):
-            raise ValueError("selection parent artifact hashes differ from the approved evidence")
+        if set(self.parents) != {"previous_baseline", "previous_candidate"}:
+            raise ValueError("selection must pin the previous baseline and candidate artifacts")
         identities = [trial.identity for trial in self.selected_trials]
         if len(set(identities)) != len(identities):
             raise ValueError("selection contains duplicate trial identities")
         if set(identities) != set(_ROLE_BY_IDENTITY):
             raise ValueError("selection identities differ from the approved AKB-361 sample")
         for trial in self.selected_trials:
-            expected_role, expected_lineage = _ROLE_BY_IDENTITY[trial.identity]
-            if (trial.role, trial.parent_lineage) != (expected_role, expected_lineage):
+            if trial.role != _ROLE_BY_IDENTITY[trial.identity] or trial.parent_lineage != "previous":
                 raise ValueError("selection role or parent lineage differs from the approved sample")
-            if trial.role == "failure":
-                if trial.prior_both_arms_success is not None:
-                    raise ValueError("prior success metadata is only valid for selected controls")
-            elif trial.prior_candidate_failure_kind is not None:
-                raise ValueError("prior failure metadata is only valid for selected failures")
-        if Counter(trial.role for trial in self.selected_trials) != Counter(failure=8, control=8):
-            raise ValueError("selection must contain eight failures and eight controls")
-        if self.selected_identity_count is not None and self.selected_identity_count != len(self.selected_trials):
-            raise ValueError("selection identity count differs from its selected trials")
-        if self.new_trial_count is not None and self.new_trial_count != 2 * len(self.selected_trials):
-            raise ValueError("selection paired trial count differs from its selected identities")
-        if self.smoke_trial_count is not None and self.smoke_trial_count != 8:
-            raise ValueError("selection smoke count differs from the four paired smoke cells")
-        if self.budget is not None and (
-            self.budget.session_max_usd != TOTAL_BUDGET_USD
-            or self.budget.prior_conservative_spend_usd != PRIOR_SPEND_USD
-            or self.budget.new_execution_limit_usd != NEW_EXECUTION_LIMIT_USD
-            or self.budget.per_trial_usd != PER_TRIAL_LIMIT_USD
-            or self.budget.request_timeout_seconds != REQUEST_TIMEOUT_SECONDS
-            or self.budget.request_count_limit is not None
-            or self.budget.wall_time_stop_limit is not None
+        if Counter(trial.role for trial in self.selected_trials) != Counter(failure=6, control=8):
+            raise ValueError("selection must contain six failures and eight controls")
+        budget = self.budget
+        if (
+            budget.session_max_usd != TOTAL_BUDGET_USD
+            or budget.prior_conservative_spend_usd != PRIOR_SPEND_USD
+            or budget.new_execution_limit_usd != NEW_EXECUTION_LIMIT_USD
+            or budget.per_trial_usd != PER_TRIAL_LIMIT_USD
+            or budget.request_timeout_seconds != REQUEST_TIMEOUT_SECONDS
         ):
-            raise ValueError("selection budget metadata differs from the approved measurement limits")
+            raise ValueError("selection budget differs from the approved measurement limits")
         return self
 
 
@@ -170,6 +113,8 @@ class SelectionDocument(ContractModel):
 class ToolGuidanceSelection:
     path: Path
     sha256: str
+    authorization: AuthorizationPin
+    budget: SelectionBudget
     parents: dict[str, dict[str, str]]
     selected_trials: tuple[SelectedTrial, ...]
     parent_results: dict[SelectionIdentity, dict[str, dict[str, Any]]]
@@ -183,32 +128,19 @@ class ToolGuidanceSelection:
 
     def artifact_metadata(self) -> dict[str, Any]:
         return {
-            "work_item": WORK_ITEM,
             "purpose": "tool_guidance_regression",
-            "authorization": {
-                "uri": AUTHORIZATION_URI,
-                "revision": AUTHORIZATION_REVISION,
-                "content_sha256": AUTHORIZATION_CONTENT_SHA256,
-            },
-            "provider_recovery_authorization": {
-                "uri": AUTHORIZATION_URI,
-                "revision": PROVIDER_RECOVERY_AUTHORIZATION_REVISION,
-                "content_sha256": PROVIDER_RECOVERY_AUTHORIZATION_CONTENT_SHA256,
-            },
+            "authorization": self.authorization.model_dump(mode="json"),
             "selection_sha256": self.sha256,
-            "selection_source_sha256": SELECTION_SOURCE_SHA256,
             "parents": {name: dict(parent) for name, parent in sorted(self.parents.items())},
             "selected_trials": [trial.model_dump(mode="json") for trial in self.selected_trials],
             "selected_identity_count": len(self.selected_trials),
             "expected_model_trials": 2 * len(self.selected_trials),
             "budget": {
-                "registered_total_cap_usd": str(TOTAL_BUDGET_USD),
-                "prior_spend_basis_usd": str(PRIOR_SPEND_USD),
-                "new_execution_limit_usd": str(NEW_EXECUTION_LIMIT_USD),
-                "trial_cost_limit_usd": str(PER_TRIAL_LIMIT_USD),
-                "request_timeout_seconds": REQUEST_TIMEOUT_SECONDS,
-                "request_count_limit": None,
-                "overall_wall_time_limit_seconds": None,
+                "session_max_usd": str(self.budget.session_max_usd),
+                "prior_conservative_spend_usd": str(self.budget.prior_conservative_spend_usd),
+                "new_execution_limit_usd": str(self.budget.new_execution_limit_usd),
+                "per_trial_usd": str(self.budget.per_trial_usd),
+                "request_timeout_seconds": self.budget.request_timeout_seconds,
             },
         }
 
@@ -235,6 +167,8 @@ class ToolGuidanceSelection:
         return cls(
             path=path,
             sha256=selection_sha256,
+            authorization=document.authorization,
+            budget=document.budget,
             parents=parents,
             selected_trials=tuple(document.selected_trials),
             parent_results=_parent_results(parents, document.selected_trials),
@@ -259,9 +193,7 @@ def _validate_manifest(
         "primary": "streamlake",
         "lightweight": "akashml",
     }
-    models: dict[Literal["primary", "lightweight"], ModelSpec] = {
-        model.class_name: model for model in manifest.models
-    }
+    models = {model.class_name: model for model in manifest.models}
     if set(models) != set(expected_routes):
         raise ValueError("run manifest does not contain the approved model cells")
     for model_class, provider in expected_routes.items():
@@ -279,13 +211,30 @@ def _validate_manifest(
             raise ValueError("selection contains a repeat outside the registered run plan")
 
 
+def _parent_rows(artifact: dict[str, Any]) -> list[dict[str, Any]]:
+    runs = artifact.get("runs")
+    if not isinstance(runs, dict):
+        raise ValueError("parent artifact has no run rows")
+    rows: list[dict[str, Any]] = []
+    for run in runs.values():
+        if not isinstance(run, dict):
+            raise ValueError("parent artifact contains a malformed run")
+        trials = run.get("trials")
+        if not isinstance(trials, list):
+            raise ValueError("parent artifact contains no trial rows")
+        if any(not isinstance(row, dict) for row in trials):
+            raise ValueError("parent artifact contains a malformed trial row")
+        rows.extend(trials)
+    return rows
+
+
 def _validate_parents(
     parents: dict[ParentName, ParentArtifact],
     *,
     selection_directory: Path,
 ) -> dict[str, dict[str, str]]:
     metadata: dict[str, dict[str, str]] = {}
-    for name in ("recovery_baseline", "recovery_candidate", "original_baseline", "original_candidate"):
+    for name in ("previous_baseline", "previous_candidate"):
         parent = parents[name]
         try:
             parent_path = Path(parent.path).expanduser()
@@ -304,6 +253,7 @@ def _validate_parents(
         expected_arm = "baseline" if name.endswith("_baseline") else "candidate"
         if not isinstance(artifact, dict) or artifact.get("arm") != expected_arm:
             raise ValueError(f"{name} parent artifact has the wrong arm identity")
+        _parent_rows(artifact)
         metadata[name] = {"path": str(parent_path), "sha256": parent.sha256}
     return metadata
 
@@ -317,23 +267,17 @@ def _parent_results(
         raw = Path(parent["path"]).read_bytes()
         if hashlib.sha256(raw).hexdigest() != parent["sha256"]:
             raise ValueError(f"{name} parent artifact changed while selection was loading")
-        parsed = json.loads(raw)
-        artifacts[name] = parsed
+        artifacts[name] = json.loads(raw)
 
     results: dict[SelectionIdentity, dict[str, dict[str, Any]]] = {}
     for trial in selected_trials:
-        lineage = trial.parent_lineage
         rows_by_arm: dict[str, dict[str, Any]] = {}
         for arm in ("baseline", "candidate"):
-            name = f"{lineage}_{arm}"
-            artifact = artifacts[name]
+            name = f"previous_{arm}"
             rows = [
                 row
-                for run in artifact.get("runs", {}).values()
-                if isinstance(run, dict)
-                for row in run.get("trials", [])
-                if isinstance(row, dict)
-                and all(
+                for row in _parent_rows(artifacts[name])
+                if all(
                     row.get(field) == value
                     for field, value in zip(
                         ("model_class", "transport", "task_id", "repeat_index"),
@@ -347,19 +291,10 @@ def _parent_results(
             rows_by_arm[arm] = rows[0]
         baseline, candidate = rows_by_arm["baseline"], rows_by_arm["candidate"]
         if trial.role == "failure":
-            if candidate.get("success") is not False or candidate.get("failure_kind") != "tool":
-                raise ValueError("selected failure is not a prior candidate tool failure")
+            if candidate.get("success") is not False:
+                raise ValueError("selected failure is not a prior candidate failure")
         elif baseline.get("success") is not True or candidate.get("success") is not True:
             raise ValueError("selected control was not successful in both pinned parent arms")
-        if (
-            trial.prior_candidate_failure_kind is not None
-            and candidate.get("failure_kind") != trial.prior_candidate_failure_kind
-        ):
-            raise ValueError("selected prior candidate failure metadata differs from its pinned parent row")
-        if trial.prior_both_arms_success is not None and trial.prior_both_arms_success != (
-            baseline.get("success") is True and candidate.get("success") is True
-        ):
-            raise ValueError("selected prior control metadata differs from its pinned parent rows")
         results[trial.identity] = rows_by_arm
     return results
 
@@ -615,12 +550,16 @@ def build_selection_summary(
             }
         )
     total_trial_cost = sum(
-        (Decimal(str(outcome.cost_usd)) for outcomes in outcome_by_arm.values() for outcome in outcomes.values()),
+        (
+            Decimal(str(outcome.cost_usd))
+            for outcomes in outcome_by_arm.values()
+            for identity, outcome in outcomes.items()
+            if identity in expected
+        ),
         start=Decimal("0"),
     )
     return {
         "schema_version": 1,
-        "work_item": WORK_ITEM,
         "selection": selection.artifact_metadata(),
         "status": "complete" if complete else "incomplete",
         "canonical_comparison_verdict": comparison.get("verdict", "inconclusive"),
@@ -635,7 +574,7 @@ def build_selection_summary(
         "smoke_cells_per_arm": len(expected_smoke_cells),
         "observed_new_smoke_model_requests": smoke_requests,
         "new_selected_trial_cost_usd": str(total_trial_cost),
-        "new_execution_cost_limit_usd": str(NEW_EXECUTION_LIMIT_USD),
+        "new_execution_cost_limit_usd": str(selection.budget.new_execution_limit_usd),
         "unselected_model_requests": sum(
             summary["unselected_model_requests"] for summary in arm_summaries.values()
         ),

@@ -58,10 +58,10 @@ def test_stdio_pair_declares_source_blind_local_file_targets() -> None:
             "document",
         ]
         assert [attempt.arguments for attempt in task.expected_material_attempts] == [
-            {"parent": PARENT, "collection": ""},
-            {"parent": PARENT, "alt_text": IMAGE_ALT},
+            {"vault": VAULT, "collection": ""},
+            {"vault": VAULT, "alt_text": IMAGE_ALT},
                 {
-                    "parent": PARENT,
+                    "vault": VAULT,
                     "title": DOCUMENT_TITLE,
                 },
         ]
@@ -74,9 +74,9 @@ def test_stdio_pair_declares_source_blind_local_file_targets() -> None:
     assert stdio_tasks[0].expected_material_attempts == stdio_tasks[1].expected_material_attempts
     assert stdio_tasks[0].expected_result_bindings == stdio_tasks[1].expected_result_bindings
     assert stdio_tasks[0].expected_result_bindings[0].model_dump(mode="json") == {
-        "source_attempt": 2,
+        "source_stage": "image_upload_image_1",
         "source_field": "markdown",
-        "target_attempt": 3,
+        "target_stage": "create_document_1",
         "target_argument": "content",
         "relation": "contains",
     }
@@ -186,8 +186,9 @@ async def test_image_result_capture_is_structured_bounded_and_keeps_cleanup_data
     assert returned is result
     assert recorder.calls[0].result_fields == {"markdown": IMAGE_MARKDOWN}
     assert result["structuredContent"]["url"] == "/api/assets/fixture-image"
-    assert "not captured" not in recorder.calls[0].result_preview
-    assert '"url"' not in recorder.calls[0].result_preview
+    assert "not captured" in recorder.calls[0].result_preview
+    assert IMAGE_MARKDOWN in recorder.calls[0].result_preview
+    assert '"url":"/api/assets/fixture-image"' in recorder.calls[0].result_preview
 
     oversized = {
         "structuredContent": {"markdown": "x" * 2049},
@@ -228,6 +229,8 @@ def _stdio_calls(
             order=1,
             tool_name="akb_put_file",
             logical_operation="file_upload",
+            operation_kind="material",
+            stage_id="file_upload_file_1",
             raw_model_args=file_args,
             server_args=file_args,
             effective_server_args=file_args,
@@ -240,6 +243,8 @@ def _stdio_calls(
             order=2,
             tool_name="akb_put_image",
             logical_operation="image_upload",
+            operation_kind="material",
+            stage_id="image_upload_image_1",
             raw_model_args=image_args,
             server_args=image_args,
             effective_server_args=image_args,
@@ -253,6 +258,8 @@ def _stdio_calls(
             order=3,
             tool_name="akb_put",
             logical_operation="create",
+            operation_kind="material",
+            stage_id="create_document_1",
             raw_model_args=document_args,
             server_args=document_args,
             effective_server_args=document_args,
