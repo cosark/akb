@@ -23,6 +23,28 @@ def _seal(artifact: dict) -> None:
     artifact["artifact_hash"] = hash_json(artifact["artifact_hash_input"])
 
 
+def _attach_selection_metadata(baseline: dict, candidate: dict) -> None:
+    selection = {
+        "selection_sha256": "a" * 64,
+        "selected_trials": [{
+            "model_class": "primary",
+            "transport": "http",
+            "task_id": "read-vaults-en",
+            "repeat_index": 1,
+        }],
+    }
+    for artifact in (baseline, candidate):
+        artifact["selection"] = deepcopy(selection)
+        artifact["pre_smoke_seal_inputs"]["selection"] = deepcopy(selection)
+    seal_hash = hash_json({
+        arm: hash_json(artifact["pre_smoke_seal_inputs"])
+        for arm, artifact in (("baseline", baseline), ("candidate", candidate))
+    })
+    for artifact in (baseline, candidate):
+        artifact["pre_smoke_seal_hash"] = seal_hash
+        _seal(artifact)
+
+
 def _reseal_provider_registry_pair(baseline: dict, candidate: dict) -> None:
     artifacts = {"baseline": baseline, "candidate": candidate}
     for artifact in artifacts.values():
@@ -74,6 +96,43 @@ def test_complete_artifacts_compare_all_608_paired_outcomes_and_apply_every_gate
         and interval["seed"] == 358
         for interval in [result["overall"]["success"], result["overall"]["task_error_rate"], *result["cells"].values()]
     )
+
+
+def test_selected_artifacts_keep_the_full_corpus_verdict_inconclusive() -> None:
+    baseline, candidate = complete_paired_artifacts()
+    _attach_selection_metadata(baseline, candidate)
+
+    result = compare_artifacts(baseline, candidate)
+
+    assert result["verdict"] == "inconclusive"
+    assert result["gate"]["reasons"] == [
+        "selected trial evidence cannot support the full benchmark adoption verdict"
+    ]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["instructions", "selection_repeat", "source_revision", "execution_event", "artifact_hash"],
+)
+def test_selected_artifact_tampering_is_rejected_before_partial_verdict(mutation: str) -> None:
+    baseline, candidate = complete_paired_artifacts()
+    _attach_selection_metadata(baseline, candidate)
+
+    if mutation == "instructions":
+        candidate["catalogs"]["http:default"]["server_discover"]["instructions"] += " tampered"
+    elif mutation == "selection_repeat":
+        candidate["selection"]["selected_trials"][0]["repeat_index"] = 2
+    elif mutation == "source_revision":
+        candidate["source_revision"] = "tampered-source-revision"
+    elif mutation == "execution_event":
+        candidate["paired_execution"]["events"][0]["sequence"] += 1
+    else:
+        candidate["artifact_hash"] = "0" * 64
+
+    result = compare_artifacts(baseline, candidate)
+
+    assert result["verdict"] == "inconclusive"
+    assert result["gate"]["reasons"] == ["candidate artifact integrity digest does not match"]
 
 
 def test_complete_artifacts_over_retired_request_and_wall_caps_still_compare() -> None:

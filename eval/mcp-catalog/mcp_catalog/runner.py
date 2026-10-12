@@ -3144,16 +3144,16 @@ def _artifact_has_instruction_input_proof(
 def compare_artifacts(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     """Compare a sealed paired run using only the preregistered BCa gates."""
 
+    for artifact, arm in ((baseline, cast(ArmName, "baseline")), (candidate, cast(ArmName, "candidate"))):
+        integrity_error = _artifact_integrity_error(artifact, arm)
+        if integrity_error is not None:
+            return _empty_comparison(baseline, candidate, integrity_error)
     if "selection" in baseline or "selection" in candidate:
         return _empty_comparison(
             baseline,
             candidate,
             "selected trial evidence cannot support the full benchmark adoption verdict",
         )
-    for artifact, arm in ((baseline, cast(ArmName, "baseline")), (candidate, cast(ArmName, "candidate"))):
-        integrity_error = _artifact_integrity_error(artifact, arm)
-        if integrity_error is not None:
-            return _empty_comparison(baseline, candidate, integrity_error)
     manifest = baseline["manifest"]
     try:
         validated_manifest = BenchmarkRunManifest.model_validate(manifest)
