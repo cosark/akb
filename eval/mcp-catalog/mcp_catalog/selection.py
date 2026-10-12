@@ -22,7 +22,7 @@ ParentLineage = Literal["previous"]
 ParentName = Literal["previous_baseline", "previous_candidate"]
 
 TOTAL_BUDGET_USD = Decimal("50")
-PRIOR_SPEND_USD = Decimal("9.1584802508")
+PRIOR_SPEND_USD = Decimal("9.2804328442")
 NEW_EXECUTION_LIMIT_USD = TOTAL_BUDGET_USD - PRIOR_SPEND_USD
 PER_TRIAL_LIMIT_USD = Decimal("0.10")
 REQUEST_TIMEOUT_SECONDS = 300
@@ -30,8 +30,8 @@ PAIRED_ORDER_MODE = "counterbalanced_task_repeat"
 PAIRED_ORDER_SEED = "akb-358-v1"
 APPROVED_AUTHORIZATION = {
     "uri": "akb://reef-akb/coll/issues/doc/akb-361.md",
-    "revision": "774621eccd157d955d489d50d8a9f5177d604ce1",  # pragma: allowlist secret
-    "content_sha256": "97b77a3514ef4e3a3c4a142508f750b1dc5d192514a5b173c54db87546f9bf7d",  # pragma: allowlist secret
+    "revision": "41ff509113638ffe9ec0af1f803b42439be87405",  # pragma: allowlist secret
+    "content_sha256": "b11b8f36d5c8fa36fe3eb6b453a56b612b15487f3d7b26b939d903c7b9f357a7",  # pragma: allowlist secret
 }
 APPROVED_PARENT_SHA256: dict[ParentName, str] = {
     "previous_baseline": "276e0dfdfdad58ce083f65b3ea0c21a22675f31d8a393995dace62b77eaa43a4",  # pragma: allowlist secret

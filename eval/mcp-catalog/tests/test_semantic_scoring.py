@@ -527,7 +527,7 @@ def test_relation_workflow_accepts_alternate_public_reads_and_rejects_wrong_edge
 
 
 def test_publication_contract_accepts_only_registered_read_observations() -> None:
-    task = _tasks()["table-publication-en"]
+    task = _tasks()["table-publication-ko"]
     tool_by_stage = {
         "create_vault_1": "akb_create_vault",
         "create_table_1": "akb_create_table",
@@ -605,7 +605,30 @@ def test_publication_contract_accepts_only_registered_read_observations() -> Non
             "document",
             {"vault": "catalog-bench-data", "depth": 0, "content_type": "all"},
         ),
+        observation(
+            14,
+            "akb_sql",
+            "search",
+            "table",
+            {"vault": "catalog-bench-data", "sql": "SELECT count(*) AS n FROM scores"},
+        ),
     ]
+    valid_table_queries = [
+        "SELECT score FROM scores WHERE score > 0 ORDER BY score DESC",
+        'SELECT "score", "id" FROM public."scores" WHERE "score" > 0 ORDER BY "id"',
+        'SELECT count(*) AS n FROM "public"."scores"',
+    ]
+    valid_table_query_results = []
+    for sql in valid_table_queries:
+        query_call = observation(
+            14,
+            "akb_sql",
+            "search",
+            "table",
+            {"vault": "catalog-bench-data", "sql": sql},
+        )
+        _resolved, query_valid = _resolved_material_stage_calls(task, [*calls, query_call])
+        valid_table_query_results.append(query_valid)
     _resolved, accepted_valid = _resolved_material_stage_calls(task, [*calls, *accepted])
     metrics = TrialOutcome(
         task_id=task.id,
@@ -643,6 +666,66 @@ def test_publication_contract_accepts_only_registered_read_observations() -> Non
         "table",
         {"vault": "catalog-bench-data", "sql": "SELECT * FROM payroll LIMIT 5"},
     )
+    other_vault_query = observation(
+        9,
+        "akb_sql",
+        "search",
+        "table",
+        {"vault": "other-vault", "sql": "SELECT count(*) FROM scores"},
+    )
+    system_table_query = observation(
+        9,
+        "akb_sql",
+        "search",
+        "table",
+        {"vault": "catalog-bench-data", "sql": "SELECT count(*) FROM public.events"},
+    )
+    other_schema_query = observation(
+        9,
+        "akb_sql",
+        "search",
+        "table",
+        {"vault": "catalog-bench-data", "sql": "SELECT count(*) FROM private.scores"},
+    )
+    multiple_relation_query = observation(
+        9,
+        "akb_sql",
+        "search",
+        "table",
+        {"vault": "catalog-bench-data", "sql": "SELECT scores.id FROM scores JOIN events ON events.id = scores.id"},
+    )
+    data_modifying_cte_query = observation(
+        9,
+        "akb_sql",
+        "search",
+        "table",
+        {
+            "vault": "catalog-bench-data",
+            "sql": "WITH changed AS (DELETE FROM scores RETURNING *) SELECT count(*) FROM scores",
+        },
+    )
+    multi_statement_query = observation(
+        9,
+        "akb_sql",
+        "search",
+        "table",
+        {"vault": "catalog-bench-data", "sql": "SELECT count(*) FROM scores; DELETE FROM scores"},
+    )
+    side_effect_query = observation(
+        9,
+        "akb_sql",
+        "search",
+        "table",
+        {"vault": "catalog-bench-data", "sql": "SELECT nextval('scores_id_seq') FROM scores"},
+    )
+    malformed_query = observation(
+        9,
+        "akb_sql",
+        "search",
+        "table",
+        {"vault": "catalog-bench-data", "sql": "SELECT 'unterminated"},
+    )
+    unsuccessful_query = accepted[-1].model_copy(update={"server_succeeded": False})
     write_query = observation(
         9,
         "akb_sql",
@@ -663,10 +746,24 @@ def test_publication_contract_accepts_only_registered_read_observations() -> Non
     _resolved, wrong_filter_valid = _resolved_material_stage_calls(task, [*calls, wrong_filter])
     _resolved, vault_filter_valid = _resolved_material_stage_calls(task, [*calls, vault_filter])
     _resolved, wrong_query_valid = _resolved_material_stage_calls(task, [*calls, wrong_query])
+    _resolved, other_vault_query_valid = _resolved_material_stage_calls(task, [*calls, other_vault_query])
+    _resolved, system_table_query_valid = _resolved_material_stage_calls(task, [*calls, system_table_query])
+    _resolved, other_schema_query_valid = _resolved_material_stage_calls(task, [*calls, other_schema_query])
+    _resolved, multiple_relation_query_valid = _resolved_material_stage_calls(task, [*calls, multiple_relation_query])
+    _resolved, data_modifying_cte_query_valid = _resolved_material_stage_calls(task, [*calls, data_modifying_cte_query])
+    _resolved, multi_statement_query_valid = _resolved_material_stage_calls(task, [*calls, multi_statement_query])
+    _resolved, side_effect_query_valid = _resolved_material_stage_calls(task, [*calls, side_effect_query])
+    _resolved, malformed_query_valid = _resolved_material_stage_calls(task, [*calls, malformed_query])
+    _resolved, unsuccessful_query_valid = _resolved_material_stage_calls(task, [*calls, unsuccessful_query])
+    _resolved, missing_initial_select_valid = _resolved_material_stage_calls(
+        task,
+        [*[call for call in calls if call.stage_id != "search_table_1"], accepted[-1]],
+    )
     _resolved, write_query_valid = _resolved_material_stage_calls(task, [*calls, write_query])
     _resolved, guide_mutation_valid = _resolved_material_stage_calls(task, [*calls, guide_mutation])
 
     assert accepted_valid is True
+    assert all(valid_table_query_results)
     assert metrics.wrong_resource_calls == 0
     assert metrics.wrong_target_calls == 0
     assert wrong_vault_valid is False
@@ -675,6 +772,16 @@ def test_publication_contract_accepts_only_registered_read_observations() -> Non
     assert wrong_filter_valid is False
     assert vault_filter_valid is True
     assert wrong_query_valid is False
+    assert other_vault_query_valid is False
+    assert system_table_query_valid is False
+    assert other_schema_query_valid is False
+    assert multiple_relation_query_valid is False
+    assert data_modifying_cte_query_valid is False
+    assert multi_statement_query_valid is False
+    assert side_effect_query_valid is False
+    assert malformed_query_valid is False
+    assert unsuccessful_query_valid is False
+    assert missing_initial_select_valid is False
     assert write_query_valid is False
     assert guide_mutation_valid is False
 

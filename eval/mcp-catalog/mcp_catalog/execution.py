@@ -30,6 +30,8 @@ from pydantic_evals import Case, Dataset
 from pydantic_evals.evaluators import EvaluationReason, Evaluator, EvaluatorContext, ReportEvaluator, ReportEvaluatorContext
 from pydantic_evals.lifecycle import CaseLifecycle
 from pydantic_evals.reporting import EvaluationReport, ScalarResult
+from sqlglot import exp, parse
+from sqlglot.errors import SqlglotError
 
 from .catalog import ConnectionSpec, create_client, create_toolset, discover_server
 from .contracts import (
@@ -922,10 +924,31 @@ def _registered_schema_metadata_query(task: TaskManifest, arguments: dict[str, A
     }
 
 
-def _registered_table_data_query(task: TaskManifest, arguments: dict[str, Any]) -> bool:
+def _postgres_identifier_matches(identifier: Any, allowed_names: set[str]) -> bool:
+    if not isinstance(identifier, exp.Identifier):
+        return False
+    name = identifier.name
+    if identifier.args.get("quoted"):
+        return name in allowed_names
+    folded_allowed_names = {candidate.lower() for candidate in allowed_names}
+    return name.lower() in folded_allowed_names
+
+
+def _registered_table_data_query(
+    call: ToolCallRecord,
+    task: TaskManifest,
+    arguments: dict[str, Any],
+) -> bool:
     sql = arguments.get("sql")
     vault = arguments.get("vault")
-    if not isinstance(sql, str) or not isinstance(vault, str) or set(arguments) != {"vault", "sql"}:
+    if (
+        not call.server_succeeded
+        or call.logical_operation != "search"
+        or call.resource_type != "table"
+        or not isinstance(sql, str)
+        or not isinstance(vault, str)
+        or set(arguments) != {"vault", "sql"}
+    ):
         return False
     tables = [
         attempt.arguments
@@ -941,16 +964,43 @@ def _registered_table_data_query(task: TaskManifest, arguments: dict[str, Any]) 
     sanitized_vault = re.sub(r"[^a-z0-9]", "_", vault.lower().replace("-", "_"))
     sanitized_table = re.sub(r"[^a-z0-9]", "_", table_name.lower().replace("-", "_"))
     physical_name = f"vt_{sanitized_vault}__{sanitized_table}"
-    query = re.fullmatch(
-        r"SELECT\s+\*\s+FROM\s+(?:(public)\.)?([A-Za-z_][A-Za-z0-9_]*)"
-        r"\s+LIMIT\s+\d+\s*;?",
-        sql.strip(),
-        re.IGNORECASE,
-    )
-    return query is not None and query.group(2).casefold() in {
-        table_name.casefold(),
-        physical_name.casefold(),
-    }
+    try:
+        statements = parse(sql, read="postgres")
+    except SqlglotError:
+        return False
+    if len(statements) != 1 or not isinstance(statements[0], exp.Select):
+        return False
+
+    # SQLGlot accepts some syntax PostgreSQL may reject; this checks query shape only.
+    query = statements[0]
+    if (
+        query.args.get("with_") is not None
+        or query.args.get("into") is not None
+        or query.args.get("locks")
+        or len(list(query.find_all(exp.Select))) != 1
+        or list(query.find_all(exp.CTE))
+        or list(query.find_all(exp.Subquery))
+        or list(query.find_all(exp.Delete))
+        or list(query.find_all(exp.Insert))
+        or list(query.find_all(exp.Update))
+        or list(query.find_all(exp.Merge))
+    ):
+        return False
+
+    relations = list(query.find_all(exp.Table))
+    if len(relations) != 1:
+        return False
+    relation = relations[0]
+    if relation.args.get("catalog") is not None:
+        return False
+    schema = relation.args.get("db")
+    if schema is not None and not _postgres_identifier_matches(schema, {"public"}):
+        return False
+    if not _postgres_identifier_matches(relation.this, {table_name, physical_name}):
+        return False
+
+    # Permit COUNT, but reject function calls that can observe or mutate other state.
+    return all(isinstance(function, exp.Count) for function in query.find_all(exp.Func))
 
 
 def _registered_readonly_observation(
@@ -982,7 +1032,11 @@ def _registered_readonly_observation(
             and filter_value in _registered_vault_names(task)
         )
     if call.logical_operation == "search" and call.resource_type == "table":
-        if _registered_schema_metadata_query(task, arguments) or _registered_table_data_query(task, arguments):
+        if _registered_schema_metadata_query(task, arguments) or _registered_table_data_query(
+            call,
+            task,
+            arguments,
+        ):
             return True
     if call.logical_operation == "search" and _registered_asset_reference_search(
         call,
