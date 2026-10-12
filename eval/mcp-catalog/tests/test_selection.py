@@ -29,7 +29,19 @@ def _manifest():
             "request_timeout_seconds": 300,
         }
     )
-    return manifest.model_copy(update={"budget": budget})
+    models = [
+        model.model_copy(
+            update={
+                "routing": model.routing.model_copy(update={"order": ["streamlake"]}),
+                "input_cost_per_million_usd": 0.088,
+                "output_cost_per_million_usd": 0.264,
+            }
+        )
+        if model.class_name == "primary"
+        else model
+        for model in manifest.models
+    ]
+    return manifest.model_copy(update={"budget": budget, "models": models})
 
 
 def _selection_fixture(
@@ -123,6 +135,30 @@ def test_selection_validates_all_pinned_parent_rows_without_writing_them(
     assert sum(trial.role == "failure" for trial in loaded.selected_trials) == 8
     assert sum(trial.role == "control" for trial in loaded.selected_trials) == 8
     assert {name: Path(item["path"]).read_bytes() for name, item in loaded.parents.items()} == parent_bytes
+
+
+def test_selection_requires_the_approved_streamlake_primary_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, tasks, selection = _selection_fixture(tmp_path, monkeypatch)
+    assert next(model for model in manifest.models if model.class_name == "primary").routing.order == ["streamlake"]
+    assert next(model for model in manifest.models if model.class_name == "lightweight").routing.order == ["akashml"]
+
+    for model_class, wrong_provider in (("primary", "deepinfra"), ("lightweight", "streamlake")):
+        wrong_models = [
+            model.model_copy(update={"routing": model.routing.model_copy(update={"order": [wrong_provider]})})
+            if model.class_name == model_class
+            else model
+            for model in manifest.models
+        ]
+        wrong_manifest = manifest.model_copy(update={"models": wrong_models})
+        with pytest.raises(ValueError, match="approved fixed provider routes"):
+            selection_module.ToolGuidanceSelection.load(
+                selection.path,
+                manifest=wrong_manifest,
+                tasks=tasks,
+            )
 
 
 def test_relative_parent_paths_resolve_from_the_selection_file(
@@ -246,6 +282,16 @@ def test_selection_filters_schedules_and_hashes_its_pre_smoke_seal(
     runtime = {"source_revision": manifest.arm_source_revisions["baseline"], "artifact_versions": {}}
     seal = runner._local_pre_smoke_seal(runtime, {})
     assert seal["selection"]["selection_sha256"] == selection.sha256
+    assert seal["selection"]["authorization"] == {
+        "uri": selection_module.AUTHORIZATION_URI,
+        "revision": selection_module.AUTHORIZATION_REVISION,
+        "content_sha256": selection_module.AUTHORIZATION_CONTENT_SHA256,
+    }
+    assert seal["selection"]["provider_recovery_authorization"] == {
+        "uri": selection_module.AUTHORIZATION_URI,
+        "revision": selection_module.PROVIDER_RECOVERY_AUTHORIZATION_REVISION,
+        "content_sha256": selection_module.PROVIDER_RECOVERY_AUTHORIZATION_CONTENT_SHA256,
+    }
     changed = selection.__class__(
         path=selection.path,
         sha256="f" * 64,

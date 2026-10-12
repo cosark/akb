@@ -15,6 +15,7 @@ from pydantic import Field, model_validator
 from .contracts import (
     BenchmarkRunManifest,
     ContractModel,
+    ModelSpec,
     TaskManifest,
     Transport,
 )
@@ -25,13 +26,9 @@ WORK_ITEM = "AKB-361"
 AUTHORIZATION_URI = "akb://reef-akb/coll/issues/doc/akb-361.md"
 AUTHORIZATION_REVISION = "006b373f989aaad7ce497912fab437741648d625"  # pragma: allowlist secret
 AUTHORIZATION_CONTENT_SHA256 = "0f5cb26f254f4eb2377b3798b9fe98a634e501196c2624200c53ed898899d1f8"  # pragma: allowlist secret
+PROVIDER_RECOVERY_AUTHORIZATION_REVISION = "79718e4da22a2cb1f3d82167000009a57963b90e"  # pragma: allowlist secret
+PROVIDER_RECOVERY_AUTHORIZATION_CONTENT_SHA256 = "c1379ac198acf601684c7c09ce71d2e99a95512381f0e31ec2a488e6822cab0b"  # pragma: allowlist secret
 SELECTION_SOURCE_SHA256 = "be0ef3c434e57c4af4b453558f73bd3fcff3237b9effae07840fe64c2699a762"  # pragma: allowlist secret
-_PARENT_SHA256 = {
-    "recovery_baseline": "e42af85c5ef0456ed5ee3f93b718a44b5e7aa2690fcb9fc68f77c51c3546efd3",  # pragma: allowlist secret
-    "recovery_candidate": "11d3fe0445b9279b1a12016f34b004f7cfed9dcb668d506544f3b8759f030f54",  # pragma: allowlist secret
-    "original_baseline": "5df67aaa44e4ecd8ec5067f136184fcf18c5fbe558876cc39c9a414697d8dfb7",  # pragma: allowlist secret
-    "original_candidate": "28a23de2811a679b315c7069c4df2db8672218eb19da872aa41652d36db0d371",  # pragma: allowlist secret
-}
 TOTAL_BUDGET_USD = Decimal("50")
 PRIOR_SPEND_USD = Decimal("8.56720104")
 NEW_EXECUTION_LIMIT_USD = TOTAL_BUDGET_USD - PRIOR_SPEND_USD
@@ -46,6 +43,13 @@ ParentName = Literal[
     "original_baseline",
     "original_candidate",
 ]
+
+_PARENT_SHA256: dict[ParentName, str] = {
+    "recovery_baseline": "e42af85c5ef0456ed5ee3f93b718a44b5e7aa2690fcb9fc68f77c51c3546efd3",  # pragma: allowlist secret
+    "recovery_candidate": "11d3fe0445b9279b1a12016f34b004f7cfed9dcb668d506544f3b8759f030f54",  # pragma: allowlist secret
+    "original_baseline": "5df67aaa44e4ecd8ec5067f136184fcf18c5fbe558876cc39c9a414697d8dfb7",  # pragma: allowlist secret
+    "original_candidate": "28a23de2811a679b315c7069c4df2db8672218eb19da872aa41652d36db0d371",  # pragma: allowlist secret
+}
 
 _ROLE_BY_IDENTITY: dict[SelectionIdentity, tuple[Literal["failure", "control"], ParentLineage]] = {
     ("primary", "http", "collection-relation-lifecycle-ko", 2): ("failure", "recovery"),
@@ -186,6 +190,11 @@ class ToolGuidanceSelection:
                 "revision": AUTHORIZATION_REVISION,
                 "content_sha256": AUTHORIZATION_CONTENT_SHA256,
             },
+            "provider_recovery_authorization": {
+                "uri": AUTHORIZATION_URI,
+                "revision": PROVIDER_RECOVERY_AUTHORIZATION_REVISION,
+                "content_sha256": PROVIDER_RECOVERY_AUTHORIZATION_CONTENT_SHA256,
+            },
             "selection_sha256": self.sha256,
             "selection_source_sha256": SELECTION_SOURCE_SHA256,
             "parents": {name: dict(parent) for name, parent in sorted(self.parents.items())},
@@ -246,8 +255,13 @@ def _validate_manifest(
         or budget.request_timeout_seconds != REQUEST_TIMEOUT_SECONDS
     ):
         raise ValueError("run manifest differs from the approved tool-guidance measurement budget")
-    expected_routes = {"primary": "deepinfra", "lightweight": "akashml"}
-    models = {model.class_name: model for model in manifest.models}
+    expected_routes: dict[Literal["primary", "lightweight"], str] = {
+        "primary": "streamlake",
+        "lightweight": "akashml",
+    }
+    models: dict[Literal["primary", "lightweight"], ModelSpec] = {
+        model.class_name: model for model in manifest.models
+    }
     if set(models) != set(expected_routes):
         raise ValueError("run manifest does not contain the approved model cells")
     for model_class, provider in expected_routes.items():
@@ -410,7 +424,7 @@ def build_selection_summary(
     event_lists: list[list[dict[str, Any]]] = []
     paired_complete = True
     task_by_id = {task.id: task for task in tasks}
-    model_ids = {model.class_name: model.model_id for model in manifest.models}
+    model_ids: dict[str, str] = {model.class_name: model.model_id for model in manifest.models}
 
     for arm in ("baseline", "candidate"):
         artifact = artifacts.get(arm, {})
