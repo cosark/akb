@@ -14,6 +14,7 @@ from mcp_catalog.contracts import (
     load_task_corpus,
     token_estimate,
 )
+from mcp_catalog.evidence import canonical_json
 from mcp_catalog.execution import ModelInputEvidence, ToolCallRecord, TrialOutcome
 from mcp_catalog.runner import (
     _build_artifact_hash_input,
@@ -43,15 +44,21 @@ EXECUTION_ENVIRONMENT = {
 
 def synthetic_model_input_evidence(request_count: int) -> list[ModelInputEvidence]:
     instructions_sha256 = hashlib.sha256(SYNTHETIC_SERVER_INSTRUCTIONS.encode("utf-8")).hexdigest()
-    return [
-        ModelInputEvidence(
-            request_index=index,
-            model_input_sha256=hashlib.sha256(f"synthetic-model-input-{index}".encode()).hexdigest(),
-            server_instructions_sha256=instructions_sha256,
-            server_instructions_present=True,
+    evidence = []
+    for index in range(1, request_count + 1):
+        model_input = canonical_json(
+            {"instructions": SYNTHETIC_SERVER_INSTRUCTIONS, "request_index": index}
         )
-        for index in range(1, request_count + 1)
-    ]
+        evidence.append(
+            ModelInputEvidence(
+                request_index=index,
+                model_input_sha256=hashlib.sha256(model_input.encode("utf-8")).hexdigest(),
+                model_input_canonical_json=model_input,
+                server_instructions_sha256=instructions_sha256,
+                server_instructions_present=True,
+            )
+        )
+    return evidence
 
 
 def provider_name_for_model(model: Any) -> str:
@@ -890,6 +897,7 @@ def _paired_budget(outcomes: list[TrialOutcome], manifest: Any) -> dict[str, Any
         "wall_seconds": 120.0,
         "model_work_seconds": sum(item.latency_seconds for item in outcomes),
         "max_total_cost_usd": manifest.budget.max_total_cost_usd,
+        "final_reserved_cost_usd": "0",
     }
 
 

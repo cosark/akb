@@ -90,14 +90,15 @@ def _selection_fixture(
         path.write_bytes(raw)
         digest = hashlib.sha256(raw).hexdigest()
         parent_bindings[name] = {"path": str(path), "sha256": digest}
+    monkeypatch.setattr(
+        selection_module,
+        "APPROVED_PARENT_SHA256",
+        {name: parent["sha256"] for name, parent in parent_bindings.items()},
+    )
 
     document = {
         "schema_version": 1,
-        "authorization": {
-            "uri": "akb://reef-akb/coll/issues/doc/akb-361.md",
-            "revision": "a" * 40,
-            "content_sha256": "b" * 64,
-        },
+        "authorization": selection_module.APPROVED_AUTHORIZATION.copy(),
         "parents": parent_bindings,
         "selected_trials": selected,
         "budget": {
@@ -147,7 +148,20 @@ def test_failure_role_requires_candidate_failure_without_constraining_failure_ki
         if not row["success"]
     ]
     assert candidate_failures
-    assert all(row["failure_kind"] == "none" for row in candidate_failures)
+    candidate_failures[0]["failure_kind"] = "request_limit"
+    raw = json.dumps(candidate, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    candidate_path.write_bytes(raw)
+    document = json.loads(selection.path.read_text(encoding="utf-8"))
+    document["parents"]["previous_candidate"]["sha256"] = hashlib.sha256(raw).hexdigest()
+    monkeypatch.setattr(
+        selection_module,
+        "APPROVED_PARENT_SHA256",
+        {
+            "previous_baseline": selection.parents["previous_baseline"]["sha256"],
+            "previous_candidate": hashlib.sha256(raw).hexdigest(),
+        },
+    )
+    selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
     selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
 
     candidate_failures[0]["success"] = True
@@ -155,6 +169,14 @@ def test_failure_role_requires_candidate_failure_without_constraining_failure_ki
     candidate_path.write_bytes(raw)
     document = json.loads(selection.path.read_text(encoding="utf-8"))
     document["parents"]["previous_candidate"]["sha256"] = hashlib.sha256(raw).hexdigest()
+    monkeypatch.setattr(
+        selection_module,
+        "APPROVED_PARENT_SHA256",
+        {
+            "previous_baseline": selection.parents["previous_baseline"]["sha256"],
+            "previous_candidate": hashlib.sha256(raw).hexdigest(),
+        },
+    )
     selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
     with pytest.raises(ValueError, match="prior candidate failure"):
         selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
@@ -211,9 +233,36 @@ def test_selection_requires_the_minimal_approved_plan_and_exact_budget(
     manifest, tasks, selection = _selection_fixture(tmp_path, monkeypatch)
     document = json.loads(selection.path.read_text(encoding="utf-8"))
     assert set(document) == {"schema_version", "authorization", "parents", "selected_trials", "budget"}
-    document["budget"]["new_execution_limit_usd"] = "41.2500298149"
+    document["budget"]["new_execution_limit_usd"] = "41.1564756453"
     selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
     with pytest.raises(ValueError, match="budget"):
+        selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value", "message"),
+    [
+        ("authorization", "revision", "0" * 40, "approved AKB-361 revision"),
+        ("parents", "previous_candidate", {"path": "candidate.json", "sha256": "c" * 64}, "parent artifact hashes"),
+    ],
+)
+def test_selection_rejects_unapproved_authority_or_parent_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    section: str,
+    field: str,
+    value: Any,
+    message: str,
+) -> None:
+    manifest, tasks, selection = _selection_fixture(tmp_path, monkeypatch)
+    document = json.loads(selection.path.read_text(encoding="utf-8"))
+    if section == "authorization":
+        document[section][field] = value
+    else:
+        document[section][field] = value
+    selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
         selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
 
 
@@ -373,7 +422,7 @@ async def test_cli_uses_new_selection_ledger_and_writes_separate_summary(
     assert len(captured) == 2
     ledger = captured[0]["shared_ledger"]
     assert captured[1]["shared_ledger"] is ledger
-    assert ledger.total_cost_limit_usd == Decimal("41.2500298148")
+    assert ledger.total_cost_limit_usd == Decimal("41.1564756452")
     assert ledger.requests == 0
     assert ledger.cost_usd == Decimal("0")
     assert all(item["selection"].sha256 == selection.sha256 for item in captured)

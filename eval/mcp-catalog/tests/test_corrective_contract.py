@@ -134,29 +134,55 @@ def test_corrected_task_oracles_cover_schema_and_cleanup_boundaries() -> None:
     tasks = {task.id: task for task in load_task_corpus(ROOT / "corpus" / "tasks.json")}
     for task_id in ("table-schema-conflict-ko", "table-schema-conflict-en"):
         task = tasks[task_id]
-        create, conflict, _verify = task.expected_material_attempts[1:]
+        assert [item.stage_id for item in task.expected_material_attempts] == [
+            "create_vault_1",
+            "create_table_1",
+            "update_table_1",
+        ]
+        assert task.expected_material_attempts[0].arguments == {"name": "catalog-bench-schema"}
+        assert (
+            "새 보관함을 먼저" in task.prompt
+            if task.locale == "ko-KR"
+            else "Create a new vault named `catalog-bench-schema` first" in task.prompt
+        )
+        assert "SQL" not in task.prompt and "metadata" not in task.prompt
+        _create_vault, create, conflict = task.expected_material_attempts
         assert create.arguments["columns"] == [{"name": "event_id", "type": "text"}]
         assert conflict.arguments["add_columns"] == [{"name": "event_id", "type": "text"}]
+        assert conflict.capture_result_fields == ["columns"]
         assert conflict.outcome == "success"
         assert conflict.status_code is None
         assert conflict.error_code is None
-        assert "actual response" in task.prompt or "실제로 반환한 결과" in task.prompt
+        assert (
+            "실제로 반환한 내용을 설명" in task.prompt
+            if task.locale == "ko-KR"
+            else "explain exactly what the tool returned" in task.prompt
+        )
+        assert task.required_operations == ["create", "update"]
+        assert task.required_attempted_operations == ["create", "update"]
+        assert task.accepted_behaviors[0].required_resources == ["vault", "table"]
+        assert task.accepted_behaviors[0].required_operations == ["create", "update"]
         assert [(item.pointer, item.operator, item.value) for item in task.expected_final_state.must] == [
             ("/columns/0/name", "equals", "event_id"),
             ("/columns/0/type", "equals", "text"),
             ("/columns/1", "exists", False),
         ]
-        read = next(item for item in task.expected_material_attempts if item.stage_id == "read_table_1")
-        assert read.logical_operation == "read"
-        assert read.tool_name is None
-        assert read.resource_type == "document"
-        assert read.arguments == {}
-        assert any(
-            binding.source_stage == "create_table_1"
-            and binding.target_stage == "read_table_1"
-            and binding.target_argument == "uri"
-            for binding in task.expected_result_bindings
-        )
+        assert len(task.expected_result_bindings) == 1
+        assert task.expected_result_bindings[0].source_stage == "create_table_1"
+        assert task.expected_result_bindings[0].target_stage == "update_table_1"
+        assert task.expected_result_bindings[0].target_argument == "uri"
+        assert [
+            (item.logical_operation, item.outcome) for item in task.expected_material_outcomes
+        ] == [("create", "success"), ("update", "success")]
+        assert task.response_rubric.required_any_of
+        assert task.coverage_tools == [
+            "akb_create_vault",
+            "akb_create_table",
+            "akb_alter_table",
+            "akb_sql",
+            "akb_browse",
+            "akb_vault_info",
+        ]
 
     for task_id in ("table-publication-ko", "table-publication-en"):
         task = tasks[task_id]
@@ -171,6 +197,20 @@ def test_corrected_task_oracles_cover_schema_and_cleanup_boundaries() -> None:
         image = next(item for item in task.expected_material_attempts if item.logical_operation == "image_upload")
         image_probe = next(item for item in task.expected_final_state.observation_sets if item.probe.result_binding)
         assert image_probe.probe.result_binding.source_stage == image.stage_id
+
+
+def test_collection_prompt_registers_the_document_titles_used_by_its_uri_oracle() -> None:
+    tasks = {task.id: task for task in load_task_corpus(ROOT / "corpus" / "tasks.json")}
+    for task_id in ("collection-relation-lifecycle-ko", "collection-relation-lifecycle-en"):
+        task = tasks[task_id]
+        left, right = task.expected_material_attempts[2:4]
+        assert (left.arguments["title"], left.arguments["content"]) == ("left", "left")
+        assert (right.arguments["title"], right.arguments["content"]) == ("right", "right")
+        assert (
+            "제목이 각각 `left`, `right`" in task.prompt
+            if task.locale == "ko-KR"
+            else "titled `left` and `right`" in task.prompt
+        )
 
 
 def test_markdown_delimiter_is_not_part_of_a_confirmed_resource_uri() -> None:

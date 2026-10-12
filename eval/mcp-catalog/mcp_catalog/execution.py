@@ -86,8 +86,10 @@ def _model_input_evidence_for(
     messages: list[Any],
     instructions: str,
     request_index: int,
+    *,
+    secrets: tuple[str, ...] = (),
 ) -> ModelInputEvidence:
-    model_input = safe_json(messages)
+    model_input = _redact_vault_skill_ack(safe_json(messages, secrets))
     serialized_input = canonical_json(model_input)
     instructions_sha256 = hashlib.sha256(instructions.encode("utf-8")).hexdigest()
     expected_instructions = instructions.rstrip("\r\n")
@@ -107,6 +109,7 @@ def _model_input_evidence_for(
     return ModelInputEvidence(
         request_index=request_index,
         model_input_sha256=hashlib.sha256(serialized_input.encode("utf-8")).hexdigest(),
+        model_input_canonical_json=serialized_input,
         server_instructions_sha256=instructions_sha256,
         server_instructions_present=True,
     )
@@ -124,8 +127,6 @@ FailureKind = Literal[
     "tool",
     "budget",
     "request_timeout",
-    # Retained only to parse the hash-pinned AKB-361 source outcomes; classifiers never emit it.
-    "request_limit",
     "interrupted",
     "unknown",
 ]
@@ -190,7 +191,13 @@ class OpenRouterChatModel(OpenAIChatModel):
         if evidence is not None:
             if instructions is None:
                 raise ModelConfigurationError("server instructions were not sealed before the model request")
-            request_evidence = _model_input_evidence_for(messages, instructions, len(evidence) + 1)
+            trial = CURRENT_TRIAL.get()
+            request_evidence = _model_input_evidence_for(
+                messages,
+                instructions,
+                len(evidence) + 1,
+                secrets=trial.secrets if trial is not None else (),
+            )
         else:
             request_evidence = None
         guard = PROVIDER_REQUEST_GUARD.get()
@@ -274,6 +281,7 @@ class ModelInputEvidence(BaseModel):
 
     request_index: int = Field(ge=1)
     model_input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    model_input_canonical_json: str = Field(min_length=2)
     server_instructions_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     server_instructions_present: bool
 
@@ -655,6 +663,132 @@ def _resource_matches(actual: ResourceType, expected: ResourceType | None) -> bo
     return expected is None or actual == "unknown" or actual == expected
 
 
+def _registered_vault_names(task: TaskManifest) -> set[str]:
+    names: set[str] = set()
+    for attempt in task.expected_material_attempts:
+        if attempt.resource_type == "vault":
+            name = attempt.arguments.get("name")
+            if isinstance(name, str) and name:
+                names.add(name)
+        vault = attempt.arguments.get("vault")
+        if isinstance(vault, str) and vault:
+            names.add(vault)
+    return names
+
+
+def _registered_bound_result_values(
+    task: TaskManifest,
+    tool_calls: list[ToolCallRecord],
+) -> set[str]:
+    calls_by_stage = {
+        call.stage_id: call
+        for call in tool_calls
+        if call.stage_id is not None and call.server_succeeded
+    }
+    values: set[str] = set()
+    for binding in task.expected_result_bindings:
+        source_call = calls_by_stage.get(binding.source_stage)
+        source = source_call.result_fields.get(binding.source_field) if source_call is not None else None
+        if isinstance(source, str) and source:
+            values.add(source)
+    return values
+
+
+def _registered_schema_metadata_query(task: TaskManifest, arguments: dict[str, Any]) -> bool:
+    sql = arguments.get("sql")
+    vault = arguments.get("vault")
+    if not isinstance(sql, str) or not isinstance(vault, str) or set(arguments) != {"vault", "sql"}:
+        return False
+    tables = [
+        attempt.arguments
+        for attempt in task.expected_material_attempts
+        if attempt.resource_type == "table"
+        and isinstance(attempt.arguments.get("name"), str)
+        and isinstance(attempt.arguments.get("vault"), str)
+    ]
+    matching_tables = [item for item in tables if item.get("vault") == vault]
+    if len(matching_tables) != 1:
+        return False
+    table_name = str(matching_tables[0]["name"])
+    sanitized_vault = re.sub(r"[^a-z0-9]", "_", vault.lower().replace("-", "_"))
+    sanitized_table = re.sub(r"[^a-z0-9]", "_", table_name.lower().replace("-", "_"))
+    physical_name = f"vt_{sanitized_vault}__{sanitized_table}"
+    query = re.fullmatch(
+        r"SELECT\s+(?:column_name\s*,\s*data_type\s*,\s*ordinal_position|\*)"
+        r"\s+FROM\s+information_schema\.columns"
+        r"\s+WHERE\s+table_schema\s*=\s*(['\"])public\1"
+        r"\s+AND\s+table_name\s*=\s*(['\"])([A-Za-z0-9_]+)\2"
+        r"(?:\s+ORDER\s+BY\s+ordinal_position)?\s*;?",
+        sql.strip(),
+        re.IGNORECASE,
+    )
+    return query is not None and query.group(3).casefold() in {
+        table_name.casefold(),
+        physical_name.casefold(),
+    }
+
+
+def _registered_readonly_observation(
+    call: ToolCallRecord,
+    task: TaskManifest,
+    tool_calls: list[ToolCallRecord],
+) -> bool:
+    """Allow a successful read only when its target or query is task-bound."""
+
+    if (
+        call.stage_id is not None
+        or call.operation_kind != "material"
+        or not call.server_succeeded
+        or call.logical_operation not in {"read", "list", "search"}
+        or call.resource_type == "unknown"
+    ):
+        return False
+    arguments = call.effective_server_args or call.server_args
+    if arguments is None:
+        return False
+    if call.logical_operation == "search" and call.resource_type == "table":
+        if _registered_schema_metadata_query(task, arguments):
+            return True
+
+    vault_names = _registered_vault_names(task)
+    bound_values = _registered_bound_result_values(task, tool_calls)
+    target_fields = {"vault", "uri", "slug", "source", "target", "name", "path", "collection", "sql", "query_sql"}
+    for expected in task.expected_material_attempts:
+        if expected.logical_operation != call.logical_operation or expected.resource_type != call.resource_type:
+            continue
+        if not _arguments_include(arguments, expected.arguments):
+            continue
+        registered = True
+        for key, value in arguments.items():
+            if key not in target_fields or key in expected.arguments:
+                continue
+            if key == "vault" and isinstance(value, str) and value in vault_names:
+                continue
+            if (
+                key in {"uri", "slug", "source", "target"}
+                and isinstance(value, str)
+                and value in bound_values
+            ):
+                continue
+            registered = False
+            break
+        if registered:
+            return True
+
+    if call.logical_operation == "read" and call.resource_type == "vault":
+        return any(
+            isinstance(arguments.get(key), str) and arguments.get(key) in vault_names
+            for key in ("vault", "name")
+        )
+    if call.logical_operation in {"read", "list"}:
+        uri = arguments.get("uri")
+        if isinstance(uri, str) and uri in bound_values:
+            return True
+        if isinstance(uri, str) and any(uri in {f"akb://{name}", f"akb://{name}/"} for name in vault_names):
+            return True
+    return False
+
+
 def _sequence_target_mismatches(
     stage_calls: list[ToolCallRecord],
     task: TaskManifest,
@@ -695,19 +829,23 @@ def _completion_index(task: TaskManifest, tool_calls: list[ToolCallRecord]) -> i
                 return call.order
         return None
     if task.expected_material_attempts:
-        stage_calls, stages_valid = _resolved_material_stage_calls(task, tool_calls)
-        if not stages_valid or len(stage_calls) < len(task.expected_material_attempts):
+        stage_calls, _ = _resolved_material_stage_calls(task, tool_calls)
+        if len(stage_calls) != len(task.expected_material_attempts):
             return None
-        return stage_calls[-1].order
+        return max(call.order for call in stage_calls)
     expected = {item.logical_operation for item in task.expected_material_outcomes}
     if expected:
-        observed: set[str] = set()
+        required_counts = {
+            operation: max(1, task.material_attempt_minimums.get(operation, 1))
+            for operation in expected
+        }
+        observed_counts: Counter[str] = Counter()
         for call in material_calls:
             if call.logical_operation in expected and (
                 call.server_succeeded or call.server_error_code is not None
             ):
-                observed.add(call.logical_operation)
-            if expected <= observed:
+                observed_counts[call.logical_operation] += 1
+            if all(observed_counts[operation] >= count for operation, count in required_counts.items()):
                 return call.order
     return None
 
@@ -754,6 +892,15 @@ def _finalize_semantic_metrics(outcome: TrialOutcome, task: TaskManifest) -> Non
         if not _expected_call_target_matches(call, task)
     )
     outcome.wrong_target_calls = len(target_mismatches)
+    outcome.wrong_target_calls += sum(
+        1
+        for call in outcome.tool_calls
+        if task.expected_material_attempts
+        and call.stage_id is None
+        and call.operation_kind == "material"
+        and call.logical_operation in {"read", "list", "search"}
+        and not _registered_readonly_observation(call, task, outcome.tool_calls)
+    )
     outcome.target_payload_accuracy = outcome.wrong_target_calls == 0 and outcome.wrong_resource_calls == 0
 
     if task.expected_material_attempts:
@@ -791,7 +938,11 @@ def _finalize_semantic_metrics(outcome: TrialOutcome, task: TaskManifest) -> Non
             if call.order > completion and call.logical_operation not in allowed
         ]
     outcome.post_completion_overshoot = len(extra_calls)
-    outcome.stopping_accuracy = not extra_calls
+    outcome.stopping_accuracy = all(
+        call.logical_operation in allowed
+        or _registered_readonly_observation(call, task, outcome.tool_calls)
+        for call in extra_calls
+    )
 
     outcome.fabricated_resource_claims = _fabricated_resource_claim_count(outcome, task)
     base_outcome = (
@@ -882,6 +1033,30 @@ def has_server_instructions_evidence(
         if not expected_instructions.strip():
             return False
         expected_sha256 = hashlib.sha256(expected_instructions.encode("utf-8")).hexdigest()
+
+    expected_text = expected_instructions.rstrip("\r\n") if expected_instructions is not None else None
+
+    def contains_instructions(value: Any) -> bool:
+        if isinstance(value, str):
+            if expected_text is not None:
+                return expected_text in value
+            return hashlib.sha256(value.encode("utf-8")).hexdigest() == expected_sha256
+        if isinstance(value, dict):
+            return any(contains_instructions(item) for item in value.values())
+        if isinstance(value, list):
+            return any(contains_instructions(item) for item in value)
+        return False
+
+    def input_evidence_matches(item: ModelInputEvidence) -> bool:
+        serialized_input = item.model_input_canonical_json
+        if hashlib.sha256(serialized_input.encode("utf-8")).hexdigest() != item.model_input_sha256:
+            return False
+        try:
+            parsed_input = json.loads(serialized_input)
+        except json.JSONDecodeError:
+            return False
+        return item.server_instructions_present and contains_instructions(parsed_input)
+
     return (
         outcome.server_instructions_sha256 == expected_sha256
         and outcome.model_requests > 0
@@ -891,6 +1066,7 @@ def has_server_instructions_evidence(
         and all(
             item.server_instructions_present
             and item.server_instructions_sha256 == expected_sha256
+            and input_evidence_matches(item)
             for item in outcome.model_input_evidence
         )
     )
@@ -1327,9 +1503,13 @@ def _capture_structured_result_fields(
         return {}
     captured: dict[str, str] = {}
     for name in sorted(field_names):
-        candidate = safe_json(source.get(name), secrets)
-        if candidate and isinstance(candidate, str) and len(candidate.encode("utf-8")) <= MAX_CAPTURED_RESULT_FIELD_BYTES:
-            captured[name] = candidate
+        value = source.get(name)
+        if value is None:
+            continue
+        candidate = safe_json(value, secrets)
+        serialized = candidate if isinstance(candidate, str) else canonical_json(candidate)
+        if serialized and len(serialized.encode("utf-8")) <= MAX_CAPTURED_RESULT_FIELD_BYTES:
+            captured[name] = serialized
     return captured
 
 
@@ -3167,6 +3347,11 @@ def _resolved_material_stage_calls(
     groups: dict[str, list[ToolCallRecord]] = defaultdict(list)
     ordered_ids: list[str] = []
     optional_read_counts: Counter[str] = Counter()
+    material_operation_counts = Counter(
+        call.logical_operation
+        for call in tool_calls
+        if call.operation_kind == "material"
+    )
     valid = True
     for call in tool_calls:
         if call.stage_id is not None:
@@ -3177,22 +3362,16 @@ def _resolved_material_stage_calls(
             if call.stage_id not in ordered_ids:
                 ordered_ids.append(call.stage_id)
         elif call.operation_kind == "material":
-            # This pair has an independent final-state oracle for the two bodies,
-            # collection, and post-unlink relation. Keep those inspection paths
-            # optional while preserving its explicitly staged relation reads.
-            if (
-                task.pair_id == "collection-relation-lifecycle"
-                and call.logical_operation in {"read", "list"}
-                and call.server_succeeded
-            ):
+            if _registered_readonly_observation(call, task, tool_calls):
                 optional_read_counts[call.logical_operation] += 1
             else:
                 valid = False
     if ordered_ids != expected_ids:
         valid = False
     if any(
-        count > task.material_attempt_limits.get(operation, 0)
-        for operation, count in optional_read_counts.items()
+        material_operation_counts[operation] > task.material_attempt_limits[operation]
+        for operation in optional_read_counts
+        if operation in task.material_attempt_limits
     ):
         valid = False
 

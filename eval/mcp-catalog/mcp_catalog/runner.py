@@ -1017,6 +1017,8 @@ class BenchmarkRunner:
             checkpoint_evidence["lifecycle"] = checkpoint_doc.lifecycle
             checkpoint_evidence["record_count"] = len(checkpoint_doc.records)
             checkpoint_evidence["reserved_cost_usd"] = checkpoint_doc.reserved_cost_usd
+            checkpoint_evidence["smoke_status"] = checkpoint_doc.smoke_status
+            checkpoint_evidence["smoke_cell_count"] = len(checkpoint_doc.smoke_gate)
             checkpoint_evidence["spent"] = checkpoint_doc.spent.model_dump(mode="json")
             checkpoint_evidence["spent_hash"] = checkpoint_doc.spent_hash
             checkpoint_evidence["timing_hash"] = checkpoint_doc.timing_hash
@@ -1034,7 +1036,8 @@ class BenchmarkRunner:
         if ledger.reserved_cost_usd != Decimal("0"):
             incomplete_reasons.add("benchmark incomplete: artifact has an orphaned reservation")
         if checkpoint_doc is not None:
-            budget_model_requests = checkpoint_doc.spent.model_requests
+            budget_provider_setup_requests = checkpoint_doc.spent.provider_setup_requests
+            budget_model_requests = checkpoint_doc.spent.model_requests - budget_provider_setup_requests
             budget_input_tokens = checkpoint_doc.spent.input_tokens
             budget_output_tokens = checkpoint_doc.spent.output_tokens
             budget_cost_usd = Decimal(str(checkpoint_doc.spent.cost_usd))
@@ -1042,7 +1045,8 @@ class BenchmarkRunner:
             budget_model_work_seconds = checkpoint_doc.spent.model_work_seconds
             budget_reserved = Decimal(str(checkpoint_doc.reserved_cost_usd))
         else:
-            budget_model_requests = ledger.requests
+            budget_provider_setup_requests = ledger.provider_setup_requests
+            budget_model_requests = ledger.requests - budget_provider_setup_requests
             budget_input_tokens = ledger.input_tokens
             budget_output_tokens = ledger.output_tokens
             budget_cost_usd = ledger.cost_usd
@@ -1105,11 +1109,7 @@ class BenchmarkRunner:
             "end_to_end_wall_seconds": timing_payload.get("cumulative_wall_seconds", end_to_end_wall_seconds),
             "budget_used": {
                 "model_requests": budget_model_requests,
-                "provider_setup_requests": (
-                    checkpoint_doc.spent.provider_setup_requests
-                    if checkpoint_doc is not None
-                    else ledger.provider_setup_requests
-                ),
+                "provider_setup_requests": budget_provider_setup_requests,
                 "input_tokens": budget_input_tokens,
                 "output_tokens": budget_output_tokens,
                 "total_tokens": budget_input_tokens + budget_output_tokens,
@@ -2780,9 +2780,26 @@ def _validate_shared_budget(
         "wall_seconds",
         "model_work_seconds",
         "max_total_cost_usd",
+        "final_reserved_cost_usd",
     }
+    selection = baseline.get("selection")
+    if isinstance(selection, dict):
+        expected_budget_fields.add("new_execution_limit_usd")
     if set(budget) != expected_budget_fields:
         raise ValueError("shared paired budget evidence has unexpected fields")
+    if isinstance(selection, dict):
+        selection_budget = selection.get("budget")
+        if (
+            not isinstance(selection_budget, dict)
+            or budget.get("new_execution_limit_usd") != selection_budget.get("new_execution_limit_usd")
+        ):
+            raise ValueError("shared budget does not match the approved selection limit")
+    try:
+        final_reserved_cost = Decimal(str(budget["final_reserved_cost_usd"]))
+    except (InvalidOperation, TypeError):
+        raise ValueError("shared budget final reservation is invalid") from None
+    if not final_reserved_cost.is_finite() or final_reserved_cost != 0:
+        raise ValueError("shared budget retained an unsettled terminal reservation")
     exact_limits = {
         "max_total_cost_usd": manifest.budget.max_total_cost_usd,
     }
@@ -3524,6 +3541,23 @@ def _build_artifact_hash_input(artifact: dict[str, Any], *, trial_order: list[di
         }
     if not isinstance(smoke_gate, dict):
         raise ValueError("artifact smoke gate is invalid")
+    checkpoint = artifact.get("checkpoint")
+    checkpoint_receipt = (
+        {
+            key: checkpoint.get(key)
+            for key in (
+                "enabled",
+                "lifecycle",
+                "record_count",
+                "valid_completed_trials",
+                "reserved_cost_usd",
+                "smoke_status",
+                "smoke_cell_count",
+            )
+        }
+        if isinstance(checkpoint, dict)
+        else None
+    )
     hash_input = {
         "schema_version": artifact["schema_version"],
         "status": artifact.get("status", "complete"),
@@ -3536,6 +3570,7 @@ def _build_artifact_hash_input(artifact: dict[str, Any], *, trial_order: list[di
         "paired_order_plan": artifact.get("paired_order_plan", []),
         "paired_execution": artifact.get("paired_execution"),
         "paired_budget_used": artifact.get("paired_budget_used"),
+        "checkpoint_receipt": checkpoint_receipt,
         "provider_registry": artifact.get("provider_registry"),
         "pre_smoke_seal_inputs": artifact.get("pre_smoke_seal_inputs"),
         "pre_smoke_seal_hash": artifact.get("pre_smoke_seal_hash"),
@@ -3566,6 +3601,296 @@ def _build_artifact_hash_input(artifact: dict[str, Any], *, trial_order: list[di
     if "selection" in artifact:
         hash_input["selection"] = artifact["selection"]
     return hash_input
+
+
+def _paired_artifact_receipts_reconcile(
+    artifacts: dict[str, dict[str, Any]],
+    paired_budget_used: dict[str, Any],
+) -> bool:
+    if set(artifacts) != {"baseline", "candidate"}:
+        return False
+
+    totals = {
+        "model_requests": 0,
+        "provider_setup_requests": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
+    total_cost = Decimal("0")
+    total_work = 0.0
+    max_checkpoint_wall = 0.0
+
+    for arm in ("baseline", "candidate"):
+        artifact = artifacts[arm]
+        checkpoint = artifact.get("checkpoint")
+        smoke_gate = artifact.get("smoke_gate")
+        runs = artifact.get("runs")
+        hash_input = artifact.get("artifact_hash_input")
+        if (
+            artifact.get("arm") != arm
+            or not isinstance(checkpoint, dict)
+            or checkpoint.get("enabled") is not True
+            or checkpoint.get("lifecycle") != "finalized"
+            or checkpoint.get("smoke_status") != "passed"
+            or checkpoint.get("smoke_cell_count") != 4
+            or not isinstance(smoke_gate, dict)
+            or smoke_gate.get("status") != "passed"
+            or not isinstance(runs, dict)
+            or not isinstance(hash_input, dict)
+        ):
+            return False
+
+        expected_checkpoint_receipt = {
+            key: checkpoint.get(key)
+            for key in (
+                "enabled",
+                "lifecycle",
+                "record_count",
+                "valid_completed_trials",
+                "reserved_cost_usd",
+                "smoke_status",
+                "smoke_cell_count",
+            )
+        }
+        if hash_input.get("checkpoint_receipt") != expected_checkpoint_receipt:
+            return False
+
+        expected_cells = ["primary:http", "primary:stdio", "lightweight:http", "lightweight:stdio"]
+        if smoke_gate.get("required_cells") != expected_cells:
+            return False
+        smoke_cells = smoke_gate.get("cells")
+        if not isinstance(smoke_cells, list) or [
+            item.get("cell") for item in smoke_cells if isinstance(item, dict)
+        ] != expected_cells:
+            return False
+
+        outcomes: list[TrialOutcome] = []
+        for cell in smoke_cells:
+            if not isinstance(cell, dict) or cell.get("status") != "completed":
+                return False
+            raw_outcome = cell.get("outcome")
+            if not isinstance(raw_outcome, dict):
+                return False
+            try:
+                outcome = TrialOutcome.model_validate(raw_outcome)
+            except ValueError:
+                return False
+            model_class, transport = cell["cell"].split(":", 1)
+            if outcome.arm != arm or outcome.model_class != model_class or outcome.transport != transport:
+                return False
+            outcomes.append(outcome)
+
+        trial_order = hash_input.get("trial_order")
+        if not isinstance(trial_order, list):
+            return False
+        expected: set[tuple[str, str, str, int]] = set()
+        for item in trial_order:
+            if not isinstance(item, dict):
+                return False
+            model_class = item.get("model_class")
+            transport = item.get("transport")
+            task_id = item.get("task_id")
+            repeat_index = item.get("repeat_index")
+            if not (
+                isinstance(model_class, str)
+                and isinstance(transport, str)
+                and isinstance(task_id, str)
+                and type(repeat_index) is int
+            ):
+                return False
+            expected.add((model_class, transport, task_id, repeat_index))
+        if len(expected) != len(trial_order):
+            return False
+
+        trial_rows: dict[tuple[str, str, str, int], TrialOutcome] = {}
+        status_rows: dict[tuple[str, str, str, int], str] = {}
+        for cell, report in runs.items():
+            if not isinstance(cell, str) or ":" not in cell or not isinstance(report, dict):
+                return False
+            model_class, transport = cell.split(":", 1)
+            raw_trials = report.get("trials")
+            raw_statuses = report.get("statuses")
+            if not isinstance(raw_trials, list) or not isinstance(raw_statuses, list):
+                return False
+            for raw_outcome in raw_trials:
+                if not isinstance(raw_outcome, dict):
+                    return False
+                try:
+                    outcome = TrialOutcome.model_validate(raw_outcome)
+                except ValueError:
+                    return False
+                identity = (model_class, transport, outcome.task_id, outcome.repeat_index)
+                if (
+                    outcome.arm != arm
+                    or outcome.model_class != model_class
+                    or outcome.transport != transport
+                    or identity in trial_rows
+                ):
+                    return False
+                trial_rows[identity] = outcome
+                outcomes.append(outcome)
+            for raw_status in raw_statuses:
+                if not isinstance(raw_status, dict):
+                    return False
+                task_id = raw_status.get("task_id")
+                repeat_index = raw_status.get("repeat_index")
+                status = raw_status.get("status")
+                if (
+                    not isinstance(task_id, str)
+                    or type(repeat_index) is not int
+                    or status not in {"completed", "failed"}
+                ):
+                    return False
+                identity = (model_class, transport, task_id, repeat_index)
+                if identity in status_rows:
+                    return False
+                status_rows[identity] = status
+        if set(trial_rows) != expected or set(status_rows) != expected:
+            return False
+        if any(status not in {"completed", "failed"} for status in status_rows.values()):
+            return False
+        completed_statuses = sum(status == "completed" for status in status_rows.values())
+        if (
+            artifact.get("completed_trials") != len(expected)
+            or checkpoint.get("record_count") != len(expected)
+            or checkpoint.get("valid_completed_trials") != completed_statuses
+        ):
+            return False
+
+        spent = checkpoint.get("spent")
+        arm_budget = artifact.get("budget_used")
+        if not isinstance(spent, dict) or not isinstance(arm_budget, dict):
+            return False
+        if checkpoint.get("spent_hash") != hash_json(spent):
+            return False
+        try:
+            checkpoint_reserved = Decimal(str(checkpoint["reserved_cost_usd"]))
+            arm_reserved = Decimal(str(arm_budget["reserved_cost_usd"]))
+        except (InvalidOperation, KeyError, TypeError):
+            return False
+        if (
+            not checkpoint_reserved.is_finite()
+            or not arm_reserved.is_finite()
+            or checkpoint_reserved != 0
+            or arm_reserved != 0
+        ):
+            return False
+
+        arm_outcomes = [outcome for outcome in outcomes]
+        arm_requests = sum(outcome.model_requests for outcome in arm_outcomes)
+        arm_input_tokens = sum(outcome.input_tokens for outcome in arm_outcomes)
+        arm_output_tokens = sum(outcome.output_tokens for outcome in arm_outcomes)
+        arm_raw_cost = sum((Decimal(str(outcome.cost_usd)) for outcome in arm_outcomes), Decimal("0"))
+        arm_conservative_cost = sum(
+            (
+                max(
+                    Decimal(str(outcome.cost_usd)),
+                    Decimal(str(outcome.provider_cost_usd or 0.0)),
+                )
+                for outcome in arm_outcomes
+            ),
+            Decimal("0"),
+        )
+        arm_work = sum(outcome.latency_seconds for outcome in arm_outcomes)
+        setup_requests = spent.get("provider_setup_requests")
+        if type(setup_requests) is not int or setup_requests < 0:
+            return False
+        if spent.get("model_requests") != arm_requests + setup_requests:
+            return False
+        if spent.get("input_tokens") != arm_input_tokens or spent.get("output_tokens") != arm_output_tokens:
+            return False
+        if not math.isclose(float(spent.get("cost_usd", math.nan)), float(arm_raw_cost), rel_tol=0.0, abs_tol=1e-9):
+            return False
+        if not math.isclose(float(spent.get("model_work_seconds", math.nan)), arm_work, rel_tol=0.0, abs_tol=1e-9):
+            return False
+        for key, expected_value in (
+            ("model_requests", arm_requests),
+            ("provider_setup_requests", setup_requests),
+            ("input_tokens", arm_input_tokens),
+            ("output_tokens", arm_output_tokens),
+            ("total_tokens", arm_input_tokens + arm_output_tokens),
+        ):
+            if arm_budget.get(key) != expected_value:
+                return False
+        for key in ("cost_usd", "wall_seconds", "model_work_seconds"):
+            try:
+                spent_value = float(spent[key])
+                arm_value = float(arm_budget[key])
+            except (KeyError, TypeError, ValueError):
+                return False
+            if not math.isfinite(spent_value) or not math.isfinite(arm_value):
+                return False
+            if not math.isclose(spent_value, arm_value, rel_tol=0.0, abs_tol=1e-9):
+                return False
+        max_checkpoint_wall = max(max_checkpoint_wall, float(spent.get("wall_seconds", 0.0)))
+        totals["model_requests"] += arm_requests
+        totals["provider_setup_requests"] += setup_requests
+        totals["input_tokens"] += arm_input_tokens
+        totals["output_tokens"] += arm_output_tokens
+        total_cost += arm_conservative_cost
+        total_work += arm_work
+
+    if any(paired_budget_used.get(key) != value for key, value in totals.items()):
+        return False
+    if paired_budget_used.get("total_tokens") != totals["input_tokens"] + totals["output_tokens"]:
+        return False
+    try:
+        paired_cost = float(paired_budget_used["cost_usd"])
+        paired_wall = float(paired_budget_used["wall_seconds"])
+        paired_work = float(paired_budget_used["model_work_seconds"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (
+        math.isfinite(paired_cost)
+        and math.isclose(paired_cost, float(total_cost), rel_tol=0.0, abs_tol=1e-9)
+        and math.isfinite(paired_wall)
+        and paired_wall >= max_checkpoint_wall
+        and math.isfinite(paired_work)
+        and math.isclose(paired_work, total_work, rel_tol=0.0, abs_tol=1e-9)
+    )
+
+
+def _reconcile_paired_artifact_reservations(
+    artifacts: dict[str, dict[str, Any]],
+    *,
+    paired_budget_used: dict[str, Any],
+    paired_run_terminal: bool,
+) -> None:
+    orphan_reason = "benchmark incomplete: artifact has an orphaned reservation"
+
+    def mark_incomplete(reason: str) -> None:
+        for artifact in artifacts.values():
+            reasons = artifact.get("incomplete_reasons")
+            reasons = list(reasons) if isinstance(reasons, list) else []
+            if reason not in reasons:
+                reasons.append(reason)
+            artifact["incomplete_reasons"] = sorted(reasons)
+            artifact["status"] = "incomplete"
+
+    if not paired_run_terminal:
+        mark_incomplete("benchmark incomplete: paired arms did not reach a terminal state")
+        return
+    try:
+        final_reserved = Decimal(str(paired_budget_used["final_reserved_cost_usd"]))
+    except (InvalidOperation, KeyError, TypeError):
+        mark_incomplete("benchmark incomplete: paired ledger reservation evidence is invalid")
+        return
+    if not final_reserved.is_finite() or final_reserved != 0:
+        mark_incomplete("benchmark incomplete: paired ledger ended with a reserved cost")
+        return
+    if not _paired_artifact_receipts_reconcile(artifacts, paired_budget_used):
+        mark_incomplete("benchmark incomplete: paired ledger receipts do not reconcile with arm checkpoints")
+        return
+
+    for artifact in artifacts.values():
+        reasons = artifact.get("incomplete_reasons")
+        reasons = list(reasons) if isinstance(reasons, list) else []
+        had_orphan_reason = orphan_reason in reasons
+        artifact["incomplete_reasons"] = sorted(reason for reason in reasons if reason != orphan_reason)
+        if artifact.get("failure") or artifact["incomplete_reasons"]:
+            artifact["status"] = "incomplete"
+        elif artifact.get("status") == "incomplete" and had_orphan_reason:
+            artifact["status"] = "complete"
 
 
 def attach_paired_execution_evidence(

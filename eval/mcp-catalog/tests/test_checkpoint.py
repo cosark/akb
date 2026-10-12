@@ -360,16 +360,12 @@ def test_explicit_continuation_reuses_failed_parent_outcomes_without_retry(tmp_p
     assert manifest.budget.max_cost_per_trial_usd > 0
 
 
-def test_request_limit_failure_kind_remains_parseable_as_stored_evidence() -> None:
-    from mcp_catalog.execution import classify_failure
-
+def test_retired_request_limit_failure_kind_is_not_a_trial_compatibility_value() -> None:
     raw = _outcome(_inputs()[3], error="benchmark incomplete: max_model_requests exceeded").model_dump(mode="json")
     raw["failure_kind"] = "request_limit"
 
-    restored = TrialOutcome.model_validate(raw)
-
-    assert restored.failure_kind == "request_limit"
-    assert classify_failure("max_model_requests exceeded", result=None, final_answer="") != "request_limit"
+    with pytest.raises(ValueError, match="failure_kind"):
+        TrialOutcome.model_validate(raw)
 
 
 def test_checkpoint_outcome_without_call_trace_is_not_reusable(tmp_path: Path) -> None:

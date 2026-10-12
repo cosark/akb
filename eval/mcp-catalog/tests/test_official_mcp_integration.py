@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import runpy
 from pathlib import Path
 from typing import Literal
@@ -13,7 +14,16 @@ try:
 except ImportError:
     pytest.skip("FastMCP server extras are required for the synthetic server test", allow_module_level=True)
 from pydantic_ai import Agent
-from pydantic_ai.messages import InstructionPart, ModelMessage, ModelRequest, ModelResponse, TextPart, ToolCallPart, ToolReturnPart
+from pydantic_ai.messages import (
+    InstructionPart,
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from mcp_catalog.catalog import create_toolset
@@ -162,3 +172,54 @@ def test_model_request_evidence_hashes_only_inputs_that_contain_server_instructi
     assert has_server_instructions_evidence(outcome, instructions)
     with pytest.raises(ModelConfigurationError, match="missing from the model input"):
         _model_input_evidence_for([ModelRequest(parts=[])], instructions, 1)
+
+
+def test_model_input_evidence_preserves_redacted_sdk_messages_and_verifiable_hash() -> None:
+    instructions = "## Tool guidance\nUse the returned URI.\nKeep the existing table."
+    request = ModelRequest(
+        parts=[
+            InstructionPart(content=instructions),
+            UserPromptPart(content="Source body: first line\nsecond line; Bearer pat-secret"),
+            ToolReturnPart(
+                tool_name="akb_put",
+                content=(
+                    '{"code":"vault_skill_required","vault_skill":'
+                    '{"ack_token":"ack-secret"},"body":"source body preserved"}'
+                ),
+            ),
+            UserPromptPart(content="OpenRouter=openrouter-secret; session=session-secret"),
+        ]
+    )
+
+    evidence = _model_input_evidence_for(
+        [request],
+        instructions,
+        1,
+        secrets=("pat-secret", "ack-secret", "openrouter-secret", "session-secret"),
+    )
+
+    serialized = evidence.model_input_canonical_json
+    assert hashlib.sha256(serialized.encode("utf-8")).hexdigest() == evidence.model_input_sha256
+    parsed = json.loads(serialized)
+    assert instructions in parsed[0]["parts"][0]["content"]
+    assert "Source body: first line\nsecond line" in parsed[0]["parts"][1]["content"]
+    assert "source body preserved" in serialized
+    assert "pat-secret" not in serialized
+    assert "ack-secret" not in serialized
+    assert "openrouter-secret" not in serialized
+    assert "session-secret" not in serialized
+
+    outcome = TrialOutcome(
+        task_id="instruction-evidence",
+        category="single_operation",
+        arm="candidate",
+        model_class="primary",
+        model_id="test-model",
+        transport="http",
+        model_requests=1,
+        server_instructions_sha256=hashlib.sha256(instructions.encode("utf-8")).hexdigest(),
+        model_input_evidence=[evidence],
+    )
+    assert has_server_instructions_evidence(outcome, instructions)
+    evidence.model_input_canonical_json += "tampered"
+    assert not has_server_instructions_evidence(outcome, instructions)

@@ -23,6 +23,7 @@ from .runner import (
     BenchmarkRunner,
     NeedsUserInput,
     PairedArmCoordinator,
+    _reconcile_paired_artifact_reservations,
     attach_paired_execution_evidence,
     compare_artifacts,
     load_inputs,
@@ -383,6 +384,7 @@ async def run_paired(args: argparse.Namespace) -> int:
         for task in pending:
             task.cancel()
     results = await asyncio.gather(*run_tasks.values(), return_exceptions=True)
+    terminal_reserved_cost = ledger.reserved_cost_usd
     await ledger.release_all_reservations()
 
     artifacts: dict[str, dict[str, Any]] = {}
@@ -412,7 +414,7 @@ async def run_paired(args: argparse.Namespace) -> int:
 
     evidence = coordinator.evidence()
     paired_budget: dict[str, int | float | str] = {
-        "model_requests": ledger.requests,
+        "model_requests": ledger.requests - ledger.provider_setup_requests,
         "provider_setup_requests": ledger.provider_setup_requests,
         "input_tokens": ledger.input_tokens,
         "output_tokens": ledger.output_tokens,
@@ -421,9 +423,15 @@ async def run_paired(args: argparse.Namespace) -> int:
         "wall_seconds": ledger.observe_wall(),
         "model_work_seconds": ledger.model_work_seconds,
         "max_total_cost_usd": baseline_manifest.budget.max_total_cost_usd,
+        "final_reserved_cost_usd": str(terminal_reserved_cost),
     }
     if selection is not None:
         paired_budget["new_execution_limit_usd"] = str(selection.budget.new_execution_limit_usd)
+    _reconcile_paired_artifact_reservations(
+        artifacts,
+        paired_budget_used=paired_budget,
+        paired_run_terminal=all(task.done() for task in run_tasks.values()),
+    )
     runners = {"baseline": baseline_runner, "candidate": candidate_runner}
     outputs = {"baseline": args.baseline_output, "candidate": args.candidate_output}
     for arm, artifact in artifacts.items():

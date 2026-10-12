@@ -13,6 +13,7 @@ from mcp_catalog.execution import (
     _vault_skill_binding_digest,
     bind_tool_calls,
     capture_result_fields_for_task,
+    _resolved_material_stage_calls,
 )
 from mcp_catalog.runtime import StateObservation
 from mcp_catalog.state import evaluate_state_contract
@@ -379,12 +380,184 @@ def test_relation_workflow_accepts_alternate_public_reads_and_rejects_wrong_edge
     assert wrong_relation.success is False
 
 
+def test_publication_contract_accepts_only_registered_read_observations() -> None:
+    task = _tasks()["table-publication-en"]
+    tool_by_stage = {
+        "create_vault_1": "akb_create_vault",
+        "create_table_1": "akb_create_table",
+        "search_table_1": "akb_sql",
+        "create_publication_1": "akb_publish",
+        "list_publication_1": "akb_publications",
+        "read_publication_1": "akb_publication_snapshot",
+        "list_publication_2": "akb_publications",
+        "delete_publication_1": "akb_unpublish",
+    }
+    calls = [
+        ToolCallRecord(
+            order=index,
+            tool_name=tool_by_stage[attempt.stage_id],
+            canonical_operation=tool_by_stage[attempt.stage_id],
+            logical_operation=attempt.logical_operation,
+            resource_type=attempt.resource_type,
+            operation_kind="material",
+            stage_id=attempt.stage_id,
+            raw_model_args=dict(attempt.arguments),
+            server_args=dict(attempt.arguments),
+            effective_server_args=dict(attempt.arguments),
+            raw_args_valid=True,
+            server_args_equal_raw=True,
+            transport_succeeded=True,
+            server_succeeded=True,
+        )
+        for index, attempt in enumerate(task.expected_material_attempts, 1)
+    ]
+
+    def observation(
+        order: int,
+        tool_name: str,
+        operation: str,
+        resource: str,
+        arguments: dict[str, object],
+    ) -> ToolCallRecord:
+        return ToolCallRecord(
+            order=order,
+            tool_name=tool_name,
+            canonical_operation=tool_name,
+            logical_operation=operation,
+            resource_type=resource,
+            operation_kind="material",
+            raw_model_args=arguments,
+            server_args=arguments,
+            effective_server_args=arguments,
+            raw_args_valid=True,
+            server_args_equal_raw=True,
+            transport_succeeded=True,
+            server_succeeded=True,
+        )
+
+    accepted = [
+        observation(9, "akb_publications", "list", "publication", {"vault": "catalog-bench-data"}),
+        observation(
+            10,
+            "akb_sql",
+            "search",
+            "table",
+            {"vault": "catalog-bench-data", "sql": "SELECT * FROM scores LIMIT 5"},
+        ),
+        observation(11, "akb_vault_info", "read", "vault", {"vault": "catalog-bench-data"}),
+    ]
+    observation_room = task.model_copy(
+        update={
+            "material_attempt_limits": {"create": 3, "search": 2, "list": 3, "delete": 1, "read": 2}
+        }
+    )
+    _resolved, accepted_valid = _resolved_material_stage_calls(observation_room, [*calls, *accepted])
+
+    wrong_vault = observation(9, "akb_publications", "list", "publication", {"vault": "other-vault"})
+    wrong_query = observation(
+        9,
+        "akb_sql",
+        "search",
+        "table",
+        {"vault": "catalog-bench-data", "sql": "SELECT * FROM payroll LIMIT 5"},
+    )
+    write_query = observation(
+        9,
+        "akb_sql",
+        "update",
+        "table",
+        {"vault": "catalog-bench-data", "sql": "DROP TABLE scores"},
+    )
+    _resolved, wrong_vault_valid = _resolved_material_stage_calls(observation_room, [*calls, wrong_vault])
+    _resolved, wrong_query_valid = _resolved_material_stage_calls(observation_room, [*calls, wrong_query])
+    _resolved, write_query_valid = _resolved_material_stage_calls(observation_room, [*calls, write_query])
+
+    assert accepted_valid is True
+    assert wrong_vault_valid is False
+    assert wrong_query_valid is False
+    assert write_query_valid is False
+
+
+def test_post_completion_read_is_efficiency_only_and_finalize_roundtrip_is_idempotent() -> None:
+    task = _tasks()["collection-relation-lifecycle-en"]
+    completed = _relation_lifecycle_trace(task)
+    observed_uri = "akb://catalog-bench-relations/coll/notes/doc/right.md"
+    completed.tool_calls.append(
+        ToolCallRecord(
+            order=max(call.order for call in completed.tool_calls) + 1,
+            tool_name="akb_relations",
+            canonical_operation="akb_relations",
+            logical_operation="read",
+            resource_type="relation",
+            operation_kind="material",
+            raw_model_args={"direction": "both", "uri": observed_uri},
+            server_args={"direction": "both", "uri": observed_uri},
+            effective_server_args={"direction": "both", "uri": observed_uri},
+            raw_args_valid=True,
+            server_args_equal_raw=True,
+            transport_succeeded=True,
+            server_succeeded=True,
+        )
+    )
+
+    def observations(records: list[dict[str, object]]) -> list[StateObservation]:
+        return [StateObservation(**record) for record in records]
+
+    completed.finalize(
+        task,
+        observations(completed.state_observations_before),
+        observations(completed.state_observations_after),
+    )
+
+    assert completed.post_completion_overshoot == 1
+    assert completed.stopping_accuracy is True
+    assert completed.accepted_behavior_matched is True
+    assert completed.success is True
+
+    roundtrip = TrialOutcome.model_validate_json(completed.model_dump_json())
+    roundtrip.finalize(
+        task,
+        observations(roundtrip.state_observations_before),
+        observations(roundtrip.state_observations_after),
+    )
+    assert roundtrip.model_dump(mode="json") == completed.model_dump(mode="json")
+
+    roundtrip.tool_calls.append(
+        ToolCallRecord(
+            order=max(call.order for call in roundtrip.tool_calls) + 1,
+            tool_name="akb_delete_collection",
+            canonical_operation="akb_delete_collection",
+            logical_operation="delete",
+            resource_type="collection",
+            operation_kind="material",
+            raw_model_args={"vault": "catalog-bench-relations", "path": "notes"},
+            server_args={"vault": "catalog-bench-relations", "path": "notes"},
+            effective_server_args={"vault": "catalog-bench-relations", "path": "notes"},
+            raw_args_valid=True,
+            server_args_equal_raw=True,
+            transport_succeeded=True,
+            server_succeeded=False,
+            server_error_code="permission_denied",
+        )
+    )
+    roundtrip.finalize(
+        task,
+        observations(roundtrip.state_observations_before),
+        observations(roundtrip.state_observations_after),
+    )
+    assert roundtrip.stopping_accuracy is False
+    assert roundtrip.accepted_behavior_matched is False
+    assert roundtrip.success is False
+
+
 async def _schema_conflict_outcome(
     task,
     schema_payload,
     *,
     arm: str = "baseline",
-    read_uri: str | None = None,
+    alter_uri: str | None = None,
+    metadata_sql: str | None = None,
+    metadata_vault: str = "catalog-bench-schema",
 ):
     manifest = load_run_manifest(ROOT / "config" / "run.json")
     table_uri = "akb://catalog-bench-schema/table/events"
@@ -392,7 +565,6 @@ async def _schema_conflict_outcome(
         "create_vault_1": "akb_create_vault",
         "create_table_1": "akb_create_table",
         "update_table_1": "akb_alter_table",
-        "read_table_1": "akb_get" if arm == "baseline" else "akb_document_read",
     }
     recorder = ToolCallRecorder(
         operation_map=manifest.operation_map,
@@ -412,17 +584,14 @@ async def _schema_conflict_outcome(
         arguments = dict(attempt.arguments)
         for binding in task.expected_result_bindings:
             if binding.target_stage == attempt.stage_id:
-                bound_uri = read_uri if attempt.stage_id == "read_table_1" else table_uri
-                arguments[binding.target_argument] = bound_uri or table_uri
-        if attempt.stage_id == "read_table_1" and arm == "candidate":
-            arguments["action"] = "get"
+                arguments[binding.target_argument] = alter_uri or table_uri
         tool_name = tool_by_stage[attempt.stage_id]
 
         async def successful_call(_name: str, _arguments: dict[str, object]) -> object:
             if _name == "akb_create_table":
                 return {"structuredContent": {"uri": table_uri}, "content": []}
-            if _name in {"akb_get", "akb_document_read"}:
-                return {"structuredContent": schema_payload, "content": []}
+            if _name == "akb_alter_table":
+                return {"structuredContent": {"columns": schema_payload["columns"]}, "content": []}
             return {"structuredContent": {"ok": True}, "content": []}
 
         await recorder(None, successful_call, tool_name, arguments)
@@ -437,12 +606,30 @@ async def _schema_conflict_outcome(
         transport="http",
         public_operations=manifest.public_operations,
     )
-    assert calls[-1].tool_name == tool_by_stage["read_table_1"]
-    assert calls[-1].stage_id == "read_table_1"
-    assert calls[-1].resource_type == "document"
-    assert calls[-1].server_args is not None
-    assert calls[-1].server_args["uri"] == (read_uri or table_uri)
-    assert "vault" not in calls[-1].server_args
+    alter_call = calls[-1]
+    assert alter_call.tool_name == "akb_alter_table"
+    assert alter_call.stage_id == "update_table_1"
+    assert alter_call.resource_type == "table"
+    assert json.loads(alter_call.result_fields["columns"]) == schema_payload["columns"]
+    if metadata_sql is not None:
+        metadata_args = {"vault": metadata_vault, "sql": metadata_sql}
+        calls.append(
+            ToolCallRecord(
+                order=len(calls) + 1,
+                tool_name="akb_sql",
+                canonical_operation="akb_sql",
+                logical_operation="search",
+                resource_type="table",
+                operation_kind="material",
+                raw_model_args=metadata_args,
+                server_args=metadata_args,
+                effective_server_args=metadata_args,
+                raw_args_valid=True,
+                server_args_equal_raw=True,
+                transport_succeeded=True,
+                server_succeeded=True,
+            )
+        )
     outcome = TrialOutcome(
         task_id=task.id,
         category=task.category,
@@ -451,7 +638,9 @@ async def _schema_conflict_outcome(
         model_class="lightweight",
         model_id="fixture-model",
         transport="http",
-        final_answer_text="The duplicate add returned successfully; the schema still has one text event_id column.",
+        final_answer_text=(
+            "The duplicate add was already present; the tool returned the existing schema with one text event_id column."
+        ),
         first_logical_operation="create",
         tool_calls=calls,
     )
@@ -518,17 +707,52 @@ async def test_schema_conflict_full_finalize_rejects_wrong_or_extra_columns(inva
 
 
 @pytest.mark.asyncio
-async def test_schema_conflict_rejects_get_from_a_different_physical_table_uri() -> None:
+async def test_schema_conflict_rejects_alter_against_a_different_physical_table_uri() -> None:
     task = _tasks()["table-schema-conflict-en"]
     outcome = await _schema_conflict_outcome(
         task,
         _captured_schema_payload(),
-        read_uri="akb://another-vault/table/events",
+        alter_uri="akb://another-vault/table/events",
     )
 
     assert outcome.state_contract_passed is True
     assert outcome.result_binding_accuracy is False
     assert outcome.success is False
+
+
+@pytest.mark.asyncio
+async def test_schema_conflict_accepts_only_exact_public_metadata_for_the_bound_table() -> None:
+    task = _tasks()["table-schema-conflict-en"]
+    correct_query = (
+        "SELECT column_name, data_type, ordinal_position FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = 'vt_catalog_bench_schema__events' "
+        "ORDER BY ordinal_position;"
+    )
+    valid = await _schema_conflict_outcome(
+        task,
+        _captured_schema_payload(),
+        metadata_sql=correct_query,
+    )
+    wrong_table = await _schema_conflict_outcome(
+        task,
+        _captured_schema_payload(),
+        metadata_sql=correct_query.replace("vt_catalog_bench_schema__events", "vt_other_vault__events"),
+    )
+    wrong_vault = await _schema_conflict_outcome(
+        task,
+        _captured_schema_payload(),
+        metadata_sql=correct_query,
+        metadata_vault="another-vault",
+    )
+
+    assert valid.target_payload_accuracy is True
+    assert valid.stopping_accuracy is True
+    assert valid.post_completion_overshoot == 1
+    assert valid.success is True
+    assert wrong_table.target_payload_accuracy is False
+    assert wrong_table.success is False
+    assert wrong_vault.target_payload_accuracy is False
+    assert wrong_vault.success is False
 
 
 def test_unexpected_not_found_payload_does_not_satisfy_empty_publication_state() -> None:
