@@ -1724,6 +1724,8 @@ class BenchmarkRunner:
                 for repeat_index in range(1, self.manifest.repeats + 1)
                 for task in self.tasks
             ],
+            "paired_order_mode": self.manifest.paired_order,
+            "paired_order_seed": self.manifest.paired_order_seed,
             "provider_registry_hash": self.provider_registry.get("snapshot_hash"),
             "provider_registry_status": self.provider_registry.get("status"),
         }

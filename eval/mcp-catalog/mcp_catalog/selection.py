@@ -18,51 +18,41 @@ from .execution import TrialOutcome, has_measured_evidence, has_server_instructi
 from .pairing import planned_arm_order
 
 SelectionIdentity = tuple[str, str, str, int]
-ParentLineage = Literal["recovery", "original"]
-ParentName = Literal[
-    "recovery_baseline",
-    "recovery_candidate",
-    "original_baseline",
-    "original_candidate",
-]
+ParentLineage = Literal["previous"]
+ParentName = Literal["previous_baseline", "previous_candidate"]
 
 TOTAL_BUDGET_USD = Decimal("50")
-PRIOR_SPEND_USD = Decimal("8.56720104")
+PRIOR_SPEND_USD = Decimal("8.9654014352")
 NEW_EXECUTION_LIMIT_USD = TOTAL_BUDGET_USD - PRIOR_SPEND_USD
 PER_TRIAL_LIMIT_USD = Decimal("0.10")
 REQUEST_TIMEOUT_SECONDS = 300
+PAIRED_ORDER_MODE = "counterbalanced_task_repeat"
+PAIRED_ORDER_SEED = "akb-358-v1"
 APPROVED_AUTHORIZATION = {
     "uri": "akb://reef-akb/coll/issues/doc/akb-361.md",
-    "revision": "006b373f989aaad7ce497912fab437741648d625",  # pragma: allowlist secret
-    "content_sha256": "0f5cb26f254f4eb2377b3798b9fe98a634e501196c2624200c53ed898899d1f8",  # pragma: allowlist secret
+    "revision": "5d0631f40ce6619a1518c5dca031a95aa5e21ca7",  # pragma: allowlist secret
+    "content_sha256": "3e317eee59deb5932ffd83da80f57841e7aa6b67dd98ba74acc1cc9987f7fb64",  # pragma: allowlist secret
 }
 APPROVED_PARENT_SHA256: dict[ParentName, str] = {
-    "recovery_baseline": "e42af85c5ef0456ed5ee3f93b718a44b5e7aa2690fcb9fc68f77c51c3546efd3",  # pragma: allowlist secret
-    "recovery_candidate": "11d3fe0445b9279b1a12016f34b004f7cfed9dcb668d506544f3b8759f030f54",  # pragma: allowlist secret
-    "original_baseline": "5df67aaa44e4ecd8ec5067f136184fcf18c5fbe558876cc39c9a414697d8dfb7",  # pragma: allowlist secret
-    "original_candidate": "28a23de2811a679b315c7069c4df2db8672218eb19da872aa41652d36db0d371",  # pragma: allowlist secret
+    "previous_baseline": "276e0dfdfdad58ce083f65b3ea0c21a22675f31d8a393995dace62b77eaa43a4",  # pragma: allowlist secret
+    "previous_candidate": "3195db132b810dfd37b58a4e1d8169ba92dca965ffa5140ec5c2a4624f6d647c",  # pragma: allowlist secret
 }
 
-_ROLE_AND_LINEAGE_BY_IDENTITY: dict[
-    SelectionIdentity,
-    tuple[Literal["failure", "control"], ParentLineage],
-] = {
-    ("primary", "http", "collection-relation-lifecycle-ko", 2): ("failure", "recovery"),
-    ("primary", "http", "table-schema-conflict-en", 2): ("failure", "recovery"),
-    ("primary", "stdio", "identity-access-ko", 2): ("failure", "recovery"),
-    ("primary", "stdio", "stdio-image-files-ko", 1): ("failure", "recovery"),
-    ("primary", "stdio", "stdio-local-en", 2): ("failure", "recovery"),
-    ("primary", "stdio", "table-publication-en", 1): ("failure", "recovery"),
-    ("primary", "stdio", "table-publication-ko", 1): ("failure", "recovery"),
-    ("primary", "stdio", "table-schema-conflict-en", 1): ("failure", "recovery"),
-    ("primary", "http", "exhaustive-inspection-ko", 1): ("control", "recovery"),
-    ("primary", "http", "ambiguous-clarification-ko", 2): ("control", "recovery"),
-    ("primary", "http", "exhaustive-inspection-en", 2): ("control", "recovery"),
-    ("primary", "http", "ambiguous-clarification-en", 2): ("control", "recovery"),
-    ("primary", "stdio", "exhaustive-inspection-ko", 2): ("control", "recovery"),
-    ("primary", "stdio", "stdio-local-ko", 2): ("control", "original"),
-    ("primary", "stdio", "exhaustive-inspection-en", 2): ("control", "recovery"),
-    ("primary", "stdio", "read-vaults-en", 2): ("control", "recovery"),
+_ROLE_BY_IDENTITY: dict[SelectionIdentity, Literal["failure", "control"]] = {
+    ("primary", "http", "collection-relation-lifecycle-ko", 2): "failure",
+    ("primary", "http", "table-schema-conflict-en", 2): "failure",
+    ("primary", "stdio", "stdio-image-files-ko", 1): "failure",
+    ("primary", "stdio", "table-publication-en", 1): "failure",
+    ("primary", "stdio", "table-publication-ko", 1): "failure",
+    ("primary", "stdio", "table-schema-conflict-en", 1): "failure",
+    ("primary", "http", "exhaustive-inspection-ko", 1): "control",
+    ("primary", "http", "ambiguous-clarification-ko", 2): "control",
+    ("primary", "http", "exhaustive-inspection-en", 2): "control",
+    ("primary", "http", "ambiguous-clarification-en", 2): "control",
+    ("primary", "stdio", "exhaustive-inspection-ko", 2): "control",
+    ("primary", "stdio", "stdio-local-ko", 2): "control",
+    ("primary", "stdio", "exhaustive-inspection-en", 2): "control",
+    ("primary", "stdio", "read-vaults-en", 2): "control",
 }
 
 
@@ -102,26 +92,36 @@ class SelectionDocument(ContractModel):
     schema_version: Literal[1]
     authorization: AuthorizationPin
     parents: dict[ParentName, ParentArtifact]
-    selected_trials: list[SelectedTrial] = Field(min_length=16, max_length=16)
+    selected_trials: list[SelectedTrial] = Field(min_length=14, max_length=14)
+    budget: SelectionBudget
 
     @model_validator(mode="after")
     def validate_approved_selection(self) -> SelectionDocument:
         if self.authorization.model_dump(mode="json") != APPROVED_AUTHORIZATION:
             raise ValueError("selection authorization differs from the approved AKB-361 revision")
         if set(self.parents) != set(APPROVED_PARENT_SHA256):
-            raise ValueError("selection must pin all four original and recovery parent artifacts")
+            raise ValueError("selection must pin the approved previous baseline and candidate artifacts")
         if {name: parent.sha256 for name, parent in self.parents.items()} != APPROVED_PARENT_SHA256:
             raise ValueError("selection parent artifact hashes differ from the approved AKB-361 artifacts")
         identities = [trial.identity for trial in self.selected_trials]
         if len(set(identities)) != len(identities):
             raise ValueError("selection contains duplicate trial identities")
-        if set(identities) != set(_ROLE_AND_LINEAGE_BY_IDENTITY):
+        if set(identities) != set(_ROLE_BY_IDENTITY):
             raise ValueError("selection identities differ from the approved AKB-361 sample")
         for trial in self.selected_trials:
-            if (trial.role, trial.parent_lineage) != _ROLE_AND_LINEAGE_BY_IDENTITY[trial.identity]:
+            if trial.role != _ROLE_BY_IDENTITY[trial.identity] or trial.parent_lineage != "previous":
                 raise ValueError("selection role or parent lineage differs from the approved sample")
-        if Counter(trial.role for trial in self.selected_trials) != Counter(failure=8, control=8):
-            raise ValueError("selection must contain eight failures and eight controls")
+        if Counter(trial.role for trial in self.selected_trials) != Counter(failure=6, control=8):
+            raise ValueError("selection must contain six failures and eight controls")
+        budget = self.budget
+        if (
+            budget.session_max_usd != TOTAL_BUDGET_USD
+            or budget.prior_conservative_spend_usd != PRIOR_SPEND_USD
+            or budget.new_execution_limit_usd != NEW_EXECUTION_LIMIT_USD
+            or budget.per_trial_usd != PER_TRIAL_LIMIT_USD
+            or budget.request_timeout_seconds != REQUEST_TIMEOUT_SECONDS
+        ):
+            raise ValueError("selection budget differs from the approved measurement limits")
         return self
 
 
@@ -178,13 +178,13 @@ class ToolGuidanceSelection:
             document = SelectionDocument.model_validate_json(raw)
         except (ValueError, UnicodeDecodeError) as exc:
             raise ValueError(f"selection file is invalid: {exc}") from exc
-        budget = _validate_manifest(manifest, document.selected_trials, tasks)
+        _validate_manifest(manifest, document.selected_trials, tasks, document.budget)
         parents = _validate_parents(document.parents, selection_directory=path.parent)
         return cls(
             path=path,
             sha256=selection_sha256,
             authorization=document.authorization,
-            budget=budget,
+            budget=document.budget,
             parents=parents,
             selected_trials=tuple(document.selected_trials),
             parent_results=_parent_results(parents, document.selected_trials),
@@ -195,14 +195,17 @@ def _validate_manifest(
     manifest: BenchmarkRunManifest,
     selected_trials: list[SelectedTrial],
     tasks: list[TaskManifest],
-) -> SelectionBudget:
+    selection_budget: SelectionBudget,
+) -> None:
     budget = manifest.budget
     if set(manifest.arms) != {"baseline", "candidate"} or set(manifest.transports) != {"http", "stdio"}:
         raise ValueError("run manifest does not contain the approved paired transports and arms")
+    if manifest.paired_order != PAIRED_ORDER_MODE or manifest.paired_order_seed != PAIRED_ORDER_SEED:
+        raise ValueError("run manifest does not preserve the approved paired arm order and seed")
     if (
-        Decimal(str(budget.max_total_cost_usd)) != TOTAL_BUDGET_USD
-        or Decimal(str(budget.max_cost_per_trial_usd)) != PER_TRIAL_LIMIT_USD
-        or budget.request_timeout_seconds != REQUEST_TIMEOUT_SECONDS
+        Decimal(str(budget.max_total_cost_usd)) != selection_budget.session_max_usd
+        or Decimal(str(budget.max_cost_per_trial_usd)) != selection_budget.per_trial_usd
+        or budget.request_timeout_seconds != selection_budget.request_timeout_seconds
     ):
         raise ValueError("run manifest differs from the approved tool-guidance measurement budget")
     expected_routes: dict[Literal["primary", "lightweight"], str] = {
@@ -225,15 +228,6 @@ def _validate_manifest(
             raise ValueError("selection contains a task outside its registered transport scope")
         if trial.repeat_index > manifest.repeats:
             raise ValueError("selection contains a repeat outside the registered run plan")
-    if PRIOR_SPEND_USD != Decimal("8.56720104") or NEW_EXECUTION_LIMIT_USD != Decimal("41.43279896"):
-        raise ValueError("selection prior spend basis differs from the approved measurement limits")
-    return SelectionBudget(
-        session_max_usd=Decimal(str(budget.max_total_cost_usd)),
-        prior_conservative_spend_usd=PRIOR_SPEND_USD,
-        new_execution_limit_usd=NEW_EXECUTION_LIMIT_USD,
-        per_trial_usd=Decimal(str(budget.max_cost_per_trial_usd)),
-        request_timeout_seconds=budget.request_timeout_seconds,
-    )
 
 
 def _parent_rows(artifact: dict[str, Any]) -> list[dict[str, Any]]:

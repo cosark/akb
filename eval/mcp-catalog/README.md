@@ -181,31 +181,30 @@ Pass it with `run-paired --amendment /private/run/akb-361-continuation.json`.
 Paths may be absolute or relative to the operator file.
 
 AKB-361's tool-guidance remeasurement is a separate selection-bound run. Supply
-the authorized 16-identity `selection.json` and a new summary path with
-`--selection` and `--selection-summary-output`. The selection pins eight prior
-candidate tool failures, eight successful controls, all four immutable parent
+AKB-361's currently authorized 14-identity `selection.json` and a new summary
+path with `--selection` and `--selection-summary-output`. The selection pins six
+prior candidate tool failures, eight successful controls, two immutable parent
 artifact hashes, and the approved issue revision/content hash. The runner
-executes only those 16 identities in both arms (32 new model trials), retains
-the preregistered arm order, and runs the full four-cell smoke gate per arm.
-Parent rows remain read-only and are reported beside the new outcomes without
-being merged into the canonical run comparison. A selection sample can never
-produce an adoption verdict.
+executes only those 14 identities in both arms (28 new model trials), retains
+the original repeat indices and `akb-358-v1` counterbalanced arm order, and runs
+the full four-cell smoke gate per arm. Parent rows remain read-only and are
+reported beside the new outcomes without being merged into the canonical run
+comparison. A selection sample can never produce an adoption verdict.
 
-The operator JSON contains only `schema_version`, `authorization`, the four
-`recovery_*` / `original_*` parent `{path, sha256}` entries, and the ordered
-`selected_trials` rows `{model_class, transport, task_id, repeat_index, role,
-parent_lineage}`. The code fixes the approved 16 identities, eight failures,
-eight controls, authorization digest, and parent hashes; it permits the plan's
-input order but rejects duplicate, missing, extra, or relabeled identities.
-Budget values come from the registered manifest plus the pinned `$8.56720104`
-prior spend basis. Parent trials are checked as raw JSON rows, preserving their
-recorded failure fields without requiring them to parse as new `TrialOutcome`
-objects.
+The operator JSON contains `schema_version`, `authorization`, the two
+`previous_baseline` / `previous_candidate` parent `{path, sha256}` entries, the
+ordered `selected_trials` rows `{model_class, transport, task_id, repeat_index,
+role, parent_lineage}`, and the approved `budget`. The code fixes the approved
+14 identities, six failures, eight controls, authorization digest, parent
+hashes, and budget; it rejects duplicate, missing, extra, out-of-range, or
+relabeled identities and any obsolete 16-identity or four-parent plan. Parent
+trials are checked as raw JSON rows, preserving their recorded failure fields
+without requiring them to parse as new `TrialOutcome` objects.
 
-The new shared ledger starts at zero and stops at `$41.43279896`, calculated
-from the `$50` registered cap less the `$8.56720104` prior spend basis. The
-`$0.10` per-trial cap and 300-second request timeout remain in force. No total
-request-count or overall wall-time limit applies to this sample.
+The new shared ledger starts at zero and stops at `$41.0345985648`, calculated
+from the `$50` session cap less the pinned `$8.9654014352` prior spend basis.
+The `$0.10` per-trial cap and 300-second request timeout remain in force. No
+total request-count or overall wall-time limit applies to this sample.
 
 ```bash
 uv run --locked --project eval/mcp-catalog \
