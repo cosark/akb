@@ -23,14 +23,14 @@ from .pairing import planned_arm_order
 
 WORK_ITEM = "AKB-361"
 AUTHORIZATION_URI = "akb://reef-akb/coll/issues/doc/akb-361.md"
-AUTHORIZATION_REVISION = "006b373f989aaad7ce497912fab437741648d625"
-AUTHORIZATION_CONTENT_SHA256 = "0f5cb26f254f4eb2377b3798b9fe98a634e501196c2624200c53ed898899d1f8"
-SELECTION_SOURCE_SHA256 = "be0ef3c434e57c4af4b453558f73bd3fcff3237b9effae07840fe64c2699a762"
+AUTHORIZATION_REVISION = "006b373f989aaad7ce497912fab437741648d625"  # pragma: allowlist secret
+AUTHORIZATION_CONTENT_SHA256 = "0f5cb26f254f4eb2377b3798b9fe98a634e501196c2624200c53ed898899d1f8"  # pragma: allowlist secret
+SELECTION_SOURCE_SHA256 = "be0ef3c434e57c4af4b453558f73bd3fcff3237b9effae07840fe64c2699a762"  # pragma: allowlist secret
 _PARENT_SHA256 = {
-    "recovery_baseline": "e42af85c5ef0456ed5ee3f93b718a44b5e7aa2690fcb9fc68f77c51c3546efd3",
-    "recovery_candidate": "11d3fe0445b9279b1a12016f34b004f7cfed9dcb668d506544f3b8759f030f54",
-    "original_baseline": "5df67aaa44e4ecd8ec5067f136184fcf18c5fbe558876cc39c9a414697d8dfb7",
-    "original_candidate": "28a23de2811a679b315c7069c4df2db8672218eb19da872aa41652d36db0d371",
+    "recovery_baseline": "e42af85c5ef0456ed5ee3f93b718a44b5e7aa2690fcb9fc68f77c51c3546efd3",  # pragma: allowlist secret
+    "recovery_candidate": "11d3fe0445b9279b1a12016f34b004f7cfed9dcb668d506544f3b8759f030f54",  # pragma: allowlist secret
+    "original_baseline": "5df67aaa44e4ecd8ec5067f136184fcf18c5fbe558876cc39c9a414697d8dfb7",  # pragma: allowlist secret
+    "original_candidate": "28a23de2811a679b315c7069c4df2db8672218eb19da872aa41652d36db0d371",  # pragma: allowlist secret
 }
 TOTAL_BUDGET_USD = Decimal("50")
 PRIOR_SPEND_USD = Decimal("8.56720104")
