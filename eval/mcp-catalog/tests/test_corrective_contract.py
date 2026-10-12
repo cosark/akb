@@ -141,7 +141,22 @@ def test_corrected_task_oracles_cover_schema_and_cleanup_boundaries() -> None:
         assert conflict.status_code is None
         assert conflict.error_code is None
         assert "actual response" in task.prompt or "실제로 반환한 결과" in task.prompt
-        assert task.expected_final_state.must[0].value == [{"name": "event_id", "type": "text"}]
+        assert [(item.pointer, item.operator, item.value) for item in task.expected_final_state.must] == [
+            ("/columns/0/name", "equals", "event_id"),
+            ("/columns/0/type", "equals", "text"),
+            ("/columns/1", "exists", False),
+        ]
+        read = next(item for item in task.expected_material_attempts if item.stage_id == "read_table_1")
+        assert read.logical_operation == "read"
+        assert read.tool_name is None
+        assert read.resource_type == "document"
+        assert read.arguments == {}
+        assert any(
+            binding.source_stage == "create_table_1"
+            and binding.target_stage == "read_table_1"
+            and binding.target_argument == "uri"
+            for binding in task.expected_result_bindings
+        )
 
     for task_id in ("table-publication-ko", "table-publication-en"):
         task = tasks[task_id]

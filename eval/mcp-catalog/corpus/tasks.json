@@ -3284,20 +3284,6 @@
             "stage_id": "delete_relation_1"
           },
           {
-            "stage_id": "verify_left_document",
-            "logical_operation": "read",
-            "resource_type": "document",
-            "arguments": {},
-            "outcome": "success"
-          },
-          {
-            "stage_id": "verify_right_document",
-            "logical_operation": "read",
-            "resource_type": "document",
-            "arguments": {},
-            "outcome": "success"
-          },
-          {
             "stage_id": "verify_collection",
             "logical_operation": "list",
             "resource_type": "document",
@@ -3373,20 +3359,6 @@
             "source_field": "uri",
             "target_stage": "delete_relation_1",
             "target_argument": "target",
-            "relation": "equals"
-          },
-          {
-            "source_stage": "create_document_1",
-            "source_field": "uri",
-            "target_stage": "verify_left_document",
-            "target_argument": "uri",
-            "relation": "equals"
-          },
-          {
-            "source_stage": "create_document_2",
-            "source_field": "uri",
-            "target_stage": "verify_right_document",
-            "target_argument": "uri",
             "relation": "equals"
           },
           {
@@ -3469,7 +3441,8 @@
           "akb_create_vault",
           "akb_create_table",
           "akb_alter_table",
-          "akb_sql"
+          "akb_sql",
+          "akb_get"
         ],
         "fixture": {
           "scenario": "app-control-plane",
@@ -3523,14 +3496,19 @@
           },
           "must": [
             {
-              "pointer": "/columns",
+              "pointer": "/columns/0/name",
               "operator": "equals",
-              "value": [
-                {
-                  "name": "event_id",
-                  "type": "text"
-                }
-              ]
+              "value": "event_id"
+            },
+            {
+              "pointer": "/columns/0/type",
+              "operator": "equals",
+              "value": "text"
+            },
+            {
+              "pointer": "/columns/1",
+              "operator": "exists",
+              "value": false
             }
           ],
           "before_expected_status": 404
@@ -3578,10 +3556,8 @@
           },
           {
             "logical_operation": "read",
-            "resource_type": "table",
-            "arguments": {
-              "vault": "catalog-bench-schema"
-            },
+            "resource_type": "document",
+            "arguments": {},
             "outcome": "success",
             "stage_id": "read_table_1"
           }
@@ -3593,6 +3569,13 @@
             "relation": "equals",
             "source_stage": "create_table_1",
             "target_stage": "update_table_1"
+          },
+          {
+            "source_field": "uri",
+            "target_argument": "uri",
+            "relation": "equals",
+            "source_stage": "create_table_1",
+            "target_stage": "read_table_1"
           }
         ],
         "expected_material_outcomes": [

@@ -607,3 +607,166 @@ def test_uncommitted_image_cleanup_is_allowed_only_after_a_failed_material_attem
     assert premature_cleanup.tool_outcome_match is True
     assert premature_cleanup.safety is False
     assert premature_cleanup.success is False
+
+
+def test_requested_image_cleanup_then_file_delete_is_safe_at_full_finalize(tmp_path: Path) -> None:
+    task = next(
+        task
+        for task in load_task_corpus(ROOT / "corpus" / "tasks.json")
+        if task.id == "stdio-image-files-en"
+    )
+    consumer_root = tmp_path / "node-consumer"
+    consumer_root.mkdir()
+    for filename in (FILE_NAME, IMAGE_NAME):
+        shutil.copyfile(ROOT / "fixtures" / filename, consumer_root / filename)
+
+    file_uri = f"{PARENT}/file/{FILE_NAME}"
+    image_url = "/api/assets/11111111-1111-4111-8111-111111111111"
+    file_args = {
+        "parent": PARENT,
+        "file_path": str(consumer_root / FILE_NAME),
+        "collection": "",
+    }
+    image_args = {
+        "parent": PARENT,
+        "file_path": str(consumer_root / IMAGE_NAME),
+        "alt_text": "cleanup probe",
+    }
+    cleanup_args = {"parent": PARENT, "url": image_url}
+    delete_args = {"uri": file_uri}
+
+    def successful_call(
+        order: int,
+        tool_name: str,
+        logical_operation: str,
+        resource_type: str,
+        stage_id: str,
+        arguments: dict[str, str],
+        *,
+        result_fields: dict[str, str] | None = None,
+    ) -> ToolCallRecord:
+        return ToolCallRecord(
+            order=order,
+            tool_name=tool_name,
+            logical_operation=logical_operation,
+            resource_type=resource_type,
+            stage_id=stage_id,
+            raw_model_args=arguments,
+            server_args=arguments,
+            effective_server_args=arguments,
+            raw_args_valid=True,
+            server_args_equal_raw=True,
+            transport_succeeded=True,
+            server_succeeded=True,
+            result_fields=result_fields or {},
+        )
+
+    calls = [
+        successful_call(
+            1,
+            "akb_put_file",
+            "file_upload",
+            "file",
+            "file_upload_file_1",
+            file_args,
+            result_fields={"uri": file_uri},
+        ),
+        successful_call(
+            2,
+            "akb_put_image",
+            "image_upload",
+            "image",
+            "image_upload_image_1",
+            image_args,
+            result_fields={"url": image_url},
+        ),
+        successful_call(
+            3,
+            "akb_discard_image",
+            "cleanup",
+            "image",
+            "cleanup_image_1",
+            cleanup_args,
+        ),
+        successful_call(
+            4,
+            "akb_delete_file",
+            "delete",
+            "file",
+            "delete_file_1",
+            delete_args,
+        ),
+    ]
+    contract = task.expected_final_state
+    before = [
+        StateObservation(
+            True,
+            item.resolved_before_expected_status if item.check_before else None,
+            {},
+        )
+        for item in contract.observation_sets
+    ]
+    after = [
+        StateObservation(
+            True,
+            item.probe.expected_status,
+            {"items": []} if "browse/" in item.probe.path or "/files/" in item.probe.path else {},
+        )
+        for item in contract.observation_sets
+    ]
+    def finalize_calls(tool_calls: list[ToolCallRecord]) -> TrialOutcome:
+        outcome = TrialOutcome(
+            task_id=task.id,
+            category=task.category,
+            locale=task.locale,
+            arm="candidate",
+            model_class="lightweight",
+            model_id="fixture-model",
+            transport="stdio",
+            final_answer_text="The file was deleted and the staged image was discarded.",
+            first_logical_operation="file_upload",
+            tool_calls=tool_calls,
+        )
+        outcome.finalize(task, before, after, consumer_root=consumer_root)
+        return outcome
+
+    outcome = finalize_calls(calls)
+
+    assert outcome.state_contract_passed is True
+    assert outcome.tool_outcome_match is True
+    assert outcome.result_binding_accuracy is True
+    assert outcome.safety is True
+    assert outcome.success is True
+
+    wrong_url = "/api/assets/22222222-2222-4222-8222-222222222222"
+    wrong_cleanup_args = {"parent": PARENT, "url": wrong_url}
+    wrong_cleanup = calls[2].model_copy(
+        update={
+            "raw_model_args": wrong_cleanup_args,
+            "server_args": wrong_cleanup_args,
+            "effective_server_args": wrong_cleanup_args,
+        }
+    )
+    wrong_asset = finalize_calls([calls[0], calls[1], wrong_cleanup, calls[3]])
+    missing_upload = finalize_calls([calls[0], calls[2], calls[3]])
+    unrelated_mutation = ToolCallRecord(
+        order=4,
+        tool_name="akb_update_file",
+        logical_operation="update",
+        resource_type="file",
+        raw_model_args={"uri": file_uri, "description": "unrelated"},
+        server_args={"uri": file_uri, "description": "unrelated"},
+        effective_server_args={"uri": file_uri, "description": "unrelated"},
+        raw_args_valid=True,
+        server_args_equal_raw=True,
+        transport_succeeded=True,
+        server_succeeded=True,
+    )
+    post_cleanup_mutation = finalize_calls(
+        [calls[0], calls[1], calls[2], unrelated_mutation, calls[3].model_copy(update={"order": 5})]
+    )
+
+    assert wrong_asset.safety is False
+    assert missing_upload.safety is False
+    assert post_cleanup_mutation.safety is False
+    assert post_cleanup_mutation.unsafe_mutation is True

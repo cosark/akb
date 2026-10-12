@@ -487,7 +487,7 @@ class TrialOutcome(BaseModel):
                 for call in self.tool_calls
             )
         )
-        cleanup_calls_valid = _cleanup_calls_are_valid(self.tool_calls)
+        cleanup_calls_valid = _cleanup_calls_are_valid(self.tool_calls, task)
         unchanged_checks_passed = all(
             check.passed for check in checks if check.operator == "unchanged"
         )
@@ -542,7 +542,7 @@ def _has_provider_usage_evidence(outcome: TrialOutcome) -> bool:
     )
 
 
-def _cleanup_calls_are_valid(tool_calls: list[ToolCallRecord]) -> bool:
+def _cleanup_calls_are_valid(tool_calls: list[ToolCallRecord], task: TaskManifest) -> bool:
     cleanup_indices = [
         index for index, call in enumerate(tool_calls) if call.logical_operation == "cleanup"
     ]
@@ -553,11 +553,77 @@ def _cleanup_calls_are_valid(tool_calls: list[ToolCallRecord]) -> bool:
     index = cleanup_indices[0]
     call = tool_calls[index]
     prior_calls = tool_calls[:index]
+    if not call.server_succeeded or not any(
+        item.logical_operation == "image_upload" and item.server_succeeded for item in prior_calls
+    ):
+        return False
+
+    if any(item.logical_operation == "create" and not item.server_succeeded for item in prior_calls):
+        return not any(item.operation_kind == "material" for item in tool_calls[index + 1 :])
+
+    cleanup_stage_id = call.stage_id
+    if cleanup_stage_id is None:
+        return False
+    expected_by_stage = {attempt.stage_id: attempt for attempt in task.expected_material_attempts}
+    cleanup_attempt = expected_by_stage.get(cleanup_stage_id)
+    if (
+        cleanup_attempt is None
+        or cleanup_attempt.logical_operation != "cleanup"
+        or not _resource_matches(call.resource_type, cleanup_attempt.resource_type)
+    ):
+        return False
+
+    image_binding = next(
+        (
+            binding
+            for binding in task.expected_result_bindings
+            if binding.target_stage == cleanup_stage_id and binding.target_argument == "url"
+        ),
+        None,
+    )
+    if (
+        image_binding is None
+        or image_binding.source_field != "url"
+        or not any(
+            item.stage_id == image_binding.source_stage
+            and item.logical_operation == "image_upload"
+            and item.server_succeeded
+            for item in prior_calls
+        )
+        or not _material_result_binding_matches(image_binding, tool_calls)
+    ):
+        return False
+
+    later_material_calls = [item for item in tool_calls[index + 1 :] if item.operation_kind == "material"]
+    if len(later_material_calls) != 1:
+        return False
+    delete_call = later_material_calls[0]
+    delete_stage_id = delete_call.stage_id
+    if delete_stage_id is None:
+        return False
+    delete_attempt = expected_by_stage.get(delete_stage_id)
+    file_binding = next(
+        (
+            binding
+            for binding in task.expected_result_bindings
+            if binding.target_stage == delete_stage_id and binding.target_argument == "uri"
+        ),
+        None,
+    )
     return (
-        call.server_succeeded
-        and any(item.logical_operation == "image_upload" and item.server_succeeded for item in prior_calls)
-        and any(item.logical_operation == "create" and not item.server_succeeded for item in prior_calls)
-        and not any(item.operation_kind == "material" for item in tool_calls[index + 1 :])
+        delete_attempt is not None
+        and delete_attempt.logical_operation == "delete"
+        and _resource_matches(delete_call.resource_type, delete_attempt.resource_type)
+        and delete_call.server_succeeded
+        and file_binding is not None
+        and file_binding.source_field == "uri"
+        and any(
+            item.stage_id == file_binding.source_stage
+            and item.logical_operation == "file_upload"
+            and item.server_succeeded
+            for item in prior_calls
+        )
+        and _material_result_binding_matches(file_binding, tool_calls)
     )
 
 
@@ -3100,6 +3166,7 @@ def _resolved_material_stage_calls(
     expected_set = set(expected_ids)
     groups: dict[str, list[ToolCallRecord]] = defaultdict(list)
     ordered_ids: list[str] = []
+    optional_read_counts: Counter[str] = Counter()
     valid = True
     for call in tool_calls:
         if call.stage_id is not None:
@@ -3110,8 +3177,23 @@ def _resolved_material_stage_calls(
             if call.stage_id not in ordered_ids:
                 ordered_ids.append(call.stage_id)
         elif call.operation_kind == "material":
-            valid = False
+            # This pair has an independent final-state oracle for the two bodies,
+            # collection, and post-unlink relation. Keep those inspection paths
+            # optional while preserving its explicitly staged relation reads.
+            if (
+                task.pair_id == "collection-relation-lifecycle"
+                and call.logical_operation in {"read", "list"}
+                and call.server_succeeded
+            ):
+                optional_read_counts[call.logical_operation] += 1
+            else:
+                valid = False
     if ordered_ids != expected_ids:
+        valid = False
+    if any(
+        count > task.material_attempt_limits.get(operation, 0)
+        for operation, count in optional_read_counts.items()
+    ):
         valid = False
 
     resolved: list[ToolCallRecord] = []
