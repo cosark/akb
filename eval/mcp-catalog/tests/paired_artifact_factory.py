@@ -759,6 +759,7 @@ def _state_observations(contract: Any) -> tuple[list[StateObservation], list[Sta
 def _checkpoint_observations(task: Any, tool_calls: list[ToolCallRecord]) -> list[dict[str, Any]]:
     observations = []
     material_positions = _material_attempt_positions_by_stage(tool_calls)
+    stage_positions = {attempt.stage_id: index for index, attempt in enumerate(task.expected_material_attempts)}
     for checkpoint in task.expected_final_state.checkpoints:
         stage_id = task.expected_material_attempts[checkpoint.after_attempt - 1].stage_id
         payload: dict[str, Any] = {}
@@ -766,6 +767,29 @@ def _checkpoint_observations(task: Any, tool_calls: list[ToolCallRecord]) -> lis
             _apply_expectation(payload, expectation, satisfied=True)
         for expectation in checkpoint.must_not:
             _apply_expectation(payload, expectation, satisfied=False)
+        checkpoint_index = checkpoint.after_attempt - 1
+        publications = payload.get("publications")
+        if isinstance(publications, list) and publications and isinstance(publications[0], dict):
+            for binding in task.expected_result_bindings:
+                source_index = stage_positions.get(binding.source_stage)
+                target_index = stage_positions.get(binding.target_stage)
+                if (
+                    binding.relation == "equals"
+                    and source_index is not None
+                    and target_index is not None
+                    and source_index < checkpoint_index < target_index
+                ):
+                    value = next(
+                        (
+                            call.result_fields[binding.source_field]
+                            for call in tool_calls
+                            if call.stage_id == binding.source_stage
+                            and binding.source_field in call.result_fields
+                        ),
+                        None,
+                    )
+                    if value is not None:
+                        publications[0][binding.source_field] = value
         observations.append(
             {
                 "after_attempt": material_positions[stage_id],

@@ -12,6 +12,8 @@ from mcp_catalog.execution import (
     TrialOutcome,
     _registered_readonly_observation,
     _finalize_semantic_metrics,
+    _captured_material_positions_by_stage,
+    _material_attempt_positions_by_stage,
     _vault_skill_binding_digest,
     bind_tool_calls,
     capture_result_fields_for_task,
@@ -20,6 +22,7 @@ from mcp_catalog.execution import (
 )
 from mcp_catalog.runtime import StateObservation
 from mcp_catalog.state import evaluate_state_contract
+from paired_artifact_factory import _state_observations
 
 
 ROOT = Path(__file__).parents[1]
@@ -811,7 +814,13 @@ async def test_state_checkpoints_follow_registered_stages_across_an_extra_read()
                 assert probe.path == "/api/v1/publications/catalog-bench-data?resource_type=table_query"
                 checkpoint_reads.append((current["tool"], current["mode"]))
                 publications = (
-                    [{"resource_type": "table_query", "mode": current["mode"]}]
+                    [
+                        {
+                            "resource_type": "table_query",
+                            "mode": current["mode"],
+                            "slug": "fixture-publication",
+                        }
+                    ]
                     if current["mode"] is not None
                     else []
                 )
@@ -876,6 +885,182 @@ async def test_state_checkpoints_follow_registered_stages_across_an_extra_read()
     assert [item["after_attempt"] for item in recorder.checkpoint_observations] == [6, 8]
     assert [call.order for call in calls] == list(range(1, 10))
     assert next(call for call in calls if call.tool_name == "akb_vault_info").stage_id is None
+
+    table_attempt = next(item for item in task.expected_material_attempts if item.stage_id == "create_table_1")
+    table_tool = tool_by_stage[table_attempt.stage_id]
+    table_args = dict(table_attempt.arguments)
+    table_challenge_ack = "fixture-unretried-table-ack"
+
+    def challenge_call(
+        order: int,
+        *,
+        tool_name: str,
+        resource_type: str,
+        arguments: dict[str, object],
+        stage_id: str | None,
+        ack: str,
+    ) -> ToolCallRecord:
+        return ToolCallRecord(
+            order=order,
+            tool_name=tool_name,
+            canonical_operation=tool_name,
+            logical_operation="create",
+            resource_type=resource_type,
+            operation_kind="material",
+            stage_id=stage_id,
+            raw_model_args=arguments,
+            server_args=arguments,
+            effective_server_args=arguments,
+            raw_args_valid=True,
+            server_args_equal_raw=True,
+            transport_succeeded=True,
+            server_succeeded=False,
+            server_error_code="vault_skill_required",
+            vault_skill_binding_sha256=_vault_skill_binding_digest(tool_name, arguments, ack),
+            vault_skill_ack=ack,
+        )
+
+    guide_args = {
+        "vault": "catalog-bench-data",
+        "slug": "vault-skill",
+        "title": "guide update",
+        "content": "unrequested guide write",
+    }
+    guide_ack = "fixture-guide-ack"
+    guide_retry_args = {**guide_args, "_vault_skill_ack": guide_ack}
+    guide_challenge = challenge_call(
+        1,
+        tool_name="akb_put",
+        resource_type="document",
+        arguments=guide_args,
+        stage_id=None,
+        ack=guide_ack,
+    )
+    guide_retry = ToolCallRecord(
+        order=2,
+        tool_name="akb_put",
+        canonical_operation="akb_put",
+        logical_operation="create",
+        resource_type="document",
+        operation_kind="preparatory",
+        raw_model_args=guide_retry_args,
+        server_args=guide_retry_args,
+        effective_server_args=guide_retry_args,
+        raw_args_valid=True,
+        server_args_equal_raw=True,
+        transport_succeeded=True,
+        server_succeeded=False,
+        server_error_code="reserved_system_path",
+        vault_skill_binding_sha256=guide_challenge.vault_skill_binding_sha256,
+        vault_skill_retry_ack=guide_ack,
+    )
+    table_retry_ack = "fixture-table-retry-ack"
+    table_retry_args = {**table_args, "_vault_skill_ack": table_retry_ack}
+    table_challenge = challenge_call(
+        3,
+        tool_name=table_tool,
+        resource_type="table",
+        arguments=table_args,
+        stage_id=None,
+        ack=table_retry_ack,
+    )
+
+    augmented_calls: list[ToolCallRecord] = []
+    inserted = False
+    for call in calls:
+        if call.stage_id != "create_table_1" or inserted:
+            augmented_calls.append(call)
+            continue
+        inserted = True
+        augmented_calls.extend(
+            [
+                challenge_call(
+                    1,
+                    tool_name=table_tool,
+                    resource_type="table",
+                    arguments=table_args,
+                    stage_id="create_table_1",
+                    ack=table_challenge_ack,
+                ),
+                guide_challenge,
+                guide_retry,
+                table_challenge,
+                call.model_copy(
+                    update={
+                        "stage_id": None,
+                        "operation_kind": "preparatory",
+                        "raw_model_args": table_retry_args,
+                        "server_args": table_retry_args,
+                        "effective_server_args": table_retry_args,
+                        "server_args_equal_raw": True,
+                        "vault_skill_binding_sha256": table_challenge.vault_skill_binding_sha256,
+                        "vault_skill_retry_ack": table_retry_ack,
+                    }
+                ),
+            ]
+        )
+    augmented_calls = [call.model_copy(update={"order": index}) for index, call in enumerate(augmented_calls, 1)]
+    assert inserted
+    assert next(call for call in augmented_calls if call.stage_id == "create_publication_1").result_fields["slug"] == (
+        "fixture-publication"
+    )
+    checkpoint_observations = [
+        {**item, "after_attempt": item["after_attempt"] + 2}
+        for item in recorder.checkpoint_observations
+    ]
+    before, after = _state_observations(task.expected_final_state)
+    outcome = TrialOutcome(
+        task_id=task.id,
+        category=task.category,
+        locale=task.locale,
+        arm="baseline",
+        model_class="primary",
+        model_id="fixture-model",
+        transport="stdio",
+        tool_calls=augmented_calls,
+        state_checkpoint_observations=checkpoint_observations,
+    )
+    outcome.finalize(task, before, after)
+    capture_positions, captured_material_count = _captured_material_positions_by_stage(task, outcome.tool_calls)
+    scoring_positions = _material_attempt_positions_by_stage(outcome.tool_calls)
+    assert [item["after_attempt"] for item in outcome.state_checkpoint_observations] == [8, 10]
+    assert [capture_positions[stage] for stage in ("list_publication_1", "list_publication_2")] == [8, 10]
+    assert [scoring_positions[stage] for stage in ("list_publication_1", "list_publication_2")] == [7, 9]
+    assert captured_material_count == 11
+    assert outcome.state_contract_passed is True
+    assert any(call.server_error_code == "reserved_system_path" for call in outcome.tool_calls)
+    assert all(
+        check.passed
+        for check in outcome.state_checks
+        if check.operator.startswith(("checkpoint_must:", "checkpoint_binding:"))
+    )
+
+    serialized = outcome.model_dump(mode="json")
+    reloaded = TrialOutcome.model_validate(serialized)
+    reloaded.finalize(task, before, after)
+    assert reloaded.state_contract_passed is True
+    assert reloaded.state_checkpoint_observations == serialized["state_checkpoint_observations"]
+    repeated = TrialOutcome.model_validate(reloaded.model_dump(mode="json"))
+    repeated.finalize(task, before, after)
+    assert repeated.state_contract_passed is True
+    assert repeated.state_checkpoint_observations == reloaded.state_checkpoint_observations
+
+    wrong_slot = TrialOutcome.model_validate(serialized)
+    wrong_slot.state_checkpoint_observations[0]["after_attempt"] = 7
+    wrong_slot.finalize(task, before, after)
+    assert wrong_slot.state_contract_passed is False
+    wrong_mode = TrialOutcome.model_validate(serialized)
+    wrong_mode.state_checkpoint_observations[0]["payload"]["publications"][0]["mode"] = "snapshot"
+    wrong_mode.finalize(task, before, after)
+    assert wrong_mode.state_contract_passed is False
+    wrong_slug = TrialOutcome.model_validate(serialized)
+    wrong_slug.state_checkpoint_observations[0]["payload"]["publications"][0]["slug"] = "different-publication"
+    wrong_slug.finalize(task, before, after)
+    assert wrong_slug.state_contract_passed is False
+    assert any(
+        check.operator == "checkpoint_binding:slug" and not check.passed
+        for check in wrong_slug.state_checks
+    )
 
     missing_recorder, missing_calls, missing_reads = await run_trace(omit_second_list=True)
     assert missing_reads == [("akb_publications", "live")]

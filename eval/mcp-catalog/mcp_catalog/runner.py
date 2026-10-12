@@ -66,7 +66,7 @@ from .execution import (
     execute_smoke,
     has_measured_evidence,
     has_server_instructions_evidence,
-    _material_attempt_positions_by_stage,
+    _captured_material_positions_by_stage,
     provider_response_cost,
     provider_token_totals,
     registered_route_target,
@@ -2650,9 +2650,9 @@ def _validate_trial_evidence(
 
     before = _state_observations(outcome, task, before=True)
     after = _state_observations(outcome, task, before=False)
-    material_positions = _material_attempt_positions_by_stage(outcome.tool_calls)
+    capture_positions, captured_material_count = _captured_material_positions_by_stage(task, outcome.tool_calls)
     expected_checkpoints = [
-        material_positions.get(task.expected_material_attempts[checkpoint.after_attempt - 1].stage_id)
+        capture_positions.get(task.expected_material_attempts[checkpoint.after_attempt - 1].stage_id)
         for checkpoint in task.expected_final_state.checkpoints
     ]
     raw_checkpoints = outcome.state_checkpoint_observations
@@ -2670,7 +2670,7 @@ def _validate_trial_evidence(
             or not isinstance(item.get("after_attempt"), int)
             or isinstance(item.get("after_attempt"), bool)
             or item["after_attempt"] < 1
-            or item["after_attempt"] > outcome.material_call_count
+            or item["after_attempt"] > captured_material_count
             or not isinstance(item.get("available"), bool)
             or (item.get("error") is not None and not isinstance(item.get("error"), str))
         ):

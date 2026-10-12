@@ -413,6 +413,10 @@ class TrialOutcome(BaseModel):
         *,
         consumer_root: str | Path | None = None,
     ) -> None:
+        checkpoint_positions, _ = _captured_material_positions_by_stage(
+            task,
+            self.tool_calls,
+        )
         _rebind_independent_readonly_suffix_stages(task, self.tool_calls)
         before_items = before if isinstance(before, list) else [before]
         after_items = after if isinstance(after, list) else [after]
@@ -435,10 +439,9 @@ class TrialOutcome(BaseModel):
             for item in self.state_checkpoint_observations
             if isinstance(item, dict)
         }
-        material_positions = _material_attempt_positions_by_stage(self.tool_calls)
         for checkpoint in task.expected_final_state.checkpoints:
             stage_id = task.expected_material_attempts[checkpoint.after_attempt - 1].stage_id
-            evidence = checkpoint_map.get(material_positions.get(stage_id))
+            evidence = checkpoint_map.get(checkpoint_positions.get(stage_id))
             observation = (
                 StateObservation(
                     available=bool(evidence.get("available")),
@@ -450,6 +453,15 @@ class TrialOutcome(BaseModel):
                 else StateObservation(False, None, error="registered state checkpoint was not observed")
             )
             checkpoint_checks = evaluate_checkpoint_contract(checkpoint, observation)
+            checkpoint_checks.extend(
+                _checkpoint_result_binding_checks(
+                    task,
+                    checkpoint.after_attempt - 1,
+                    checkpoint,
+                    evidence,
+                    self.tool_calls,
+                )
+            )
             checks.extend(checkpoint_checks)
             state_passed = state_passed and all(item.passed for item in checkpoint_checks)
         self.state_contract_passed = state_passed
@@ -587,6 +599,101 @@ def _material_attempt_positions_by_stage(tool_calls: list[ToolCallRecord]) -> di
         if call.stage_id is not None:
             positions.setdefault(call.stage_id, attempt_index)
     return positions
+
+
+def _captured_material_positions_by_stage(
+    task: TaskManifest,
+    tool_calls: list[ToolCallRecord],
+) -> tuple[dict[str, int], int]:
+    """Rebuild the recorder's checkpoint sequence from immutable call evidence."""
+
+    positions: dict[str, int] = {}
+    attempt_index = 0
+    for call in tool_calls:
+        retry_ack = call.vault_skill_retry_ack
+        if not retry_ack:
+            retry_ack = next(
+                (
+                    value
+                    for source in (call.effective_server_args, call.server_args)
+                    if isinstance(source, dict)
+                    for value in (source.get("_vault_skill_ack"),)
+                    if isinstance(value, str) and value
+                ),
+                None,
+            )
+        if isinstance(retry_ack, str) and retry_ack:
+            continue
+        if call.stage_id is None and call.logical_operation not in task.allowed_material_operations:
+            continue
+        attempt_index += 1
+        if call.stage_id is not None:
+            positions.setdefault(call.stage_id, attempt_index)
+    return positions, attempt_index
+
+
+def _checkpoint_result_binding_checks(
+    task: TaskManifest,
+    checkpoint_index: int,
+    checkpoint: StateCheckpointContract,
+    evidence: dict[str, Any] | None,
+    tool_calls: list[ToolCallRecord],
+) -> list[StateCheckResult]:
+    stage_positions = {attempt.stage_id: index for index, attempt in enumerate(task.expected_material_attempts)}
+    pointer = next((expectation.pointer for expectation in checkpoint.must if expectation.pointer), "")
+    checks: list[StateCheckResult] = []
+    checked_fields: set[tuple[str, str]] = set()
+    for binding in task.expected_result_bindings:
+        source_index = stage_positions.get(binding.source_stage)
+        target_index = stage_positions.get(binding.target_stage)
+        binding_key = (binding.source_stage, binding.source_field)
+        if (
+            binding.relation != "equals"
+            or source_index is None
+            or target_index is None
+            or not source_index < checkpoint_index < target_index
+            or binding_key in checked_fields
+        ):
+            continue
+        checked_fields.add(binding_key)
+        source_call = next(
+            (
+                call
+                for call in tool_calls
+                if call.stage_id == binding.source_stage and call.server_succeeded
+            ),
+            None,
+        )
+        expected_value = source_call.result_fields.get(binding.source_field) if source_call is not None else None
+        payload = evidence.get("payload") if evidence is not None else None
+        passed = (
+            isinstance(expected_value, str)
+            and bool(expected_value)
+            and _state_contains_bound_field(payload, binding.source_field, expected_value)
+        )
+        checks.append(
+            StateCheckResult(
+                passed,
+                pointer,
+                f"checkpoint_binding:{binding.source_field}",
+                "checkpoint contains the registered result binding"
+                if passed
+                else "checkpoint does not contain the registered result binding",
+            )
+        )
+    return checks
+
+
+def _state_contains_bound_field(value: Any, field_name: str, expected: str) -> bool:
+    if isinstance(value, list):
+        return any(_state_contains_bound_field(item, field_name, expected) for item in value)
+    if not isinstance(value, dict):
+        return False
+    return value.get(field_name) == expected or any(
+        _state_contains_bound_field(item, field_name, expected)
+        for key, item in value.items()
+        if key != field_name
+    )
 
 
 def _independent_readonly_suffix_start(task: TaskManifest) -> int | None:
