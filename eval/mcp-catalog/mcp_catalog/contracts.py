@@ -1234,7 +1234,7 @@ class BenchmarkRunManifest(ContractModel):
 
 
 class CatalogSnapshot(ContractModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     source: Literal["server_tools_list"] = "server_tools_list"
     protocol_revision: Literal["2026-07-28"] = "2026-07-28"
     transport: Transport
@@ -1245,6 +1245,7 @@ class CatalogSnapshot(ContractModel):
     catalog_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     catalog_token_estimate: int = Field(ge=0)
     token_estimator: Literal["utf8_bytes_div_4_ceiling"] = "utf8_bytes_div_4_ceiling"
+    server_discover: dict[str, JsonValue]
     tools: list[dict[str, JsonValue]]
     harness_filtering: Literal[False] = False
     lazy_discovery: Literal[False] = False
@@ -1252,6 +1253,12 @@ class CatalogSnapshot(ContractModel):
 
     @model_validator(mode="after")
     def validate_catalog(self) -> CatalogSnapshot:
+        versions = self.server_discover.get("supportedVersions")
+        instructions = self.server_discover.get("instructions")
+        if not isinstance(versions, list) or self.protocol_revision not in versions:
+            raise ValueError("server_discover does not confirm the pinned protocol revision")
+        if not isinstance(instructions, str) or not instructions.strip():
+            raise ValueError("server_discover must include the actual non-empty server instructions")
         if self.tool_count != len(self.tools):
             raise ValueError("tool_count must match tools length")
         expected_hash = hash_json(self.tools)

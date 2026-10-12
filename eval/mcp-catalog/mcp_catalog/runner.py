@@ -58,6 +58,7 @@ from .execution import (
     evaluate_dataset,
     execute_smoke,
     has_measured_evidence,
+    has_server_instructions_evidence,
     provider_response_cost,
     provider_token_totals,
     registered_route_target,
@@ -67,7 +68,8 @@ from .execution import (
     validate_model_configuration,
     worst_case_cost,
 )
-from .recovery import RecoverySelection
+from .selection import ToolGuidanceSelection
+from .pairing import planned_arm_order
 from .runtime import RuntimeContractError, RuntimeDescriptor, RuntimeFixture, StateObservation
 from .statistics import InconclusiveBootstrap, paired_cluster_bca
 from .timing import TimingCategory, TimingTracker
@@ -375,11 +377,11 @@ class PairedArmCoordinator:
         tasks: list[TaskManifest],
         *,
         initial_events: list[dict[str, Any]] | None = None,
-        recovery_selection: RecoverySelection | None = None,
+        selection: ToolGuidanceSelection | None = None,
     ) -> None:
         self.manifest = manifest
         self.tasks = tasks
-        self.recovery_selection = recovery_selection
+        self.selection = selection
         self._schedule: dict[str, list[tuple[str, int, ArmName]]] = {}
         for model in manifest.models:
             for transport in manifest.transports:
@@ -390,8 +392,8 @@ class PairedArmCoordinator:
                     for task in tasks
                     if transport in task.fixture.transports
                     and (
-                        recovery_selection is None
-                        or recovery_selection.contains(model.class_name, transport, task.id, repeat_index)
+                        selection is None
+                        or selection.contains(model.class_name, transport, task.id, repeat_index)
                     )
                     for arm in planned_arm_order(task.id, repeat_index, manifest.paired_order_seed)
                 ]
@@ -400,6 +402,10 @@ class PairedArmCoordinator:
         self._reused: dict[ArmName, set[tuple[str, str, int]]] = {
             "baseline": set(),
             "candidate": set(),
+        }
+        self._reused_outcomes: dict[ArmName, dict[tuple[str, str, int], TrialOutcome]] = {
+            "baseline": {},
+            "candidate": {},
         }
         self._events = [dict(event) for event in (initial_events or [])]
         sequences = [event.get("sequence") for event in self._events]
@@ -425,6 +431,7 @@ class PairedArmCoordinator:
         async with self._condition:
             if arm in self._registered:
                 raise RuntimeContractError(f"paired arm {arm} registered twice")
+            self._reused_outcomes[arm] = dict(reused)
             for identity, outcome in reused.items():
                 cell, task_id, repeat_index = identity
                 expected = planned_arm_order(task_id, repeat_index, self.manifest.paired_order_seed)
@@ -436,6 +443,8 @@ class PairedArmCoordinator:
             self._registered.add(arm)
             if self._registered == {"baseline", "candidate"}:
                 self._validate_reused_prefixes()
+                if self.selection is not None:
+                    self._restore_selection_events()
                 for cell in self._schedule:
                     self._advance_reused(cell)
             self._condition.notify_all()
@@ -451,6 +460,50 @@ class PairedArmCoordinator:
                     raise RuntimeContractError(
                         f"paired resume checkpoint order is not a completed prefix for {cell}"
                     )
+
+    def _restore_selection_events(self) -> None:
+        restored: list[dict[str, Any]] = []
+        for arm, reused in self._reused_outcomes.items():
+            for (cell, task_id, repeat_index), outcome in reused.items():
+                sequence = outcome.paired_execution_sequence
+                order_position = outcome.paired_order_position
+                if sequence is None or order_position is None:
+                    raise RuntimeContractError("selection resume checkpoint is missing paired execution lineage")
+                restored.append(
+                    {
+                        "sequence": sequence,
+                        "cell": cell,
+                        "task_id": task_id,
+                        "repeat_index": repeat_index,
+                        "arm": arm,
+                        "order_position": order_position,
+                    }
+                )
+        restored.sort(key=lambda event: event["sequence"])
+        sequences = [event["sequence"] for event in restored]
+        if sequences != list(range(1, len(restored) + 1)):
+            raise RuntimeContractError("selection resume checkpoint has a gap or duplicate in paired execution lineage")
+        seen: set[tuple[str, str, int, str]] = set()
+        per_cell: dict[str, list[tuple[str, int, ArmName]]] = defaultdict(list)
+        for event in restored:
+            key = (event["cell"], event["task_id"], event["repeat_index"], event["arm"])
+            if key in seen:
+                raise RuntimeContractError("selection resume checkpoint duplicates a paired execution event")
+            seen.add(key)
+            per_cell[event["cell"]].append(
+                (event["task_id"], event["repeat_index"], cast(ArmName, event["arm"]))
+            )
+            expected_order = planned_arm_order(
+                event["task_id"], event["repeat_index"], self.manifest.paired_order_seed
+            ).index(cast(ArmName, event["arm"]))
+            if event["order_position"] != expected_order:
+                raise RuntimeContractError("selection resume checkpoint changed the paired arm order")
+        for cell, restored_schedule in per_cell.items():
+            if restored_schedule != self._schedule[cell][: len(restored_schedule)]:
+                raise RuntimeContractError("selection resume checkpoint does not preserve the paired schedule prefix")
+        self._events = restored
+        self._sequence = len(restored)
+        self._historical_identities = seen
 
     async def wait_until_registered(self) -> None:
         async with self._condition:
@@ -599,7 +652,7 @@ class BenchmarkRunner:
         paired_coordinator: PairedArmCoordinator | None = None,
         shared_ledger: BudgetLedger | None = None,
         continuation: AmendmentPlan | None = None,
-        recovery_selection: RecoverySelection | None = None,
+        selection: ToolGuidanceSelection | None = None,
     ) -> None:
         if checkpoint_path is not None and resume_path is not None and checkpoint_path != resume_path:
             raise ValueError("--checkpoint and --resume must reference the same path")
@@ -612,8 +665,8 @@ class BenchmarkRunner:
         self.paired_coordinator = paired_coordinator
         self.shared_ledger = shared_ledger
         self.continuation = continuation
-        self.recovery_selection = recovery_selection
-        if continuation is not None and recovery_selection is not None:
+        self.selection = selection
+        if continuation is not None and selection is not None:
             raise ValueError("AKB-361 selection cannot reuse amendment continuation inputs")
         if continuation is not None and paired_coordinator is None:
             raise ValueError("AKB-361 continuation requires the paired execution coordinator")
@@ -696,7 +749,7 @@ class BenchmarkRunner:
                     if transport not in task.fixture.transports:
                         continue
                     for repeat_index in range(1, self.manifest.repeats + 1):
-                        if self.recovery_selection is not None and not self.recovery_selection.contains(
+                        if self.selection is not None and not self.selection.contains(
                             model_spec.class_name,
                             transport,
                             task.id,
@@ -747,6 +800,7 @@ class BenchmarkRunner:
             secrets=resolver.secret_values(),
             continuation=(self.continuation.checkpoint_lineage[cast(ArmName, self.arm)] if self.continuation else None),
             resume=self.resume_path is not None,
+            reuse_terminal_trials=self.selection is not None,
         )
 
     @staticmethod
@@ -845,8 +899,8 @@ class BenchmarkRunner:
         completed_trials = sum(len(outcomes) for outcomes in source_trials.values())
         all_outcomes = [outcome for outcomes in source_trials.values() for outcome in outcomes]
         expected_trials = (
-            len(self.recovery_selection.selected_trials)
-            if self.recovery_selection is not None
+            len(self.selection.selected_trials)
+            if self.selection is not None
             else sum(
                 1
                 for model_spec in self.manifest.models
@@ -1043,8 +1097,8 @@ class BenchmarkRunner:
                 "request_timeout_seconds": self.manifest.budget.request_timeout_seconds,
             },
         }
-        if self.recovery_selection is not None:
-            artifact["recovery_selection"] = self.recovery_selection.artifact_metadata()
+        if self.selection is not None:
+            artifact["selection"] = self.selection.artifact_metadata()
         if failure is not None:
             cleanup = cleanup_errors or []
             stage = failure_stage or _exception_stage(failure, "run")
@@ -1130,6 +1184,7 @@ class BenchmarkRunner:
         resolver: CredentialResolver,
         ledger: BudgetLedger,
         catalog_input_schemas: Mapping[str, dict[str, dict[str, Any]]] | None = None,
+        catalog_server_instructions: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         self._resolver = resolver
         required_cells = [
@@ -1153,12 +1208,29 @@ class BenchmarkRunner:
             cell_key = f"{model_spec.class_name}:{transport}"
             cell_fixture = cell_fixtures[cell_key]
             assert cell_fixture is not None
+            task = self._smoke_task(transport)
+            catalog_key = f"{transport}:{task.fixture.credential_profile}"
+            server_instructions = (
+                catalog_server_instructions.get(catalog_key)
+                if catalog_server_instructions is not None
+                else None
+            )
+            if catalog_server_instructions is not None and not server_instructions:
+                raise RuntimeContractError(
+                    f"captured catalog is missing server instructions for {catalog_key}",
+                    stage="catalog_capture",
+                )
             cached = (
                 self._checkpoint_store.smoke_outcome_for(cell_key)
                 if self._checkpoint_store is not None
                 else None
             )
             if cached is not None:
+                if not has_server_instructions_evidence(cached, server_instructions):
+                    raise RuntimeContractError(
+                        f"cached smoke gate cell {cell_key} does not prove sealed server instructions reached the model",
+                        stage="smoke_gate",
+                    )
                 registered_model = self.provider_registry["models"][model_spec.model_id]
                 route_observed, route_valid = validate_routing_evidence(
                     cached.provider_evidence,
@@ -1177,9 +1249,7 @@ class BenchmarkRunner:
                     "outcome": safe_json(cached.model_dump(mode="json"), self.secrets),
                 }
 
-            task = self._smoke_task(transport)
             model = build_model(model_spec)
-            catalog_key = f"{transport}:{task.fixture.credential_profile}"
             if catalog_input_schemas is None:
                 input_schemas = None
             else:
@@ -1247,6 +1317,7 @@ class BenchmarkRunner:
                         request_timeout_seconds=request_timeout_seconds,
                         request_guard=request_guard,
                         input_schemas=input_schemas,
+                        expected_server_instructions=server_instructions,
                         timing_sink=self._timing.record if self._timing is not None else None,
                     )
                 else:
@@ -1265,6 +1336,7 @@ class BenchmarkRunner:
                             request_timeout_seconds=request_timeout_seconds,
                             request_guard=request_guard,
                             input_schemas=input_schemas,
+                            expected_server_instructions=server_instructions,
                             timing_sink=self._timing.record if self._timing is not None else None,
                         )
                 await ledger.charge(outcome, guard=request_guard)
@@ -1304,6 +1376,7 @@ class BenchmarkRunner:
                 and outcome.transport == transport
                 and (outcome.routing_observed, outcome.routing_valid) == (route_observed, route_valid)
                 and route_valid
+                and has_server_instructions_evidence(outcome, server_instructions)
                 and all(
                     item.get("model") == model_spec.model_id
                     for item in outcome.provider_evidence
@@ -1599,8 +1672,8 @@ class BenchmarkRunner:
             "provider_registry_hash": self.provider_registry.get("snapshot_hash"),
             "provider_registry_status": self.provider_registry.get("status"),
         }
-        if self.recovery_selection is not None:
-            seal["recovery_selection"] = self.recovery_selection.artifact_metadata()
+        if self.selection is not None:
+            seal["selection"] = self.selection.artifact_metadata()
         return seal
 
     async def _bind_pre_smoke_seal(
@@ -1658,6 +1731,7 @@ class BenchmarkRunner:
         incomplete_reasons: set[str],
         reports: dict[str, Any],
         catalog_input_schemas: Mapping[str, dict[str, dict[str, Any]]] | None = None,
+        catalog_server_instructions: Mapping[str, str] | None = None,
     ) -> None:
         model = build_model(model_spec)
         executor = TrialExecutor(
@@ -1677,6 +1751,14 @@ class BenchmarkRunner:
                     for profile in profiles
                 }
                 if catalog_input_schemas is not None
+                else None
+            ),
+            server_instructions_by_profile=(
+                {
+                    profile: catalog_server_instructions[f"{transport}:{profile}"]
+                    for profile in profiles
+                }
+                if catalog_server_instructions is not None
                 else None
             ),
             timing_sink=self._timing.record if self._timing is not None else None,
@@ -1976,11 +2058,16 @@ class BenchmarkRunner:
                     key: input_schemas_from_catalog(snapshot)
                     for key, snapshot in catalogs.items()
                 }
+                catalog_server_instructions = {
+                    key: str(snapshot.server_discover["instructions"])
+                    for key, snapshot in catalogs.items()
+                }
                 await self._run_smoke_gate(
                     fixtures=fixtures,
                     resolver=resolver,
                     ledger=ledger,
                     catalog_input_schemas=catalog_input_schemas,
+                    catalog_server_instructions=catalog_server_instructions,
                 )
             else:
                 self._smoke_gate = {
@@ -2013,6 +2100,7 @@ class BenchmarkRunner:
                                 incomplete_reasons=incomplete_reasons,
                                 reports=reports,
                                 catalog_input_schemas=catalog_input_schemas,
+                                catalog_server_instructions=catalog_server_instructions,
                             )
                         )
             else:
@@ -2031,6 +2119,7 @@ class BenchmarkRunner:
                         incomplete_reasons=incomplete_reasons,
                         reports=reports,
                         catalog_input_schemas=catalog_input_schemas,
+                        catalog_server_instructions=catalog_server_instructions,
                     )
         except asyncio.CancelledError:
             primary_error = RuntimeContractError(
@@ -2169,14 +2258,6 @@ def outcomes_from_report(
     if any(count != repeat_count for count in seen.values()):
         raise RuntimeError("Pydantic Evals report did not contain the registered repeat count")
     return outcomes
-
-
-def planned_arm_order(task_id: str, repeat_index: int, seed: str) -> tuple[ArmName, ArmName]:
-    """Return a stable, preregistered counterbalanced arm order for one pair."""
-
-    digest = hashlib.sha256(f"{seed}:{task_id}".encode()).digest()
-    baseline_first = (digest[0] + repeat_index) % 2 == 0
-    return ("baseline", "candidate") if baseline_first else ("candidate", "baseline")
 
 
 def load_inputs(
@@ -2557,11 +2638,11 @@ def _validate_preregistered_inputs(
         if continuation_lineage is not None
         else artifact.get("run_manifest_hash")
     )
-    recovery_selection = artifact.get("recovery_selection")
-    if recovery_selection is not None and inputs.get("recovery_selection") != recovery_selection:
-        raise ValueError(f"{arm} recovery selection differs from its pre-smoke seal")
-    if recovery_selection is None and "recovery_selection" in inputs:
-        raise ValueError(f"{arm} pre-smoke seal contains an unbound recovery selection")
+    selection = artifact.get("selection")
+    if selection is not None and inputs.get("selection") != selection:
+        raise ValueError(f"{arm} selection differs from its pre-smoke seal")
+    if selection is None and "selection" in inputs:
+        raise ValueError(f"{arm} pre-smoke seal contains an unbound selection")
     if (
         inputs.get("arm") != arm
         or inputs.get("source_revision") != artifact.get("source_revision")
@@ -2977,14 +3058,63 @@ def _artifact_integrity_error(artifact: dict[str, Any], arm: ArmName) -> str | N
     return None
 
 
+def _instruction_text_for_outcome(
+    artifact: dict[str, Any],
+    outcome: TrialOutcome,
+    tasks_by_id: Mapping[str, TaskManifest],
+) -> str | None:
+    task = tasks_by_id.get(outcome.task_id)
+    catalogs = artifact.get("catalogs")
+    if task is None or not isinstance(catalogs, dict):
+        return None
+    snapshot = catalogs.get(f"{outcome.transport}:{task.fixture.credential_profile}")
+    discovery = snapshot.get("server_discover") if isinstance(snapshot, dict) else None
+    instructions = discovery.get("instructions") if isinstance(discovery, dict) else None
+    return instructions if isinstance(instructions, str) else None
+
+
+def _artifact_has_instruction_input_proof(
+    artifact: dict[str, Any],
+    tasks: list[TaskManifest],
+) -> bool:
+    tasks_by_id = {task.id: task for task in tasks}
+    outcomes = _all_run_outcomes(artifact.get("runs", {}))
+    if not outcomes or any(
+        not has_server_instructions_evidence(
+            outcome,
+            _instruction_text_for_outcome(artifact, outcome, tasks_by_id),
+        )
+        for outcome in outcomes
+    ):
+        return False
+    smoke_gate = artifact.get("smoke_gate")
+    cells = smoke_gate.get("cells") if isinstance(smoke_gate, dict) else None
+    if not isinstance(cells, list) or not cells:
+        return False
+    for cell in cells:
+        raw_outcome = cell.get("outcome") if isinstance(cell, dict) else None
+        if not isinstance(raw_outcome, dict):
+            return False
+        try:
+            outcome = TrialOutcome.model_validate(raw_outcome)
+        except ValueError:
+            return False
+        if not has_server_instructions_evidence(
+            outcome,
+            _instruction_text_for_outcome(artifact, outcome, tasks_by_id),
+        ):
+            return False
+    return True
+
+
 def compare_artifacts(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     """Compare a sealed paired run using only the preregistered BCa gates."""
 
-    if "recovery_selection" in baseline or "recovery_selection" in candidate:
+    if "selection" in baseline or "selection" in candidate:
         return _empty_comparison(
             baseline,
             candidate,
-            "selected recovery evidence cannot support the full benchmark adoption verdict",
+            "selected trial evidence cannot support the full benchmark adoption verdict",
         )
     for artifact, arm in ((baseline, cast(ArmName, "baseline")), (candidate, cast(ArmName, "candidate"))):
         integrity_error = _artifact_integrity_error(artifact, arm)
@@ -3090,6 +3220,14 @@ def compare_artifacts(baseline: dict[str, Any], candidate: dict[str, Any]) -> di
         return _empty_comparison(baseline, candidate, f"trial evidence is invalid: {exc}")
     if set(baseline_map) != set(candidate_map):
         return _empty_comparison(baseline, candidate, "paired trial identities differ")
+    if not _artifact_has_instruction_input_proof(baseline, tasks) or not _artifact_has_instruction_input_proof(
+        candidate, tasks
+    ):
+        return _empty_comparison(
+            baseline,
+            candidate,
+            "model-input evidence does not prove the sealed server instructions reached every request",
+        )
     task_pairs = {
         item["id"]: item["pair_id"]
         for item in baseline.get("task_locales", [])
@@ -3391,8 +3529,8 @@ def _build_artifact_hash_input(artifact: dict[str, Any], *, trial_order: list[di
         hash_input["continuation_lineage"] = artifact["continuation_lineage"]
     if "continuation_runtime_provenance" in artifact:
         hash_input["continuation_runtime_provenance"] = artifact["continuation_runtime_provenance"]
-    if "recovery_selection" in artifact:
-        hash_input["recovery_selection"] = artifact["recovery_selection"]
+    if "selection" in artifact:
+        hash_input["selection"] = artifact["selection"]
     return hash_input
 
 
@@ -3616,7 +3754,7 @@ def _capability_profile(
             "cache_tools": False,
             "cache_resources": False,
             "cache_prompts": False,
-            "include_instructions": False,
+            "include_instructions": True,
             "prefer_tasks": False,
             "automatic_tool_retry": False,
         },

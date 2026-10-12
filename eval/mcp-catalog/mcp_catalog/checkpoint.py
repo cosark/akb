@@ -15,7 +15,7 @@ from pydantic import Field
 
 from .contracts import ArmName, ContractModel, TaskLocale, TaskManifest, hash_json
 from .evidence import safe_json
-from .execution import TrialOutcome, has_measured_evidence
+from .execution import TrialOutcome, has_measured_evidence, has_server_instructions_evidence
 
 
 CHECKPOINT_SCHEMA_VERSION: Literal[3] = 3
@@ -182,6 +182,7 @@ def valid_smoke_outcome(outcome: TrialOutcome, task: TaskManifest) -> bool:
     return (
         outcome.error is None
         and valid_completed_outcome(outcome, task)
+        and has_server_instructions_evidence(outcome)
         and len(outcome.provider_evidence) == outcome.model_requests
         and all(
             _smoke_response_has_usage(item, outcome.model_id)
@@ -229,6 +230,7 @@ class CheckpointStore:
         secrets: tuple[str, ...] = (),
         continuation: dict[str, Any] | None = None,
         resume: bool = False,
+        reuse_terminal_trials: bool = False,
     ) -> None:
         self.path = path
         self.header = header
@@ -241,6 +243,7 @@ class CheckpointStore:
         self.expected_smoke_cells = dict(expected_smoke_cells)
         self.secrets = secrets
         self.continuation = continuation
+        self.reuse_terminal_trials = reuse_terminal_trials
         if resume:
             if not self.path.is_file():
                 raise CheckpointError(f"resume checkpoint does not exist: {self.path}")
@@ -373,6 +376,19 @@ class CheckpointStore:
         """Return a prior result eligible for reuse in this run mode."""
 
         if self.continuation is None:
+            if self.reuse_terminal_trials:
+                record = self.document.records.get(checkpoint_key_digest(key))
+                if record is None:
+                    return None
+                if (
+                    record.status == "completed"
+                    and (
+                        not valid_completed_outcome(record.outcome, self._task_for_key(key))
+                        or not has_server_instructions_evidence(record.outcome)
+                    )
+                ):
+                    raise CheckpointError("selection checkpoint contains an invalid completed trial")
+                return record.outcome
             return self.completed_outcome_for(key)
         record = self.document.records.get(checkpoint_key_digest(key))
         if record is None:

@@ -98,6 +98,11 @@ def _public_catalog_with_action_selectors(
         tool_count=len(tools),
         catalog_hash=hash_json(tools),
         catalog_token_estimate=token_estimate(tools),
+        server_discover={
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": {},
+            "instructions": "Synthetic server instructions.",
+        },
         tools=tools,
     )
 
@@ -261,6 +266,11 @@ def test_catalog_hash_and_schema_preservation_are_deterministic() -> None:
         tool_count=1,
         catalog_hash=hash_json(tools),
         catalog_token_estimate=token_estimate(tools),
+        server_discover={
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": {},
+            "instructions": "Synthetic server instructions.",
+        },
         tools=tools,
     )
 
@@ -280,6 +290,11 @@ def test_catalog_snapshot_rejects_tampered_hash() -> None:
             tool_count=1,
             catalog_hash="0" * 64,
             catalog_token_estimate=token_estimate(tools),
+            server_discover={
+                "supportedVersions": ["2026-07-28"],
+                "capabilities": {},
+                "instructions": "Synthetic server instructions.",
+            },
             tools=tools,
         )
 

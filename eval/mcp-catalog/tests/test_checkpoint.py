@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from decimal import Decimal
 from pathlib import Path
 
@@ -14,7 +15,11 @@ from mcp_catalog.checkpoint import (
 )
 from mcp_catalog.contracts import hash_json, load_run_manifest, load_task_corpus
 from mcp_catalog.execution import BudgetExceeded, BudgetLedger, ToolCallRecord, TrialOutcome
-from paired_artifact_factory import provider_name_for_model
+from paired_artifact_factory import (
+    SYNTHETIC_SERVER_INSTRUCTIONS,
+    provider_name_for_model,
+    synthetic_model_input_evidence,
+)
 
 ROOT = Path(__file__).parents[1]
 
@@ -80,6 +85,8 @@ def _outcome(key: CheckpointKey, *, error: str | None = None) -> TrialOutcome:
         cost_source="provider_response",
         routing_observed=True,
         routing_valid=True,
+        server_instructions_sha256=hashlib.sha256(SYNTHETIC_SERVER_INSTRUCTIONS.encode("utf-8")).hexdigest(),
+        model_input_evidence=synthetic_model_input_evidence(1),
         state_available_before=True,
         state_available_after=True,
         state_before={},
@@ -106,7 +113,13 @@ def _outcome(key: CheckpointKey, *, error: str | None = None) -> TrialOutcome:
     )
 
 
-def _store(path: Path, *, resume: bool = False, secrets: tuple[str, ...] = ()) -> tuple[CheckpointStore, CheckpointKey]:
+def _store(
+    path: Path,
+    *,
+    resume: bool = False,
+    secrets: tuple[str, ...] = (),
+    reuse_terminal_trials: bool = False,
+) -> tuple[CheckpointStore, CheckpointKey]:
     _manifest, tasks, header, key, expected = _inputs()
     return (
         CheckpointStore(
@@ -122,6 +135,7 @@ def _store(path: Path, *, resume: bool = False, secrets: tuple[str, ...] = ()) -
             },
             secrets=secrets,
             resume=resume,
+            reuse_terminal_trials=reuse_terminal_trials,
         ),
         key,
     )
@@ -140,6 +154,27 @@ def test_trial_checkpoint_is_atomic_redacted_and_reusable(tmp_path: Path) -> Non
     reused = resumed.completed_outcome_for(key)
     assert reused is not None
     assert resumed.document.spent.model_requests == 1
+
+
+def test_selection_resume_reuses_failed_and_incomplete_terminal_rows(tmp_path: Path) -> None:
+    for status in ("failed", "incomplete"):
+        path = tmp_path / f"{status}.json"
+        store, key = _store(path, reuse_terminal_trials=True)
+        outcome = _outcome(key, error="synthetic first outcome")
+        store.record_trial(key, outcome, status=status)
+
+        assert store.reusable_outcome_for(key) == outcome
+
+
+def test_selection_resume_rejects_completed_rows_without_instruction_proof(tmp_path: Path) -> None:
+    store, key = _store(tmp_path / "completed.json", reuse_terminal_trials=True)
+    outcome = _outcome(key).model_copy(
+        update={"server_instructions_sha256": None, "model_input_evidence": []}
+    )
+    store.record_trial(key, outcome, status="completed")
+
+    with pytest.raises(CheckpointError, match="invalid completed trial"):
+        store.reusable_outcome_for(key)
 
 
 def test_resume_rejects_checkpoint_from_a_prior_task_corpus_seal(tmp_path: Path) -> None:
@@ -495,6 +530,7 @@ def test_smoke_checkpoint_requires_a_successful_call_and_follow_up_response(tmp_
                     "first_logical_operation": "search",
                     "follow_up_terminal_response": True,
                 "model_requests": 2,
+                    "model_input_evidence": synthetic_model_input_evidence(2),
                 "provider_evidence": [
                     {
                         "model": model_id,

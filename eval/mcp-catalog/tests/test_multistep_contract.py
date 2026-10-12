@@ -89,6 +89,11 @@ def test_captured_catalog_schema_is_the_scorer_authority() -> None:
         tool_count=1,
         catalog_hash=hash_json(tools),
         catalog_token_estimate=token_estimate(tools),
+        server_discover={
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": {},
+            "instructions": "Synthetic server instructions.",
+        },
         tools=tools,
     )
 

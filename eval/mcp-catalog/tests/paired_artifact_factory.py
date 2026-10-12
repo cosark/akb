@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections import Counter, defaultdict
 from copy import deepcopy
 from pathlib import Path
@@ -12,7 +13,7 @@ from mcp_catalog.contracts import (
     load_task_corpus,
     token_estimate,
 )
-from mcp_catalog.execution import ToolCallRecord, TrialOutcome
+from mcp_catalog.execution import ModelInputEvidence, ToolCallRecord, TrialOutcome
 from mcp_catalog.runner import (
     _build_artifact_hash_input,
     _expected_openrouter_canonical_slug,
@@ -23,6 +24,7 @@ from mcp_catalog.runtime import StateObservation
 ROOT = Path(__file__).parents[1]
 FIXTURE_ROOT = ROOT / "fixtures"
 OPENROUTER_PROVIDER_NAMES = {"deepinfra": "DeepInfra", "akashml": "AkashML"}
+SYNTHETIC_SERVER_INSTRUCTIONS = "Synthetic server instructions."
 ARTIFACT_VERSIONS = {"backend_artifact_version": "1.0.0", "proxy_artifact_version": "1.0.0"}
 EXECUTION_ENVIRONMENT = {
     "python": "3.14.0 synthetic fixture",
@@ -36,6 +38,19 @@ EXECUTION_ENVIRONMENT = {
     },
     "uv_lock_sha256": "a" * 64,
 }
+
+
+def synthetic_model_input_evidence(request_count: int) -> list[ModelInputEvidence]:
+    instructions_sha256 = hashlib.sha256(SYNTHETIC_SERVER_INSTRUCTIONS.encode("utf-8")).hexdigest()
+    return [
+        ModelInputEvidence(
+            request_index=index,
+            model_input_sha256=hashlib.sha256(f"synthetic-model-input-{index}".encode()).hexdigest(),
+            server_instructions_sha256=instructions_sha256,
+            server_instructions_present=True,
+        )
+        for index in range(1, request_count + 1)
+    ]
 
 
 def provider_name_for_model(model: Any) -> str:
@@ -512,6 +527,8 @@ def _make_outcome(
         cost_source="provider_response",
         routing_observed=True,
         routing_valid=True,
+        server_instructions_sha256=hashlib.sha256(SYNTHETIC_SERVER_INSTRUCTIONS.encode("utf-8")).hexdigest(),
+        model_input_evidence=synthetic_model_input_evidence(request_count),
     )
     before, after = _state_observations(task.expected_final_state)
     outcome.state_checkpoint_observations = _checkpoint_observations(task)
@@ -900,5 +917,10 @@ def _catalog_snapshot(manifest: Any, arm: str, transport: str) -> CatalogSnapsho
         tool_count=len(tools),
         catalog_hash=hash_json(tools),
         catalog_token_estimate=token_estimate(tools),
+        server_discover={
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": {},
+            "instructions": SYNTHETIC_SERVER_INSTRUCTIONS,
+        },
         tools=tools,
     )

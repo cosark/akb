@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,7 +14,13 @@ from mcp_catalog.contracts import load_run_manifest, load_task_corpus
 from mcp_catalog.execution import ToolCallRecord, TrialOutcome
 from mcp_catalog.runner import BenchmarkRunner
 from mcp_catalog.runtime import RuntimeDescriptor
-from paired_artifact_factory import _catalog_snapshot, provider_name_for_model, provider_registry_snapshot
+from paired_artifact_factory import (
+    SYNTHETIC_SERVER_INSTRUCTIONS,
+    _catalog_snapshot,
+    provider_name_for_model,
+    provider_registry_snapshot,
+    synthetic_model_input_evidence,
+)
 from test_runtime_contract import descriptor_dict
 
 ROOT = Path(__file__).parents[1]
@@ -150,6 +157,8 @@ def _outcome(task, model_spec, transport, repeat_index: int) -> TrialOutcome:
         cost_source="provider_response",
         routing_observed=True,
         routing_valid=True,
+        server_instructions_sha256=hashlib.sha256(SYNTHETIC_SERVER_INSTRUCTIONS.encode("utf-8")).hexdigest(),
+        model_input_evidence=synthetic_model_input_evidence(2),
         state_available_before=True,
         state_available_after=True,
         state_before=_empty_state_payload(task),

@@ -180,22 +180,21 @@ The operator file is stored outside the repository and has this shape:
 Pass it with `run-paired --amendment /private/run/akb-361-continuation.json`.
 Paths may be absolute or relative to the operator file.
 
-AKB-361 provider recovery is a separate, selection-bound run. Supply the
-authorized `recovery-selection.json` and a new summary path with
-`--selection` and `--recovery-summary-output`. The selection pins 65 paired
-identities (130 fresh model trials) and both immutable parent artifact hashes;
-the runner validates those inputs, the 90 source provider failures, and the
-unchanged full corpus before starting. It keeps the original repeat and arm
-order, runs the full four-cell smoke gate for each arm, and writes new arm
-artifacts and checkpoints. Parent outcomes are not copied into or merged with
-the recovery results. The canonical comparison remains inconclusive; the
-separate recovery summary reports whether all selected trials completed.
+AKB-361's tool-guidance remeasurement is a separate selection-bound run. Supply
+the authorized 16-identity `selection.json` and a new summary path with
+`--selection` and `--selection-summary-output`. The selection pins eight prior
+candidate tool failures, eight successful controls, all four immutable parent
+artifact hashes, and the approved issue revision/content hash. The runner
+executes only those 16 identities in both arms (32 new model trials), retains
+the preregistered arm order, and runs the full four-cell smoke gate per arm.
+Parent rows remain read-only and are reported beside the new outcomes without
+being merged into the canonical run comparison. A selection sample can never
+produce an adoption verdict.
 
-The new shared ledger starts at zero and stops at `$41.89781216`, calculated
-from the `$50` registered cap less the larger `$8.10218784` prior account
-observation (the provider receipt total is `$8.04371078`). The `$0.10` per-trial
-cap and 300-second request timeout remain in force. There is no total request
-count or overall wall-time limit on this recovery run.
+The new shared ledger starts at zero and stops at `$41.43279896`, calculated
+from the `$50` registered cap less the `$8.56720104` prior spend basis. The
+`$0.10` per-trial cap and 300-second request timeout remain in force. No total
+request-count or overall wall-time limit applies to this sample.
 
 ```bash
 uv run --locked --project eval/mcp-catalog \
@@ -207,8 +206,8 @@ uv run --locked --project eval/mcp-catalog \
   --comparison-output /private/run/recovery-comparison.json \
   --baseline-checkpoint /private/run/baseline-recovery.checkpoint.json \
   --candidate-checkpoint /private/run/candidate-recovery.checkpoint.json \
-  --selection /private/run/recovery-selection.json \
-  --recovery-summary-output /private/run/recovery-summary.json
+  --selection /private/run/selection.json \
+  --selection-summary-output /private/run/selection-summary.json
 ```
 
 Standalone `run --arm ...` is for diagnostics. Independently run arms do not

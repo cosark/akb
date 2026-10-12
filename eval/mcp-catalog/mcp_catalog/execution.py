@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 import json
 import os
 import re
@@ -29,7 +30,7 @@ from pydantic_evals.evaluators import EvaluationReason, Evaluator, EvaluatorCont
 from pydantic_evals.lifecycle import CaseLifecycle
 from pydantic_evals.reporting import EvaluationReport, ScalarResult
 
-from .catalog import ConnectionSpec, create_client, create_toolset
+from .catalog import ConnectionSpec, create_client, create_toolset, discover_server
 from .contracts import (
     OPENROUTER_BASE_URL,
     BenchmarkRunManifest,
@@ -62,6 +63,14 @@ MODEL_RESPONSES: contextvars.ContextVar[list[ModelResponse] | None] = contextvar
     "mcp_catalog_model_responses",
     default=None,
 )
+MODEL_INPUT_EVIDENCE: contextvars.ContextVar[list[ModelInputEvidence] | None] = contextvars.ContextVar(
+    "mcp_catalog_model_input_evidence",
+    default=None,
+)
+SERVER_INSTRUCTIONS: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "mcp_catalog_server_instructions",
+    default=None,
+)
 PROVIDER_REQUEST_GUARD: contextvars.ContextVar[ProviderRequestGuard | None] = contextvars.ContextVar(
     "mcp_catalog_provider_request_guard",
     default=None,
@@ -70,6 +79,24 @@ PROVIDER_REQUEST_GUARD: contextvars.ContextVar[ProviderRequestGuard | None] = co
 
 class ModelConfigurationError(ValueError):
     """Raised before a provider call when the model contract is incomplete."""
+
+
+def _model_input_evidence_for(
+    messages: list[Any],
+    instructions: str,
+    request_index: int,
+) -> ModelInputEvidence:
+    serialized_input = canonical_json(safe_json(messages))
+    instructions_sha256 = hashlib.sha256(instructions.encode("utf-8")).hexdigest()
+    present = instructions in serialized_input
+    if not present:
+        raise ModelConfigurationError("server instructions are missing from the model input")
+    return ModelInputEvidence(
+        request_index=request_index,
+        model_input_sha256=hashlib.sha256(serialized_input.encode("utf-8")).hexdigest(),
+        server_instructions_sha256=instructions_sha256,
+        server_instructions_present=True,
+    )
 
 
 class BudgetExceeded(RuntimeError):
@@ -145,6 +172,12 @@ class OpenRouterChatModel(OpenAIChatModel):
     """PydanticAI's OpenAI-compatible model with OpenRouter response evidence."""
 
     async def request(self, messages: list[Any], model_settings: Any, model_request_parameters: Any) -> ModelResponse:
+        instructions = SERVER_INSTRUCTIONS.get()
+        evidence = MODEL_INPUT_EVIDENCE.get()
+        if evidence is not None:
+            if instructions is None:
+                raise ModelConfigurationError("server instructions were not sealed before the model request")
+            evidence.append(_model_input_evidence_for(messages, instructions, len(evidence) + 1))
         guard = PROVIDER_REQUEST_GUARD.get()
         receipt = await guard() if guard is not None else None
         response = await super().request(messages, model_settings, model_request_parameters)
@@ -213,6 +246,15 @@ class ToolCallRecord(BaseModel):
     @property
     def argument_valid(self) -> bool:
         return self.raw_args_valid and self.server_args_equal_raw
+
+
+class ModelInputEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_index: int = Field(ge=1)
+    model_input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    server_instructions_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    server_instructions_present: bool
 
 
 class TrialOutcome(BaseModel):
@@ -291,6 +333,8 @@ class TrialOutcome(BaseModel):
     cost_source: Literal["provider_response", "registered_price_snapshot"] = "registered_price_snapshot"
     routing_observed: bool = False
     routing_valid: bool = False
+    server_instructions_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    model_input_evidence: list[ModelInputEvidence] = Field(default_factory=list)
 
     @property
     def tool_call_count(self) -> int:
@@ -736,6 +780,32 @@ def _matching_accepted_behaviors(outcome: TrialOutcome, task: TaskManifest) -> l
         if operations_match and resources_match and mode_matches and stopping_matches:
             matched.append(behavior.id)
     return matched
+
+
+def has_server_instructions_evidence(
+    outcome: TrialOutcome,
+    expected_instructions: str | None = None,
+) -> bool:
+    if expected_instructions is not None:
+        if not expected_instructions.strip():
+            return False
+        expected_sha256 = hashlib.sha256(expected_instructions.encode("utf-8")).hexdigest()
+    else:
+        expected_sha256 = outcome.server_instructions_sha256
+        if expected_sha256 is None:
+            return False
+    return (
+        outcome.server_instructions_sha256 == expected_sha256
+        and outcome.model_requests > 0
+        and len(outcome.model_input_evidence) == outcome.model_requests
+        and [item.request_index for item in outcome.model_input_evidence]
+        == list(range(1, outcome.model_requests + 1))
+        and all(
+            item.server_instructions_present
+            and item.server_instructions_sha256 == expected_sha256
+            for item in outcome.model_input_evidence
+        )
+    )
 
 
 def has_measured_evidence(outcome: TrialOutcome, task: TaskManifest) -> bool:
@@ -1817,6 +1887,7 @@ class TrialExecutor:
         secrets_for: Callable[[str], tuple[str, ...]],
         ledger: BudgetLedger,
         input_schemas_by_profile: dict[str, dict[str, dict[str, Any]]] | None = None,
+        server_instructions_by_profile: dict[str, str] | None = None,
         outcome_sink: Callable[[TrialOutcome], None] | None = None,
         timing_sink: Callable[[TimingCategory, float, float], None] | None = None,
     ) -> None:
@@ -1831,6 +1902,7 @@ class TrialExecutor:
         self.secrets_for = secrets_for
         self.ledger = ledger
         self.input_schemas_by_profile = input_schemas_by_profile or {}
+        self.server_instructions_by_profile = server_instructions_by_profile or {}
         self.outcome_sink = outcome_sink
         self.timing_sink = timing_sink
         self._outcome_counts: dict[str, int] = defaultdict(int)
@@ -1895,7 +1967,11 @@ class TrialExecutor:
             return outcome
         try:
             partial_messages: list[ModelResponse] = []
+            model_input_evidence: list[ModelInputEvidence] = []
+            server_instructions_sha256: str | None = None
             capture_token = MODEL_RESPONSES.set(partial_messages)
+            input_evidence_token = MODEL_INPUT_EVIDENCE.set(model_input_evidence)
+            instructions_token = SERVER_INSTRUCTIONS.set(None)
             try:
                 if self.transport == "stdio":
                     command, args, environment = self.fixture.stdio_command(token)
@@ -1913,7 +1989,16 @@ class TrialExecutor:
                         token=token,
                         app_origin=self.fixture.descriptor.app_origin,
                     )
-                client = create_client(spec)
+                discovery = await discover_server(spec)
+                expected_instructions = self.server_instructions_by_profile.get(task.fixture.credential_profile)
+                if not expected_instructions or discovery.instructions != expected_instructions:
+                    raise RuntimeContractError(
+                        "server instructions differ from the pre-smoke catalog seal",
+                        stage="catalog_capture",
+                    )
+                server_instructions_sha256 = hashlib.sha256(discovery.instructions.encode("utf-8")).hexdigest()
+                SERVER_INSTRUCTIONS.set(discovery.instructions)
+                client = create_client(spec, discovery)
                 toolset = create_toolset(client, recorder)
                 async with toolset:
                     if input_schemas is None:
@@ -1940,6 +2025,8 @@ class TrialExecutor:
                     else redact_exception(exc, secrets)
                 )
             finally:
+                SERVER_INSTRUCTIONS.reset(instructions_token)
+                MODEL_INPUT_EVIDENCE.reset(input_evidence_token)
                 MODEL_RESPONSES.reset(capture_token)
             latency = time.perf_counter() - started
             outcome = outcome_from_run(
@@ -1958,6 +2045,8 @@ class TrialExecutor:
                 secrets=secrets,
                 partial_messages=partial_messages,
                 request_count=request_guard.requests,
+                server_instructions_sha256=server_instructions_sha256,
+                model_input_evidence=model_input_evidence,
             )
             self._tag_paired_turn(outcome)
             if self.timing_sink is not None and (
@@ -2000,6 +2089,7 @@ async def execute_smoke(
     request_timeout_seconds: float,
     request_guard: ProviderRequestGuard | None = None,
     input_schemas: dict[str, dict[str, Any]] | None = None,
+    expected_server_instructions: str | None = None,
     timing_sink: Callable[[TimingCategory, float, float], None] | None = None,
 ) -> TrialOutcome:
     """Make one real full-catalog request for the pre-run four-cell gate."""
@@ -2028,7 +2118,11 @@ async def execute_smoke(
     result: Any = None
     error: str | None = None
     partial_messages: list[ModelResponse] = []
+    model_input_evidence: list[ModelInputEvidence] = []
+    server_instructions_sha256: str | None = None
     capture_token = MODEL_RESPONSES.set(partial_messages)
+    input_evidence_token = MODEL_INPUT_EVIDENCE.set(model_input_evidence)
+    instructions_token = SERVER_INSTRUCTIONS.set(None)
     try:
         if transport == "stdio":
             command, args, environment = fixture.stdio_command(token)
@@ -2046,7 +2140,15 @@ async def execute_smoke(
                 token=token,
                 app_origin=fixture.descriptor.app_origin,
             )
-        client = create_client(spec)
+        discovery = await discover_server(spec)
+        if not expected_server_instructions or discovery.instructions != expected_server_instructions:
+            raise RuntimeContractError(
+                "server instructions differ from the pre-smoke catalog seal",
+                stage="catalog_capture",
+            )
+        server_instructions_sha256 = hashlib.sha256(discovery.instructions.encode("utf-8")).hexdigest()
+        SERVER_INSTRUCTIONS.set(discovery.instructions)
+        client = create_client(spec, discovery)
         toolset = create_toolset(client, recorder)
         async with toolset:
             if input_schemas is None:
@@ -2073,6 +2175,8 @@ async def execute_smoke(
             else redact_exception(exc, secrets)
         )
     finally:
+        SERVER_INSTRUCTIONS.reset(instructions_token)
+        MODEL_INPUT_EVIDENCE.reset(input_evidence_token)
         MODEL_RESPONSES.reset(capture_token)
     outcome = outcome_from_run(
         task=task,
@@ -2090,6 +2194,8 @@ async def execute_smoke(
         secrets=secrets,
         partial_messages=partial_messages,
         request_count=request_guard.requests if request_guard is not None else None,
+        server_instructions_sha256=server_instructions_sha256,
+        model_input_evidence=model_input_evidence,
     )
     material_calls = [
         call for call in outcome.tool_calls
@@ -2194,6 +2300,8 @@ def outcome_from_run(
     public_operations: list[PublicOperation] | None = None,
     partial_messages: list[ModelResponse] | None = None,
     request_count: int | None = None,
+    server_instructions_sha256: str | None = None,
+    model_input_evidence: list[ModelInputEvidence] | None = None,
 ) -> TrialOutcome:
     raw_calls: list[tuple[str, Any]] = []
     provider_evidence: list[dict[str, Any]] = []
@@ -2288,6 +2396,8 @@ def outcome_from_run(
         cost_source=cost_source,
         routing_observed=routing_observed,
         routing_valid=routing_valid,
+        server_instructions_sha256=server_instructions_sha256,
+        model_input_evidence=list(model_input_evidence or []),
     )
 
 
