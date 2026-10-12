@@ -19,7 +19,7 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 
 import mcp_catalog.execution as execution_module
 import mcp_catalog.runner as runner_module
-from mcp_catalog.contracts import OPENROUTER_BASE_URL, load_run_manifest, load_task_corpus
+from mcp_catalog.contracts import BenchmarkRunManifest, OPENROUTER_BASE_URL, load_run_manifest, load_task_corpus
 from mcp_catalog.execution import (
     BudgetExceeded,
     BudgetLedger,
@@ -64,9 +64,21 @@ def _model_spec():
     return load_run_manifest(ROOT / "config" / "run.json").models[0]
 
 
+def _streamlake_manifest() -> BenchmarkRunManifest:
+    raw = load_run_manifest(ROOT / "config" / "run.json").model_dump(mode="json")
+    raw["models"][0]["routing"]["order"] = ["streamlake"]
+    raw["models"][0]["input_cost_per_million_usd"] = 0.088
+    raw["models"][0]["output_cost_per_million_usd"] = 0.264
+    return BenchmarkRunManifest.model_validate(raw)
+
+
+def _provider_display_name(spec) -> str:
+    return "StreamLake" if spec.routing.order[0] == "streamlake" else provider_name_for_model(spec)
+
+
 def _registered_model(spec) -> dict[str, Any]:
     canonical_slug = runner_module._expected_openrouter_canonical_slug(spec)
-    provider_name = provider_name_for_model(spec)
+    provider_name = _provider_display_name(spec)
     endpoint = {
         "model_id": spec.model_id,
         "name": f"{provider_name} | {canonical_slug}",
@@ -74,6 +86,10 @@ def _registered_model(spec) -> dict[str, Any]:
         "tag": f"{spec.routing.order[0]}/fp8",
         "quantization": "fp8",
         "supported_parameters": ["tools", "tool_choice", "temperature", "max_tokens"],
+        "pricing": {
+            "prompt": str(Decimal(str(spec.input_cost_per_million_usd)) / Decimal(1_000_000)),
+            "completion": str(Decimal(str(spec.output_cost_per_million_usd)) / Decimal(1_000_000)),
+        },
     }
     endpoint_snapshot = {"data": {"endpoints": [endpoint]}}
     return {
@@ -101,8 +117,11 @@ def _routing_metadata(spec, *, model: str | None = None, provider: str | None = 
 async def _capture_registry_with_httpx(
     monkeypatch: pytest.MonkeyPatch,
     model_rows: list[dict[str, str]],
+    *,
+    manifest: BenchmarkRunManifest | None = None,
+    endpoint_price_overrides: dict[str, dict[str, Any] | None] | None = None,
 ) -> tuple[dict[str, object], list[str]]:
-    manifest = load_run_manifest(ROOT / "config" / "run.json")
+    manifest = manifest or load_run_manifest(ROOT / "config" / "run.json")
     for spec in manifest.models:
         monkeypatch.setenv(spec.base_url_env, OPENROUTER_BASE_URL)
         monkeypatch.setenv(spec.provider_key_env, "fixture-provider-key")
@@ -118,20 +137,29 @@ async def _capture_registry_with_httpx(
             model_id = f"{segments[-3]}/{segments[-2]}"
             model_row = next(row for row in model_rows if row["id"] == model_id)
             spec = next(spec for spec in manifest.models if spec.model_id == model_id)
-            provider_name = provider_name_for_model(spec)
+            provider_name = _provider_display_name(spec)
+            endpoint = {
+                "model_id": model_id,
+                "name": f"{provider_name} | {model_row['canonical_slug']}",
+                "provider_name": provider_name,
+                "tag": f"{spec.routing.order[0]}/fp8",
+                "quantization": "fp8",
+                "supported_parameters": ["tools", "tool_choice", "temperature", "max_tokens"],
+                "pricing": {
+                    "prompt": str(Decimal(str(spec.input_cost_per_million_usd)) / Decimal(1_000_000)),
+                    "completion": str(Decimal(str(spec.output_cost_per_million_usd)) / Decimal(1_000_000)),
+                },
+            }
+            if endpoint_price_overrides and model_id in endpoint_price_overrides:
+                price_override = endpoint_price_overrides[model_id]
+                if price_override is None:
+                    endpoint.pop("pricing")
+                else:
+                    endpoint["pricing"] = price_override
             return httpx.Response(
                 200,
                 json={
-                    "data": {
-                        "endpoints": [{
-                            "model_id": model_id,
-                            "name": f"{provider_name} | {model_row['canonical_slug']}",
-                            "provider_name": provider_name,
-                            "tag": f"{spec.routing.order[0]}/fp8",
-                            "quantization": "fp8",
-                            "supported_parameters": ["tools", "tool_choice", "temperature", "max_tokens"],
-                        }]
-                    }
+                    "data": {"endpoints": [endpoint]}
                 },
             )
         return httpx.Response(404, json={"error": {"message": "unexpected registry request"}})
@@ -182,6 +210,78 @@ async def test_provider_registry_accepts_pinned_aliases_and_canonical_slugs(
         f"{OPENROUTER_BASE_URL}/models/deepseek/deepseek-v4-flash-0731/endpoints",
         f"{OPENROUTER_BASE_URL}/models/qwen/qwen3.8-27b/endpoints",
     }
+
+
+@pytest.mark.asyncio
+async def test_provider_registry_accepts_streamlake_fp8_at_manifest_price_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _streamlake_manifest()
+    primary_id = manifest.models[0].model_id
+    registry, requested_urls = await _capture_registry_with_httpx(
+        monkeypatch,
+        _MODEL_REGISTRY_FIXTURE,
+        manifest=manifest,
+        endpoint_price_overrides={
+            primary_id: {"prompt": "0.000000088", "completion": "0.000000264"}
+        },
+    )
+
+    assert registry["status"] == "verified"
+    models = registry["models"]
+    assert isinstance(models, dict)
+    primary = models[primary_id]
+    assert isinstance(primary, dict)
+    endpoint = primary["selected_endpoint"]
+    assert isinstance(endpoint, dict)
+    assert endpoint["provider_name"] == "StreamLake"
+    assert endpoint["tag"] == "streamlake/fp8"
+    assert endpoint["quantization"] == "fp8"
+    assert endpoint["pricing"] == {"prompt": "0.000000088", "completion": "0.000000264"}
+    assert set(requested_urls) == {
+        f"{OPENROUTER_BASE_URL}/models",
+        f"{OPENROUTER_BASE_URL}/models/deepseek/deepseek-v4-flash-0731/endpoints",
+        f"{OPENROUTER_BASE_URL}/models/qwen/qwen3.8-27b/endpoints",
+    }
+
+
+@pytest.mark.parametrize(
+    ("pricing", "expected_reason"),
+    [
+        (None, "provider endpoint pricing is missing"),
+        ({"prompt": "0.000000088"}, "completion price is missing"),
+        (
+            {"prompt": "NaN", "completion": "0.000000264"},
+            "prompt price must be finite and positive",
+        ),
+        (
+            {"prompt": "0.000000089", "completion": "0.000000264"},
+            "prompt price exceeds the manifest ceiling",
+        ),
+        (
+            {"prompt": "0.000000088", "completion": "0.000000265"},
+            "completion price exceeds the manifest ceiling",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_provider_registry_rejects_missing_nonfinite_or_over_ceiling_prices(
+    monkeypatch: pytest.MonkeyPatch,
+    pricing: dict[str, Any] | None,
+    expected_reason: str,
+) -> None:
+    manifest = _streamlake_manifest()
+    primary_id = manifest.models[0].model_id
+    registry, requested_urls = await _capture_registry_with_httpx(
+        monkeypatch,
+        _MODEL_REGISTRY_FIXTURE,
+        manifest=manifest,
+        endpoint_price_overrides={primary_id: pricing},
+    )
+
+    assert registry["status"] == "unavailable"
+    assert expected_reason in registry["reason"]
+    assert all("chat/completions" not in url for url in requested_urls)
 
 
 @pytest.mark.parametrize(
@@ -468,10 +568,15 @@ def test_manifest_pinned_upstream_preserves_model_usage_cost_and_selected_route(
     assert not has_measured_evidence(outcome, task)
 
 
-def _partial_provider_message(spec, *, include_cost: bool = True) -> ModelResponse:
+def _partial_provider_message(
+    spec,
+    *,
+    include_cost: bool = True,
+    cost: float = 0.00000096,
+) -> ModelResponse:
     usage = {"prompt_tokens": 10, "completion_tokens": 2}
     if include_cost:
-        usage["cost"] = 0.00000096
+        usage["cost"] = cost
     return ModelResponse(
         parts=[TextPart(content="partial response")],
         usage=RequestUsage(input_tokens=10, output_tokens=2),
@@ -567,6 +672,28 @@ def test_missing_provider_cost_is_not_a_measured_outcome() -> None:
     assert outcome.error == "provider usage/cost evidence was incomplete"
     assert outcome.failure_kind == "provider"
     assert not has_measured_evidence(outcome, task)
+
+
+def test_provider_response_cost_above_manifest_ceiling_is_rejected() -> None:
+    spec = _model_spec()
+    task = load_task_corpus(ROOT / "corpus" / "tasks.json")[0]
+    outcome = outcome_from_run(
+        task=task,
+        arm="baseline",
+        model_spec=spec,
+        registered_model=_registered_model(spec),
+        transport="http",
+        result=None,
+        partial_messages=[_partial_provider_message(spec, cost=0.000001)],
+        recorder=ToolCallRecorder(operation_map={}, secrets=()),
+        operation_map={},
+        error=None,
+        latency=0.1,
+        secrets=(),
+    )
+
+    assert outcome.provider_cost_usd == pytest.approx(0.000001)
+    assert outcome.error == "OpenRouter response cost exceeded the registered price ceiling"
 
 
 @pytest.mark.asyncio

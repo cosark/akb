@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Literal, cast
 
@@ -94,6 +94,29 @@ def _validate_openrouter_model_identity(spec: ModelSpec, model_record: dict[str,
     canonical_slug = model_record.get("canonical_slug")
     if canonical_slug != _expected_openrouter_canonical_slug(spec):
         raise ValueError(f"provider model canonical identity drifted for {spec.class_name}")
+
+
+def _validate_openrouter_endpoint_price_ceiling(spec: ModelSpec, endpoint: dict[str, Any]) -> None:
+    """Compare registry per-token prompt/completion prices with manifest per-million ceilings."""
+    pricing = endpoint.get("pricing")
+    if not isinstance(pricing, dict):
+        raise ValueError(f"provider endpoint pricing is missing for {spec.class_name}")
+
+    limits = {
+        "prompt": spec.input_cost_per_million_usd,
+        "completion": spec.output_cost_per_million_usd,
+    }
+    for price_name, ceiling_per_million in limits.items():
+        if price_name not in pricing:
+            raise ValueError(f"provider endpoint {price_name} price is missing for {spec.class_name}")
+        try:
+            price_per_token = Decimal(str(pricing[price_name]))
+        except InvalidOperation as exc:
+            raise ValueError(f"provider endpoint {price_name} price is invalid for {spec.class_name}") from exc
+        if not price_per_token.is_finite() or price_per_token <= 0:
+            raise ValueError(f"provider endpoint {price_name} price must be finite and positive for {spec.class_name}")
+        if price_per_token * Decimal(1_000_000) > Decimal(str(ceiling_per_million)):
+            raise ValueError(f"provider endpoint {price_name} price exceeds the manifest ceiling for {spec.class_name}")
 
 
 class NeedsUserInput(RuntimeError):
@@ -1595,6 +1618,10 @@ class BenchmarkRunner:
                                 f"pinned {spec.routing.order[0]} fp8 endpoint is unavailable or ambiguous for {spec.class_name}",
                                 stage="provider_registry",
                             )
+                        try:
+                            _validate_openrouter_endpoint_price_ceiling(spec, selected[0])
+                        except ValueError as exc:
+                            raise RuntimeContractError(str(exc), stage="provider_registry") from exc
                         registered_model = {
                             "manifest_version": spec.version,
                             "model_record": row,
@@ -2582,6 +2609,13 @@ def _validate_provider_registry_identity(
             or captured_model.get("endpoint_snapshot") != endpoint_snapshots.get(spec.model_id)
         ):
             raise ValueError(f"{arm} provider registry model evidence differs from the pinned alias and canonical identity")
+        selected_endpoint = captured_model.get("selected_endpoint")
+        if not isinstance(selected_endpoint, dict):
+            raise ValueError(f"{arm} provider registry selected endpoint is invalid")
+        try:
+            _validate_openrouter_endpoint_price_ceiling(spec, selected_endpoint)
+        except ValueError as exc:
+            raise ValueError(f"{arm} provider registry pricing is invalid: {exc}") from exc
         if registered_route_target(spec, captured_model) is None:
             raise ValueError(f"{arm} provider registry endpoint evidence differs from the pinned {spec.routing.order[0]} fp8 route")
 

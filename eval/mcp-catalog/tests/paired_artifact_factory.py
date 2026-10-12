@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from collections import Counter, defaultdict
 from copy import deepcopy
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,10 @@ def provider_registry_snapshot(manifest: Any | None = None) -> dict[str, Any]:
             "tag": f"{provider_slug}/fp8",
             "quantization": "fp8",
             "supported_parameters": ["tools", "tool_choice", "temperature", "max_tokens"],
+            "pricing": {
+                "prompt": str(Decimal(str(model.input_cost_per_million_usd)) / Decimal(1_000_000)),
+                "completion": str(Decimal(str(model.output_cost_per_million_usd)) / Decimal(1_000_000)),
+            },
         }
         endpoint_snapshot = {"data": {"endpoints": [selected_endpoint]}}
         models[model.model_id] = {

@@ -19,10 +19,6 @@ CONTRACT_SCHEMA_VERSION = 2
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_BASE_URL_ENV = "MCP_BENCH_OPENROUTER_BASE_URL"
 OPENROUTER_PROVIDER_KEY_ENV = "MCP_BENCH_OPENROUTER_API_KEY"
-OPENROUTER_PRICE_CEILINGS = {
-    "deepseek/deepseek-v4-flash-0731": (0.06, 0.18),
-    "qwen/qwen3.8-27b": (0.225, 1.98),
-}
 OPENROUTER_CLASSES = {
     "primary": "deepseek/deepseek-v4-flash-0731",
     "lightweight": "qwen/qwen3.8-27b",
@@ -796,8 +792,8 @@ class ModelSpec(ContractModel):
     provider_key_env: str = Field(min_length=1, max_length=100)
     routing: ProviderRouting
     settings: dict[str, JsonValue] = Field(default_factory=dict)
-    input_cost_per_million_usd: float = Field(gt=0)
-    output_cost_per_million_usd: float = Field(gt=0)
+    input_cost_per_million_usd: float = Field(gt=0, allow_inf_nan=False)
+    output_cost_per_million_usd: float = Field(gt=0, allow_inf_nan=False)
 
     @field_validator("base_url_env", "provider_key_env")
     @classmethod
@@ -814,9 +810,6 @@ class ModelSpec(ContractModel):
             raise ValueError(f"{self.class_name} alias/version must be pinned to {expected_model}@{expected_version}")
         if self.base_url_env != OPENROUTER_BASE_URL_ENV or self.provider_key_env != OPENROUTER_PROVIDER_KEY_ENV:
             raise ValueError("OpenRouter model credentials must use the declared environment names")
-        expected_prices = OPENROUTER_PRICE_CEILINGS[self.model_id]
-        if (self.input_cost_per_million_usd, self.output_cost_per_million_usd) != expected_prices:
-            raise ValueError(f"price ceiling for {self.model_id} does not match the registered model contract")
         if set(self.settings) != {"temperature", "max_tokens"}:
             raise ValueError("model settings must contain only temperature and max_tokens")
         max_tokens = self.settings.get("max_tokens")

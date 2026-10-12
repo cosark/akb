@@ -206,14 +206,24 @@ def test_manifest_rejects_expanded_public_operation_drift() -> None:
         BenchmarkRunManifest.model_validate(raw)
 
 
-def test_manifest_rejects_provider_or_price_drift() -> None:
+def test_manifest_treats_configured_model_prices_as_finite_ceilings() -> None:
     raw = load_run_manifest(ROOT / "config" / "run.json").model_dump(mode="json")
     raw["models"][0]["input_cost_per_million_usd"] = 0.15
+    raw["models"][0]["output_cost_per_million_usd"] = 0.3
 
-    with pytest.raises(ValueError, match="price ceiling"):
-        BenchmarkRunManifest.model_validate(raw)
+    manifest = BenchmarkRunManifest.model_validate(raw)
+    assert manifest.models[0].input_cost_per_million_usd == 0.15
+    assert manifest.models[0].output_cost_per_million_usd == 0.3
 
-    raw["models"][0]["input_cost_per_million_usd"] = 0.06
+    for price in (0.0, -0.1, float("nan"), float("inf"), float("-inf")):
+        invalid = load_run_manifest(ROOT / "config" / "run.json").model_dump(mode="json")
+        invalid["models"][0]["input_cost_per_million_usd"] = price
+        with pytest.raises(ValueError):
+            BenchmarkRunManifest.model_validate(invalid)
+
+
+def test_manifest_rejects_provider_or_output_limit_drift() -> None:
+    raw = load_run_manifest(ROOT / "config" / "run.json").model_dump(mode="json")
     raw["models"][0]["routing"]["allow_fallbacks"] = True
     with pytest.raises(ValueError):
         BenchmarkRunManifest.model_validate(raw)
