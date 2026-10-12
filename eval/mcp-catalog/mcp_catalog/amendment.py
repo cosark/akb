@@ -32,6 +32,7 @@ from .checkpoint import (
 from .contracts import ArmName, BenchmarkRunManifest, ContractModel, TaskManifest, canonical_json, hash_json
 from .execution import TrialOutcome
 from .evidence import safe_json
+from .pairing import planned_arm_order
 from .runtime import RuntimeDescriptor
 
 
@@ -484,7 +485,7 @@ class AmendmentPlan:
         manifest: BenchmarkRunManifest,
         tasks: list[TaskManifest],
     ) -> AmendmentPlan:
-        from .runner import _artifact_integrity_error, planned_arm_order
+        from .runner import _artifact_integrity_error
 
         task_hash = hash_json([task.model_dump(mode="json") for task in tasks])
         if task_hash != SOURCE_TASK_CORPUS_HASH:
@@ -1057,8 +1058,6 @@ class AmendmentPlan:
         events.sort(key=lambda item: item["sequence"])
         if [event["sequence"] for event in events] != list(range(1, len(events) + 1)):
             raise CheckpointError("continuation event sequence has a gap or duplicate")
-        from .runner import planned_arm_order
-
         schedule: dict[str, list[TrialIdentity]] = {}
         for model in self.manifest.models:
             for transport in self.manifest.transports:

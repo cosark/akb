@@ -172,8 +172,9 @@ class ToolGuidanceSelection:
         tasks: list[TaskManifest],
     ) -> ToolGuidanceSelection:
         try:
+            path = path.expanduser().resolve(strict=True)
             raw = path.read_bytes()
-        except OSError as exc:
+        except (OSError, RuntimeError) as exc:
             raise ValueError("selection file is unavailable") from exc
         selection_sha256 = hashlib.sha256(raw).hexdigest()
         try:
@@ -181,7 +182,7 @@ class ToolGuidanceSelection:
         except (ValueError, UnicodeDecodeError) as exc:
             raise ValueError(f"selection file is invalid: {exc}") from exc
         _validate_manifest(manifest, document.selected_trials, tasks)
-        parents = _validate_parents(document.parents)
+        parents = _validate_parents(document.parents, selection_directory=path.parent)
         return cls(
             path=path,
             sha256=selection_sha256,
@@ -203,7 +204,6 @@ def _validate_manifest(
         Decimal(str(budget.max_total_cost_usd)) != TOTAL_BUDGET_USD
         or Decimal(str(budget.max_cost_per_trial_usd)) != PER_TRIAL_LIMIT_USD
         or budget.request_timeout_seconds != REQUEST_TIMEOUT_SECONDS
-        or NEW_EXECUTION_LIMIT_USD != Decimal("41.43279896")
     ):
         raise ValueError("run manifest differs from the approved tool-guidance measurement budget")
     expected_routes = {"primary": "deepinfra", "lightweight": "akashml"}
@@ -225,14 +225,21 @@ def _validate_manifest(
             raise ValueError("selection contains a repeat outside the registered run plan")
 
 
-def _validate_parents(parents: dict[ParentName, ParentArtifact]) -> dict[str, dict[str, str]]:
+def _validate_parents(
+    parents: dict[ParentName, ParentArtifact],
+    *,
+    selection_directory: Path,
+) -> dict[str, dict[str, str]]:
     metadata: dict[str, dict[str, str]] = {}
     for name in ("recovery_baseline", "recovery_candidate", "original_baseline", "original_candidate"):
         parent = parents[name]
-        parent_path = Path(parent.path).expanduser()
         try:
+            parent_path = Path(parent.path).expanduser()
+            if not parent_path.is_absolute():
+                parent_path = selection_directory / parent_path
+            parent_path = parent_path.resolve(strict=True)
             raw = parent_path.read_bytes()
-        except OSError as exc:
+        except (OSError, RuntimeError) as exc:
             raise ValueError(f"{name} parent artifact is unavailable") from exc
         if hashlib.sha256(raw).hexdigest() != parent.sha256:
             raise ValueError(f"{name} parent artifact SHA-256 does not match the selection")

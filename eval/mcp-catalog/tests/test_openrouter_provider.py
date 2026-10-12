@@ -768,7 +768,11 @@ async def test_provider_response_cost_blocks_followup_request_before_the_trial_f
     wire_request = AsyncMock(side_effect=[response, followup])
     monkeypatch.setattr(model.client.chat.completions, "create", wire_request)
     guard_token = execution_module.PROVIDER_REQUEST_GUARD.set(request_guard)
-    call = [ModelRequest(parts=[UserPromptPart("hello")])]
+    instructions = "The real server sends guidance.\n\nThe second line stays intact."
+    model_input_evidence: list[Any] = []
+    instructions_token = execution_module.SERVER_INSTRUCTIONS.set(instructions)
+    evidence_token = execution_module.MODEL_INPUT_EVIDENCE.set(model_input_evidence)
+    call = [ModelRequest(parts=[UserPromptPart("hello")], instructions=instructions)]
     try:
         await model.request(call, model.settings, ModelRequestParameters())
         if second_response_fails:
@@ -779,12 +783,15 @@ async def test_provider_response_cost_blocks_followup_request_before_the_trial_f
         with pytest.raises(BudgetExceeded, match="max_cost_per_trial_usd"):
             await model.request(call, model.settings, ModelRequestParameters())
     finally:
+        execution_module.MODEL_INPUT_EVIDENCE.reset(evidence_token)
+        execution_module.SERVER_INSTRUCTIONS.reset(instructions_token)
         execution_module.PROVIDER_REQUEST_GUARD.reset(guard_token)
 
     assert wire_request.await_count == 2
     assert ledger.cost_usd == Decimal(str(expected_spend))
     assert ledger.reserved_cost_usd == Decimal("0")
     assert request_guard.requests == 2
+    assert [item.request_index for item in model_input_evidence] == [1, 2]
     assert request_guard.provider_cost_usd == Decimal(str(expected_spend))
     await request_guard.release()
     next_guard = await ledger.reserve_trial(reservation)

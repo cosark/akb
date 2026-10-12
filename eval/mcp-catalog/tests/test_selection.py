@@ -125,6 +125,26 @@ def test_selection_validates_all_pinned_parent_rows_without_writing_them(
     assert {name: Path(item["path"]).read_bytes() for name, item in loaded.parents.items()} == parent_bytes
 
 
+def test_relative_parent_paths_resolve_from_the_selection_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, tasks, selection = _selection_fixture(tmp_path, monkeypatch)
+    document = json.loads(selection.path.read_text(encoding="utf-8"))
+    for binding in document["parents"].values():
+        binding["path"] = Path(binding["path"]).name
+    selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+    monkeypatch.chdir(tmp_path.parent)
+
+    loaded = selection_module.ToolGuidanceSelection.load(
+        selection.path,
+        manifest=manifest,
+        tasks=tasks,
+    )
+
+    assert all(Path(parent["path"]).is_absolute() for parent in loaded.parents.values())
+
+
 @pytest.mark.parametrize("mutation", ["duplicate", "missing", "extra", "wrong_role", "wrong_lineage"])
 def test_selection_rejects_identity_or_role_changes(
     tmp_path: Path,

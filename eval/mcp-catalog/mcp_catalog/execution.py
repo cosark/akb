@@ -86,9 +86,21 @@ def _model_input_evidence_for(
     instructions: str,
     request_index: int,
 ) -> ModelInputEvidence:
-    serialized_input = canonical_json(safe_json(messages))
+    model_input = safe_json(messages)
+    serialized_input = canonical_json(model_input)
     instructions_sha256 = hashlib.sha256(instructions.encode("utf-8")).hexdigest()
-    present = instructions in serialized_input
+    expected_instructions = instructions.rstrip("\r\n")
+
+    def contains_instructions(value: Any) -> bool:
+        if isinstance(value, str):
+            return expected_instructions in value
+        if isinstance(value, dict):
+            return any(contains_instructions(item) for item in value.values())
+        if isinstance(value, (list, tuple)):
+            return any(contains_instructions(item) for item in value)
+        return False
+
+    present = contains_instructions(model_input)
     if not present:
         raise ModelConfigurationError("server instructions are missing from the model input")
     return ModelInputEvidence(
@@ -177,9 +189,14 @@ class OpenRouterChatModel(OpenAIChatModel):
         if evidence is not None:
             if instructions is None:
                 raise ModelConfigurationError("server instructions were not sealed before the model request")
-            evidence.append(_model_input_evidence_for(messages, instructions, len(evidence) + 1))
+            request_evidence = _model_input_evidence_for(messages, instructions, len(evidence) + 1)
+        else:
+            request_evidence = None
         guard = PROVIDER_REQUEST_GUARD.get()
         receipt = await guard() if guard is not None else None
+        if evidence is not None:
+            assert request_evidence is not None
+            evidence.append(request_evidence)
         response = await super().request(messages, model_settings, model_request_parameters)
         captured = MODEL_RESPONSES.get()
         if captured is not None:

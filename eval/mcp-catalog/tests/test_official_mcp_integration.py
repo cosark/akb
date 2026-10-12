@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import runpy
+from pathlib import Path
 from typing import Literal
 
 import pytest
@@ -25,10 +27,14 @@ from mcp_catalog.execution import (
 )
 from mcp_catalog.contracts import TaskManifest
 
+SERVER_INSTRUCTIONS = runpy.run_path(
+    str(Path(__file__).resolve().parents[3] / "backend" / "mcp_server" / "instructions.py")
+)["INSTRUCTIONS"]
+
 
 @pytest.mark.asyncio
 async def test_official_fastmcp_client_and_pydantic_ai_toolset_cross_the_server_boundary() -> None:
-    server_instructions = "Use the registered catalog tools to inspect one record."
+    server_instructions = SERVER_INSTRUCTIONS
     server = FastMCP("catalog-test", instructions=server_instructions, version="1")
 
     @server.tool
@@ -77,7 +83,10 @@ async def test_official_fastmcp_client_and_pydantic_ai_toolset_cross_the_server_
         result = await agent.run("값을 읽고 결과를 말해 줘.", toolsets=[toolset], infer_name=False)
 
     assert result.output == "완료"
-    assert server_instructions in seen_instructions
+    assert any(
+        server_instructions.rstrip("\r\n") == observed.rstrip("\r\n")
+        for observed in seen_instructions
+    )
     assert len(recorder.calls) == 1
     assert recorder.calls[0].server_args == {"value": "ok", "action": "read"}
     assert recorder.calls[0].result_fields == {"markdown": "![benchmark sample image](/api/assets/fixture-image)"}
@@ -133,7 +142,7 @@ def test_raw_and_server_arguments_are_separately_recorded() -> None:
 
 
 def test_model_request_evidence_hashes_only_inputs_that_contain_server_instructions() -> None:
-    instructions = "Use the exact registered operation names."
+    instructions = SERVER_INSTRUCTIONS
     request = ModelRequest(parts=[InstructionPart(content=instructions)])
     evidence = _model_input_evidence_for([request], instructions, 1)
     outcome = TrialOutcome(
