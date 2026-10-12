@@ -181,10 +181,12 @@ Pass it with `run-paired --amendment /private/run/akb-361-continuation.json`.
 Paths may be absolute or relative to the operator file.
 
 AKB-361's tool-guidance remeasurement is a separate selection-bound run. Supply
-AKB-361's currently authorized 14-identity `selection.json` and a new summary
+AKB-361's currently authorized 14-identity `selection-v6.json` and a new summary
 path with `--selection` and `--selection-summary-output`. The selection pins six
 prior candidate tool failures, eight successful controls, two immutable parent
-artifact hashes, and the approved issue revision/content hash. The runner
+artifact hashes, and issue revision `9abc158b4a70ddf684e3332d47b4dd2c7d723fac`
+and content hash `a9ec2f3ae9bedbc3023066546f1c39c54d4d37651703b233d1547873c1492fe9`.
+The runner
 executes only those 14 identities in both arms (28 new model trials), retains
 the original repeat indices and `akb-358-v1` counterbalanced arm order, and runs
 the full four-cell smoke gate per arm. Parent rows remain read-only and are
@@ -201,8 +203,10 @@ relabeled identities and any obsolete 16-identity or four-parent plan. Parent
 trials are checked as raw JSON rows, preserving their recorded failure fields
 without requiring them to parse as new `TrialOutcome` objects.
 
-The new shared ledger starts at zero and stops at `$41.0345985648`, calculated
-from the `$50` session cap less the pinned `$8.9654014352` prior spend basis.
+The checkpoint records a read-only preflight of the selection file hash, both
+parent hashes, 14 identities, the six/eight role counts, and the fixed budget.
+The new shared ledger starts at zero and stops at `$40.9416020808`, calculated
+from the `$50` session cap less the pinned `$9.0583979192` prior spend basis.
 The `$0.10` per-trial cap and 300-second request timeout remain in force. No
 total request-count or overall wall-time limit applies to this sample.
 
@@ -242,4 +246,4 @@ bash scripts/check.sh
 ```
 
 This implementation validates the benchmark contract without invoking paid
-provider requests or running the 608-outcome experiment.
+provider requests or running the 28-trial remeasurement.

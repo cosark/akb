@@ -980,6 +980,7 @@ def test_locale_is_part_of_checkpoint_key_and_hash_inputs(tmp_path: Path) -> Non
         expected_tasks={task.id: task for task in tasks},
         expected_smoke_cells={},
     )
+    store.bind_pre_smoke_seal("e" * 64, {"status": "unavailable", "reason": "test fixture"})
     store.record_trial(key, outcome, status="completed")
     raw = json.loads((tmp_path / "checkpoint.json").read_text(encoding="utf-8"))
     raw["records"][next(iter(raw["records"]))]["key"]["locale"] = "en-US"

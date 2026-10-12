@@ -206,7 +206,7 @@ def test_completed_http_smoke_with_sdk_trimmed_final_newline_survives_checkpoint
     smoke_cells = {"primary:http": ("primary", model_spec.model_id, "http")}
 
     def open_store(*, resume: bool = False) -> CheckpointStore:
-        return CheckpointStore(
+        store = CheckpointStore(
             tmp_path / "checkpoint.json",
             header=header,
             expected_keys=expected_keys,
@@ -214,6 +214,9 @@ def test_completed_http_smoke_with_sdk_trimmed_final_newline_survives_checkpoint
             expected_smoke_cells=smoke_cells,
             resume=resume,
         )
+        if not resume:
+            store.bind_pre_smoke_seal("e" * 64, {"status": "unavailable", "reason": "test fixture"})
+        return store
 
     store = open_store()
     store.record_smoke_cell("primary:http", outcome, status="completed")
@@ -456,6 +459,7 @@ async def test_smoke_accounting_failure_is_checkpointed_and_resume_reuses_other_
     failure_recorded_for_sibling = asyncio.Event()
     first_store = first_runner._checkpoint_store
     assert first_store is not None
+    first_store.bind_pre_smoke_seal("e" * 64, first_runner.provider_registry)
 
     async def wait_for_failed_cell_checkpoint() -> None:
         while True:

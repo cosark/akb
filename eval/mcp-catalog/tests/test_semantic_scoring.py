@@ -10,6 +10,7 @@ from mcp_catalog.execution import (
     ToolCallRecord,
     ToolCallRecorder,
     TrialOutcome,
+    _finalize_semantic_metrics,
     _vault_skill_binding_digest,
     bind_tool_calls,
     capture_result_fields_for_task,
@@ -242,6 +243,10 @@ def _relation_lifecycle_trace(
     wrong_document: bool = False,
     wrong_relation: bool = False,
     wrong_collection: bool = False,
+    browse_pair: bool = False,
+    wrong_browse_vault: bool = False,
+    wrong_browse_uri: bool = False,
+    browse_uri: bool = False,
 ):
     left_uri = "akb://catalog-bench-relations/coll/notes/doc/left.md"
     right_uri = "akb://catalog-bench-relations/coll/notes/doc/right.md"
@@ -270,6 +275,8 @@ def _relation_lifecycle_trace(
         arguments = dict(attempt.arguments)
         for binding in task.expected_result_bindings:
             if binding.target_stage == attempt.stage_id:
+                if browse_pair and binding.relation == "collection_uri":
+                    continue
                 value = source_by_stage[binding.source_stage]
                 if binding.relation == "collection_uri":
                     value = value.split("/doc/", 1)[0]
@@ -280,13 +287,33 @@ def _relation_lifecycle_trace(
             if wrong_relation:
                 arguments["relation"] = "contains"
         if attempt.stage_id == "verify_collection" and wrong_collection:
+            arguments["collection" if browse_pair else "uri"] = (
+                "unrelated" if browse_pair else "akb://catalog-bench-relations/coll/unrelated"
+            )
+        if attempt.stage_id == "verify_collection" and browse_pair:
+            arguments.update({"action": "browse", "vault": "catalog-bench-relations", "collection": "notes"})
+            if browse_uri:
+                arguments["uri"] = "akb://catalog-bench-relations/coll/notes"
+            if wrong_collection:
+                arguments["collection"] = "unrelated"
+            if wrong_browse_vault:
+                arguments["vault"] = "other-vault"
+        if attempt.stage_id == "verify_collection" and wrong_browse_uri:
             arguments["uri"] = "akb://catalog-bench-relations/coll/unrelated"
         result_fields = {"uri": source_by_stage[attempt.stage_id]} if attempt.stage_id in source_by_stage else {}
         calls.append(
             ToolCallRecord(
                 order=len(calls) + 1,
-                tool_name=tool_by_stage[attempt.stage_id],
-                canonical_operation=tool_by_stage[attempt.stage_id],
+                tool_name=(
+                    "akb_discover"
+                    if attempt.stage_id == "verify_collection" and browse_pair
+                    else tool_by_stage[attempt.stage_id]
+                ),
+                canonical_operation=(
+                    "akb_discover"
+                    if attempt.stage_id == "verify_collection" and browse_pair
+                    else tool_by_stage[attempt.stage_id]
+                ),
                 logical_operation=attempt.logical_operation,
                 resource_type=attempt.resource_type,
                 stage_id=attempt.stage_id,
@@ -378,6 +405,16 @@ def test_relation_workflow_accepts_alternate_public_reads_and_rejects_wrong_edge
     wrong_document = _relation_lifecycle_trace(task, wrong_document=True)
     wrong_relation = _relation_lifecycle_trace(task, wrong_relation=True)
     wrong_collection = _relation_lifecycle_trace(task, wrong_collection=True)
+    browse_pair = _relation_lifecycle_trace(task, browse_pair=True)
+    wrong_pair_vault = _relation_lifecycle_trace(task, browse_pair=True, wrong_browse_vault=True)
+    wrong_pair_collection = _relation_lifecycle_trace(task, browse_pair=True, wrong_collection=True)
+    conflicting_uri_vault = _relation_lifecycle_trace(
+        task,
+        browse_pair=True,
+        browse_uri=True,
+        wrong_browse_vault=True,
+    )
+    wrong_browse_uri = _relation_lifecycle_trace(task, wrong_browse_uri=True)
 
     assert complete.state_contract_passed is True
     assert complete.tool_outcome_match is True
@@ -391,6 +428,13 @@ def test_relation_workflow_accepts_alternate_public_reads_and_rejects_wrong_edge
     assert wrong_relation.success is False
     assert wrong_collection.result_binding_accuracy is False
     assert wrong_collection.success is False
+    assert browse_pair.result_binding_accuracy is True
+    assert browse_pair.multi_step_ordering is True
+    assert browse_pair.success is True
+    assert wrong_pair_vault.result_binding_accuracy is False
+    assert wrong_pair_collection.result_binding_accuracy is False
+    assert conflicting_uri_vault.result_binding_accuracy is False
+    assert wrong_browse_uri.result_binding_accuracy is False
 
 
 def test_publication_contract_accepts_only_registered_read_observations() -> None:
@@ -458,10 +502,49 @@ def test_publication_contract_accepts_only_registered_read_observations() -> Non
             {"vault": "catalog-bench-data", "sql": "SELECT * FROM scores LIMIT 5"},
         ),
         observation(11, "akb_vault_info", "read", "vault", {"vault": "catalog-bench-data"}),
+        observation(
+            12,
+            "akb_browse",
+            "list",
+            "document",
+            {"uri": "akb://catalog-bench-data", "depth": 0},
+        ),
+        observation(
+            13,
+            "akb_browse",
+            "list",
+            "document",
+            {"vault": "catalog-bench-data", "depth": 0, "content_type": "all"},
+        ),
     ]
     _resolved, accepted_valid = _resolved_material_stage_calls(task, [*calls, *accepted])
+    metrics = TrialOutcome(
+        task_id=task.id,
+        category=task.category,
+        locale=task.locale,
+        arm="baseline",
+        model_class="primary",
+        model_id="fixture-model",
+        transport="stdio",
+        tool_calls=[*calls, *accepted],
+    )
+    _finalize_semantic_metrics(metrics, task)
 
     wrong_vault = observation(9, "akb_publications", "list", "publication", {"vault": "other-vault"})
+    wrong_browse_vault = observation(
+        9,
+        "akb_browse",
+        "list",
+        "document",
+        {"vault": "other-vault", "depth": 0},
+    )
+    document_browse = observation(
+        9,
+        "akb_browse",
+        "list",
+        "document",
+        {"uri": "akb://catalog-bench-data/doc/guide.md"},
+    )
     wrong_filter = observation(9, "akb_list_vaults", "list", "vault", {"filter": "catalog-bench"})
     vault_filter = observation(9, "akb_list_vaults", "list", "vault", {"filter": "catalog-bench-data"})
     wrong_query = observation(
@@ -486,6 +569,8 @@ def test_publication_contract_accepts_only_registered_read_observations() -> Non
         {"uri": "akb://catalog-bench-data/doc/guide.md", "content": "unrequested guide rewrite"},
     )
     _resolved, wrong_vault_valid = _resolved_material_stage_calls(task, [*calls, wrong_vault])
+    _resolved, wrong_browse_vault_valid = _resolved_material_stage_calls(task, [*calls, wrong_browse_vault])
+    _resolved, document_browse_valid = _resolved_material_stage_calls(task, [*calls, document_browse])
     _resolved, wrong_filter_valid = _resolved_material_stage_calls(task, [*calls, wrong_filter])
     _resolved, vault_filter_valid = _resolved_material_stage_calls(task, [*calls, vault_filter])
     _resolved, wrong_query_valid = _resolved_material_stage_calls(task, [*calls, wrong_query])
@@ -493,12 +578,136 @@ def test_publication_contract_accepts_only_registered_read_observations() -> Non
     _resolved, guide_mutation_valid = _resolved_material_stage_calls(task, [*calls, guide_mutation])
 
     assert accepted_valid is True
+    assert metrics.wrong_resource_calls == 0
+    assert metrics.wrong_target_calls == 0
     assert wrong_vault_valid is False
+    assert wrong_browse_vault_valid is False
+    assert document_browse_valid is False
     assert wrong_filter_valid is False
     assert vault_filter_valid is True
     assert wrong_query_valid is False
     assert write_query_valid is False
     assert guide_mutation_valid is False
+
+
+@pytest.mark.asyncio
+async def test_state_checkpoints_follow_registered_stages_across_an_extra_read() -> None:
+    manifest = load_run_manifest(ROOT / "config" / "run.json")
+    task = _tasks()["table-publication-en"]
+    tool_by_stage = {
+        "create_vault_1": "akb_create_vault",
+        "create_table_1": "akb_create_table",
+        "search_table_1": "akb_sql",
+        "create_publication_1": "akb_publish",
+        "list_publication_1": "akb_publications",
+        "read_publication_1": "akb_publication_snapshot",
+        "list_publication_2": "akb_publications",
+        "delete_publication_1": "akb_unpublish",
+    }
+
+    async def run_trace(*, omit_second_list: bool = False):
+        current = {"tool": "", "mode": None}
+        checkpoint_reads: list[tuple[str, str | None]] = []
+
+        class Fixture:
+            async def observe(self, probe, *, token: str) -> StateObservation:
+                assert token == "fixture-token"
+                assert probe.path == "/api/v1/publications/catalog-bench-data?resource_type=table_query"
+                checkpoint_reads.append((current["tool"], current["mode"]))
+                publications = (
+                    [{"resource_type": "table_query", "mode": current["mode"]}]
+                    if current["mode"] is not None
+                    else []
+                )
+                return StateObservation(True, 200, {"publications": publications})
+
+        recorder = ToolCallRecorder(
+            operation_map=manifest.operation_map,
+            secrets=(),
+            capture_result_fields=capture_result_fields_for_task(
+                task,
+                manifest.operation_map,
+                manifest.public_operations,
+            ),
+            task=task,
+            fixture=Fixture(),
+            token="fixture-token",
+            arm="baseline",
+            transport="stdio",
+            public_operations=manifest.public_operations,
+        )
+        raw_calls: list[tuple[str, dict[str, object]]] = []
+
+        async def invoke(name: str, _arguments: dict[str, object]) -> object:
+            current["tool"] = name
+            if name == "akb_publish":
+                current["mode"] = "live"
+                return {"structuredContent": {"slug": "fixture-publication"}, "content": []}
+            if name == "akb_publication_snapshot":
+                current["mode"] = "snapshot"
+            elif name == "akb_unpublish":
+                current["mode"] = None
+            return {"structuredContent": {"ok": True}, "content": []}
+
+        for attempt in task.expected_material_attempts:
+            if omit_second_list and attempt.stage_id == "list_publication_2":
+                continue
+            arguments = dict(attempt.arguments)
+            for binding in task.expected_result_bindings:
+                if binding.target_stage == attempt.stage_id:
+                    arguments[binding.target_argument] = "fixture-publication"
+            tool_name = tool_by_stage[attempt.stage_id]
+            await recorder(None, invoke, tool_name, arguments)
+            raw_calls.append((tool_name, arguments))
+            if attempt.stage_id == "create_table_1":
+                read_arguments = {"vault": "catalog-bench-data"}
+                await recorder(None, invoke, "akb_vault_info", read_arguments)
+                raw_calls.append(("akb_vault_info", read_arguments))
+
+        calls = bind_tool_calls(
+            raw_calls,
+            recorder.calls,
+            manifest.operation_map,
+            (),
+            arm="baseline",
+            transport="stdio",
+            public_operations=manifest.public_operations,
+        )
+        return recorder, calls, checkpoint_reads
+
+    recorder, calls, reads = await run_trace()
+    assert reads == [("akb_publications", "live"), ("akb_publications", "snapshot")]
+    assert [item["after_attempt"] for item in recorder.checkpoint_observations] == [6, 8]
+    assert [call.order for call in calls] == list(range(1, 10))
+    assert next(call for call in calls if call.tool_name == "akb_vault_info").stage_id is None
+
+    missing_recorder, missing_calls, missing_reads = await run_trace(omit_second_list=True)
+    assert missing_reads == [("akb_publications", "live")]
+    assert [item["after_attempt"] for item in missing_recorder.checkpoint_observations] == [6]
+    outcome = TrialOutcome(
+        task_id=task.id,
+        category=task.category,
+        locale=task.locale,
+        arm="baseline",
+        model_class="primary",
+        model_id="fixture-model",
+        transport="stdio",
+        tool_calls=missing_calls,
+        state_checkpoint_observations=missing_recorder.checkpoint_observations,
+    )
+    before = [
+        StateObservation(True, item.resolved_before_expected_status, {})
+        for item in task.expected_final_state.observation_sets
+    ]
+    after = [
+        StateObservation(True, item.probe.expected_status, {})
+        for item in task.expected_final_state.observation_sets
+    ]
+    outcome.finalize(task, before, after)
+    assert any(
+        check.operator == "checkpoint:7:available" and not check.passed
+        for check in outcome.state_checks
+    )
 
 
 def test_schema_read_observation_requires_a_registered_table_and_scoped_read() -> None:

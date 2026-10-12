@@ -4074,14 +4074,14 @@
       "locales": {
         "ko-KR": {
           "id": "stdio-image-files-ko",
-          "prompt": "`sample-note.txt` 원본 파일 자체를 `catalog-bench-vault-authorization` 루트의 파일 리소스로 올려. `sample-image.png`도 대체 텍스트 `cleanup probe`로 준비하되 문서에는 넣지 말고 staging 이미지를 반환된 URL로 폐기해. 업로드 결과의 파일 URI로 파일을 삭제한 뒤 둘 다 남지 않았는지 확인해.",
+          "prompt": "`sample-note.txt` 원본 파일 자체를 `catalog-bench-vault-authorization` 루트의 파일 리소스로 올리고, `sample-image.png`는 대체 텍스트 `cleanup probe`로 문서에 넣지 않은 채 staging해. 반환된 파일 URI와 이미지 URL을 이용해 파일과 staging 이미지를 각각 정리해. 두 정리 작업의 순서는 상관없고, 마지막에 둘 다 남지 않았는지 확인해.",
           "response_rubric": {
             "require_non_empty": true
           }
         },
         "en-US": {
           "id": "stdio-image-files-en",
-          "prompt": "Upload the original `sample-note.txt` as a file resource at the root of `catalog-bench-vault-authorization`. Stage `sample-image.png` with alt text `cleanup probe` but do not insert it into a document; discard the staged image using its returned URL. Delete the file using the returned file URI, then verify both are absent.",
+          "prompt": "Upload the original `sample-note.txt` as a file resource at the root of `catalog-bench-vault-authorization`. Stage `sample-image.png` with alt text `cleanup probe` without inserting it into a document. Use the returned file URI and image URL to clean up the file and staged image separately. Either cleanup order is fine; finally verify both are absent.",
           "response_rubric": {
             "require_non_empty": true
           }

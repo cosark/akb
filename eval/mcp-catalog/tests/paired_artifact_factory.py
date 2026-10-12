@@ -15,7 +15,12 @@ from mcp_catalog.contracts import (
     token_estimate,
 )
 from mcp_catalog.evidence import canonical_json
-from mcp_catalog.execution import ModelInputEvidence, ToolCallRecord, TrialOutcome
+from mcp_catalog.execution import (
+    ModelInputEvidence,
+    ToolCallRecord,
+    TrialOutcome,
+    _material_attempt_positions_by_stage,
+)
 from mcp_catalog.runner import (
     _build_artifact_hash_input,
     _expected_openrouter_canonical_slug,
@@ -547,7 +552,7 @@ def _make_outcome(
         model_input_evidence=synthetic_model_input_evidence(request_count),
     )
     before, after = _state_observations(task.expected_final_state)
-    outcome.state_checkpoint_observations = _checkpoint_observations(task)
+    outcome.state_checkpoint_observations = _checkpoint_observations(task, calls)
     outcome.finalize(
         task,
         before,
@@ -751,9 +756,11 @@ def _state_observations(contract: Any) -> tuple[list[StateObservation], list[Sta
     return before, after
 
 
-def _checkpoint_observations(task: Any) -> list[dict[str, Any]]:
+def _checkpoint_observations(task: Any, tool_calls: list[ToolCallRecord]) -> list[dict[str, Any]]:
     observations = []
+    material_positions = _material_attempt_positions_by_stage(tool_calls)
     for checkpoint in task.expected_final_state.checkpoints:
+        stage_id = task.expected_material_attempts[checkpoint.after_attempt - 1].stage_id
         payload: dict[str, Any] = {}
         for expectation in checkpoint.must:
             _apply_expectation(payload, expectation, satisfied=True)
@@ -761,7 +768,7 @@ def _checkpoint_observations(task: Any) -> list[dict[str, Any]]:
             _apply_expectation(payload, expectation, satisfied=False)
         observations.append(
             {
-                "after_attempt": checkpoint.after_attempt,
+                "after_attempt": material_positions[stage_id],
                 "available": True,
                 "status_code": checkpoint.probe.expected_status,
                 "payload": payload,

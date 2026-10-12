@@ -432,8 +432,10 @@ class TrialOutcome(BaseModel):
             for item in self.state_checkpoint_observations
             if isinstance(item, dict)
         }
+        material_positions = _material_attempt_positions_by_stage(self.tool_calls)
         for checkpoint in task.expected_final_state.checkpoints:
-            evidence = checkpoint_map.get(checkpoint.after_attempt)
+            stage_id = task.expected_material_attempts[checkpoint.after_attempt - 1].stage_id
+            evidence = checkpoint_map.get(material_positions.get(stage_id))
             observation = (
                 StateObservation(
                     available=bool(evidence.get("available")),
@@ -572,6 +574,69 @@ def _has_provider_usage_evidence(outcome: TrialOutcome) -> bool:
     )
 
 
+def _material_attempt_positions_by_stage(tool_calls: list[ToolCallRecord]) -> dict[str, int]:
+    positions: dict[str, int] = {}
+    attempt_index = 0
+    for call in tool_calls:
+        if call.operation_kind != "material":
+            continue
+        attempt_index += 1
+        if call.stage_id is not None:
+            positions.setdefault(call.stage_id, attempt_index)
+    return positions
+
+
+def _independent_file_image_cleanup_pair(
+    task: TaskManifest,
+) -> tuple[int, int, ExpectedMaterialAttempt, ExpectedMaterialAttempt] | None:
+    attempts = task.expected_material_attempts
+    cleanup = [
+        (index, attempt)
+        for index, attempt in enumerate(attempts)
+        if attempt.logical_operation == "cleanup" and attempt.resource_type == "image"
+    ]
+    delete_file = [
+        (index, attempt)
+        for index, attempt in enumerate(attempts)
+        if attempt.logical_operation == "delete" and attempt.resource_type == "file"
+    ]
+    if len(cleanup) != 1 or len(delete_file) != 1:
+        return None
+    cleanup_index, cleanup_attempt = cleanup[0]
+    delete_index, delete_attempt = delete_file[0]
+    if abs(cleanup_index - delete_index) != 1:
+        return None
+    image_binding = next(
+        (
+            binding
+            for binding in task.expected_result_bindings
+            if binding.target_stage == cleanup_attempt.stage_id
+            and binding.target_argument == "url"
+            and binding.source_field == "url"
+        ),
+        None,
+    )
+    file_binding = next(
+        (
+            binding
+            for binding in task.expected_result_bindings
+            if binding.target_stage == delete_attempt.stage_id
+            and binding.target_argument == "uri"
+            and binding.source_field == "uri"
+        ),
+        None,
+    )
+    positions = {attempt.stage_id: index for index, attempt in enumerate(attempts)}
+    if (
+        image_binding is None
+        or file_binding is None
+        or positions.get(image_binding.source_stage, len(attempts)) >= min(cleanup_index, delete_index)
+        or positions.get(file_binding.source_stage, len(attempts)) >= min(cleanup_index, delete_index)
+    ):
+        return None
+    return cleanup_index, delete_index, cleanup_attempt, delete_attempt
+
+
 def _cleanup_calls_are_valid(tool_calls: list[ToolCallRecord], task: TaskManifest) -> bool:
     cleanup_indices = [
         index for index, call in enumerate(tool_calls) if call.logical_operation == "cleanup"
@@ -590,6 +655,54 @@ def _cleanup_calls_are_valid(tool_calls: list[ToolCallRecord], task: TaskManifes
 
     if any(item.logical_operation == "create" and not item.server_succeeded for item in prior_calls):
         return not any(item.operation_kind == "material" for item in tool_calls[index + 1 :])
+
+    independent_pair = _independent_file_image_cleanup_pair(task)
+    if independent_pair is not None:
+        _cleanup_index, _delete_index, cleanup_attempt, delete_attempt = independent_pair
+        expected_by_stage = {attempt.stage_id: attempt for attempt in task.expected_material_attempts}
+        calls_by_stage: dict[str, list[ToolCallRecord]] = defaultdict(list)
+        for item in tool_calls:
+            if item.stage_id is not None:
+                calls_by_stage[item.stage_id].append(item)
+        cleanup_group = calls_by_stage.get(cleanup_attempt.stage_id, [])
+        delete_group = calls_by_stage.get(delete_attempt.stage_id, [])
+        if len(cleanup_group) != 1 or len(delete_group) != 1:
+            return False
+        cleanup_call, delete_call = cleanup_group[0], delete_group[0]
+        if (
+            not cleanup_call.server_succeeded
+            or cleanup_call.logical_operation != "cleanup"
+            or not _resource_matches(cleanup_call.resource_type, cleanup_attempt.resource_type)
+            or not delete_call.server_succeeded
+            or delete_call.logical_operation != "delete"
+            or not _resource_matches(delete_call.resource_type, delete_attempt.resource_type)
+        ):
+            return False
+        image_binding = next(
+            binding
+            for binding in task.expected_result_bindings
+            if binding.target_stage == cleanup_attempt.stage_id and binding.target_argument == "url"
+        )
+        file_binding = next(
+            binding
+            for binding in task.expected_result_bindings
+            if binding.target_stage == delete_attempt.stage_id and binding.target_argument == "uri"
+        )
+        upload_calls = {
+            item.stage_id: item
+            for item in tool_calls
+            if item.stage_id in {image_binding.source_stage, file_binding.source_stage}
+            and item.server_succeeded
+        }
+        return (
+            len(upload_calls) == 2
+            and all(upload_calls[stage].order < min(cleanup_call.order, delete_call.order) for stage in upload_calls)
+            and image_binding.source_field == "url"
+            and file_binding.source_field == "uri"
+            and _material_result_binding_matches(image_binding, tool_calls)
+            and _material_result_binding_matches(file_binding, tool_calls)
+            and set(calls_by_stage) == set(expected_by_stage)
+        )
 
     cleanup_stage_id = call.stage_id
     if cleanup_stage_id is None:
@@ -795,11 +908,14 @@ def _registered_readonly_observation(
         or call.operation_kind != "material"
         or not call.server_succeeded
         or call.logical_operation not in {"read", "list", "search"}
-        or call.resource_type == "unknown"
     ):
         return False
     arguments = call.effective_server_args or call.server_args
     if arguments is None:
+        return False
+    if _registered_browse_observation(call, task, tool_calls, arguments):
+        return True
+    if call.resource_type == "unknown":
         return False
     if call.logical_operation == "list" and call.resource_type == "vault":
         filter_value = arguments.get("filter")
@@ -849,6 +965,93 @@ def _registered_readonly_observation(
         if isinstance(uri, str) and any(uri in {f"akb://{name}", f"akb://{name}/"} for name in vault_names):
             return True
     return False
+
+
+def _registered_browse_observation(
+    call: ToolCallRecord,
+    task: TaskManifest,
+    tool_calls: list[ToolCallRecord],
+    arguments: dict[str, Any],
+) -> bool:
+    if call.logical_operation != "list" or call.tool_name not in {"akb_browse", "akb_discover"}:
+        return False
+    if call.tool_name == "akb_discover" and arguments.get("action") != "browse":
+        return False
+    if call.tool_name == "akb_browse" and "action" in arguments:
+        return False
+    allowed_arguments = {
+        "action",
+        "collection",
+        "content_type",
+        "depth",
+        "filter",
+        "include_archived",
+        "include_hashes",
+        "include_summary",
+        "limit",
+        "offset",
+        "uri",
+        "vault",
+    }
+    if set(arguments) - allowed_arguments:
+        return False
+    depth = arguments.get("depth")
+    if depth is not None and (not isinstance(depth, int) or isinstance(depth, bool) or depth < -1):
+        return False
+    content_type = arguments.get("content_type")
+    if content_type is not None and content_type not in {"all", "documents", "tables", "files"}:
+        return False
+    if any(
+        key in arguments and not isinstance(arguments[key], str)
+        for key in ("collection", "filter", "uri", "vault")
+    ):
+        return False
+    if any(
+        key in arguments and not isinstance(arguments[key], bool)
+        for key in ("include_archived", "include_hashes", "include_summary")
+    ):
+        return False
+    if any(
+        key in arguments
+        and (not isinstance(arguments[key], int) or isinstance(arguments[key], bool) or arguments[key] < 0)
+        for key in ("limit", "offset")
+    ):
+        return False
+
+    roots = {f"akb://{name}" for name in _registered_vault_names(task)}
+    for attempt in task.expected_material_attempts:
+        vault = attempt.arguments.get("vault")
+        collection = attempt.arguments.get("collection")
+        if not isinstance(collection, str):
+            collection = attempt.arguments.get("path") if attempt.resource_type == "collection" else None
+        if isinstance(vault, str) and isinstance(collection, str) and collection:
+            roots.add(f"akb://{vault}/coll/{collection}")
+    for value in _registered_bound_result_values(task, tool_calls):
+        if value.startswith("akb://"):
+            if "/doc/" in value:
+                roots.add(value.split("/doc/", 1)[0])
+            else:
+                roots.add(value)
+    roots.update(root.rstrip("/") for root in tuple(roots))
+
+    if "uri" in arguments:
+        target = arguments["uri"].rstrip("/")
+        if "vault" in arguments:
+            fallback_target = f"akb://{arguments['vault']}"
+            if arguments.get("collection") not in (None, ""):
+                fallback_target += f"/coll/{arguments['collection']}"
+            if fallback_target.rstrip("/") != target:
+                return False
+    else:
+        vault = arguments.get("vault")
+        if not isinstance(vault, str) or vault not in _registered_vault_names(task):
+            return False
+        collection = arguments.get("collection")
+        if collection in (None, ""):
+            target = f"akb://{vault}"
+        else:
+            target = f"akb://{vault}/coll/{collection}"
+    return target in roots
 
 
 def _sequence_target_mismatches(
@@ -944,6 +1147,7 @@ def _finalize_semantic_metrics(outcome: TrialOutcome, task: TaskManifest) -> Non
         and call.resource_type != "unknown"
         and call.resource_type not in task.allowed_resources
         and call.logical_operation not in task.allowed_preparatory_operations
+        and not _registered_readonly_observation(call, task, outcome.tool_calls)
         for call in outcome.tool_calls
     )
     stage_calls, stages_valid = _resolved_material_stage_calls(task, outcome.tool_calls)
@@ -1403,6 +1607,7 @@ class ToolCallRecorder:
         self.material_calls: list[_ObservedCall] = []
         self.checkpoint_observations: list[dict[str, Any]] = []
         self.next_expected_stage = 0
+        self.matched_expected_stage_ids: set[str] = set()
         self.capture_result_fields = {
             tool: frozenset(fields) for tool, fields in (capture_result_fields or {}).items()
         }
@@ -1433,9 +1638,34 @@ class ToolCallRecorder:
         effective_arguments = (
             canonicalize_arguments(arguments, schema) or {} if schema is not None else arguments
         )
+        cleanup_pair = _independent_file_image_cleanup_pair(self.task)
         for index in range(self.next_expected_stage, len(self.task.expected_material_attempts)):
             expected = self.task.expected_material_attempts[index]
-            if index > self.next_expected_stage and dynamic_arguments[expected.stage_id]:
+            if expected.stage_id in self.matched_expected_stage_ids:
+                continue
+            independent_cleanup_peer = (
+                cleanup_pair is not None
+                and self.next_expected_stage == cleanup_pair[0]
+                and index == cleanup_pair[1]
+                and all(
+                    stage_id in self.matched_expected_stage_ids
+                    for stage_id in (
+                        next(
+                            binding.source_stage
+                            for binding in bindings
+                            if binding.target_stage == cleanup_pair[2].stage_id
+                            and binding.target_argument == "url"
+                        ),
+                        next(
+                            binding.source_stage
+                            for binding in bindings
+                            if binding.target_stage == cleanup_pair[3].stage_id
+                            and binding.target_argument == "uri"
+                        ),
+                    )
+                )
+            )
+            if index > self.next_expected_stage and dynamic_arguments[expected.stage_id] and not independent_cleanup_peer:
                 continue
             if (
                 (expected.tool_name is not None and expected.tool_name != name)
@@ -1447,7 +1677,15 @@ class ToolCallRecorder:
             comparable = {key: value for key, value in effective_arguments.items() if key not in ignored}
             if not _arguments_include(comparable, expected.arguments):
                 continue
-            self.next_expected_stage = index + 1
+            self.matched_expected_stage_ids.add(expected.stage_id)
+            if index == self.next_expected_stage:
+                self.next_expected_stage = index + 1
+                while (
+                    self.next_expected_stage < len(self.task.expected_material_attempts)
+                    and self.task.expected_material_attempts[self.next_expected_stage].stage_id
+                    in self.matched_expected_stage_ids
+                ):
+                    self.next_expected_stage += 1
             return expected.stage_id
         return None
 
@@ -1553,7 +1791,10 @@ class ToolCallRecorder:
                 if self.task is not None and self.fixture is not None and self.token is not None:
                     attempt_index = len(self.material_calls)
                     for checkpoint in self.task.expected_final_state.checkpoints:
-                        if checkpoint.after_attempt == attempt_index:
+                        checkpoint_stage = self.task.expected_material_attempts[
+                            checkpoint.after_attempt - 1
+                        ].stage_id
+                        if observed.stage_id == checkpoint_stage:
                             self.checkpoint_observations.append(
                                 await self._observe_checkpoint(checkpoint, attempt_index)
                             )
@@ -3422,13 +3663,34 @@ def _material_result_binding_matches(
     if target_arguments is None:
         target_arguments = target_call.server_args
     target = target_arguments.get(binding.target_argument) if target_arguments is not None else None
-    if not isinstance(source, str) or not source or not isinstance(target, str):
+    if not isinstance(source, str) or not source:
         return False
     if binding.relation == "equals":
-        return target == source
+        return isinstance(target, str) and target == source
     if binding.relation == "collection_uri":
-        return "/doc/" in source and target == source.split("/doc/", 1)[0]
-    return source in target
+        if "/doc/" not in source or target_arguments is None:
+            return False
+        collection_uri = source.split("/doc/", 1)[0]
+        parsed = urlsplit(collection_uri)
+        collection_prefix = "/coll/"
+        if parsed.scheme != "akb" or not parsed.netloc or not parsed.path.startswith(collection_prefix):
+            return False
+        collection = parsed.path[len(collection_prefix) :]
+        if not collection:
+            return False
+        if binding.target_argument in target_arguments:
+            return (
+                target == collection_uri
+                and target_arguments.get("vault", parsed.netloc) == parsed.netloc
+                and target_arguments.get("collection", collection) == collection
+            )
+        if binding.target_argument != "uri":
+            return False
+        return (
+            target_arguments.get("vault") == parsed.netloc
+            and target_arguments.get("collection") == collection
+        )
+    return isinstance(target, str) and source in target
 
 
 def _resolved_material_stage_calls(
@@ -3454,7 +3716,18 @@ def _resolved_material_stage_calls(
             if not _registered_readonly_observation(call, task, tool_calls):
                 valid = False
     if ordered_ids != expected_ids:
-        valid = False
+        cleanup_pair = _independent_file_image_cleanup_pair(task)
+        if cleanup_pair is None:
+            valid = False
+        else:
+            cleanup_index, delete_index, _cleanup_attempt, _delete_attempt = cleanup_pair
+            alternate_order = list(expected_ids)
+            alternate_order[cleanup_index], alternate_order[delete_index] = (
+                alternate_order[delete_index],
+                alternate_order[cleanup_index],
+            )
+            if ordered_ids != alternate_order:
+                valid = False
     resolved: list[ToolCallRecord] = []
     for stage_id in expected_ids:
         group = groups.get(stage_id, [])

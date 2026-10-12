@@ -22,7 +22,7 @@ ParentLineage = Literal["previous"]
 ParentName = Literal["previous_baseline", "previous_candidate"]
 
 TOTAL_BUDGET_USD = Decimal("50")
-PRIOR_SPEND_USD = Decimal("8.9654014352")
+PRIOR_SPEND_USD = Decimal("9.0583979192")
 NEW_EXECUTION_LIMIT_USD = TOTAL_BUDGET_USD - PRIOR_SPEND_USD
 PER_TRIAL_LIMIT_USD = Decimal("0.10")
 REQUEST_TIMEOUT_SECONDS = 300
@@ -30,8 +30,8 @@ PAIRED_ORDER_MODE = "counterbalanced_task_repeat"
 PAIRED_ORDER_SEED = "akb-358-v1"
 APPROVED_AUTHORIZATION = {
     "uri": "akb://reef-akb/coll/issues/doc/akb-361.md",
-    "revision": "5d0631f40ce6619a1518c5dca031a95aa5e21ca7",  # pragma: allowlist secret
-    "content_sha256": "3e317eee59deb5932ffd83da80f57841e7aa6b67dd98ba74acc1cc9987f7fb64",  # pragma: allowlist secret
+    "revision": "9abc158b4a70ddf684e3332d47b4dd2c7d723fac",  # pragma: allowlist secret
+    "content_sha256": "a9ec2f3ae9bedbc3023066546f1c39c54d4d37651703b233d1547873c1492fe9",  # pragma: allowlist secret
 }
 APPROVED_PARENT_SHA256: dict[ParentName, str] = {
     "previous_baseline": "276e0dfdfdad58ce083f65b3ea0c21a22675f31d8a393995dace62b77eaa43a4",  # pragma: allowlist secret
@@ -151,6 +151,27 @@ class ToolGuidanceSelection:
             "selected_trials": [trial.model_dump(mode="json") for trial in self.selected_trials],
             "selected_identity_count": len(self.selected_trials),
             "expected_model_trials": 2 * len(self.selected_trials),
+            "budget": {
+                "session_max_usd": str(self.budget.session_max_usd),
+                "prior_conservative_spend_usd": str(self.budget.prior_conservative_spend_usd),
+                "new_execution_limit_usd": str(self.budget.new_execution_limit_usd),
+                "per_trial_usd": str(self.budget.per_trial_usd),
+                "request_timeout_seconds": self.budget.request_timeout_seconds,
+            },
+        }
+
+    def checkpoint_preflight(self) -> dict[str, Any]:
+        """Return the immutable, read-only input validation recorded in checkpoints."""
+
+        return {
+            "read_only": True,
+            "selection_path": str(self.path),
+            "selection_sha256": self.sha256,
+            "authorization": self.authorization.model_dump(mode="json"),
+            "parents": {name: dict(parent) for name, parent in sorted(self.parents.items())},
+            "parent_count": len(self.parents),
+            "selected_trial_count": len(self.selected_trials),
+            "role_counts": dict(sorted(Counter(trial.role for trial in self.selected_trials).items())),
             "budget": {
                 "session_max_usd": str(self.budget.session_max_usd),
                 "prior_conservative_spend_usd": str(self.budget.prior_conservative_spend_usd),

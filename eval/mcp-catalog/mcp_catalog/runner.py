@@ -66,6 +66,7 @@ from .execution import (
     execute_smoke,
     has_measured_evidence,
     has_server_instructions_evidence,
+    _material_attempt_positions_by_stage,
     provider_response_cost,
     provider_token_totals,
     registered_route_target,
@@ -124,6 +125,94 @@ def _validate_openrouter_endpoint_price_ceiling(spec: ModelSpec, endpoint: dict[
             raise ValueError(f"provider endpoint {price_name} price must be finite and positive for {spec.class_name}")
         if price_per_token * Decimal(1_000_000) > Decimal(str(ceiling_per_million)):
             raise ValueError(f"provider endpoint {price_name} price exceeds the manifest ceiling for {spec.class_name}")
+
+
+_DYNAMIC_PROVIDER_REGISTRY_FIELDS = frozenset(
+    {
+        "throughput",
+        "latency",
+        "uptime",
+        "request_count",
+        "latency_last_30m",
+        "throughput_last_30m",
+        "uptime_last_1d",
+        "uptime_last_30m",
+        "uptime_last_5m",
+        "perf_last_30m_by_workload",
+    }
+)
+
+
+def _provider_registry_invariant_snapshot(
+    registry: dict[str, Any],
+    manifest: BenchmarkRunManifest,
+) -> dict[str, Any]:
+    if registry.get("status") != "verified":
+        raise RuntimeContractError("fresh provider registry verification is unavailable", stage="provider_registry")
+    models = registry.get("models")
+    expected_model_ids = {spec.model_id for spec in manifest.models}
+    if not isinstance(models, dict) or set(models) != expected_model_ids:
+        raise RuntimeContractError("provider registry model set drifted", stage="provider_registry")
+
+    def without_dynamic_metrics(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: without_dynamic_metrics(item)
+                for key, item in value.items()
+                if key not in _DYNAMIC_PROVIDER_REGISTRY_FIELDS
+            }
+        if isinstance(value, list):
+            return [without_dynamic_metrics(item) for item in value]
+        return value
+
+    invariant_models: dict[str, Any] = {}
+    for spec in manifest.models:
+        registered = models[spec.model_id]
+        model_record = registered.get("model_record") if isinstance(registered, dict) else None
+        selected_endpoint = registered.get("selected_endpoint") if isinstance(registered, dict) else None
+        if not isinstance(model_record, dict) or not isinstance(selected_endpoint, dict):
+            raise RuntimeContractError(
+                f"provider registry identity is incomplete for {spec.class_name}",
+                stage="provider_registry",
+            )
+        try:
+            _validate_openrouter_model_identity(spec, model_record)
+            _validate_openrouter_endpoint_price_ceiling(spec, selected_endpoint)
+        except ValueError as exc:
+            raise RuntimeContractError(str(exc), stage="provider_registry") from exc
+        if registered_route_target(spec, registered) is None:
+            raise RuntimeContractError(
+                f"provider registry route or endpoint parameters drifted for {spec.class_name}",
+                stage="provider_registry",
+            )
+        invariant_models[spec.model_id] = {
+            "manifest_version": registered.get("manifest_version"),
+            "model_record": without_dynamic_metrics(model_record),
+            "selected_endpoint": without_dynamic_metrics(selected_endpoint),
+        }
+    return {"status": "verified", "models": invariant_models}
+
+
+def _provider_registry_invariant_hash(
+    registry: dict[str, Any],
+    manifest: BenchmarkRunManifest,
+) -> str:
+    return hash_json(_provider_registry_invariant_snapshot(registry, manifest))
+
+
+def _verify_provider_registry_revalidation(
+    frozen: dict[str, Any],
+    current: dict[str, Any],
+    manifest: BenchmarkRunManifest,
+) -> str:
+    frozen_invariants = _provider_registry_invariant_snapshot(frozen, manifest)
+    current_invariants = _provider_registry_invariant_snapshot(current, manifest)
+    if current_invariants != frozen_invariants:
+        raise RuntimeContractError(
+            "fresh provider registry route, model, parameters, prices, or endpoint ceiling drifted",
+            stage="provider_registry",
+        )
+    return hash_json(frozen_invariants)
 
 
 class NeedsUserInput(RuntimeError):
@@ -829,6 +918,7 @@ class BenchmarkRunner:
             expected_smoke_cells=expected_smoke,
             secrets=resolver.secret_values(),
             continuation=(self.continuation.checkpoint_lineage[cast(ArmName, self.arm)] if self.continuation else None),
+            selection_preflight=(self.selection.checkpoint_preflight() if self.selection is not None else None),
             resume=self.resume_path is not None,
             reuse_terminal_trials=self.selection is not None,
         )
@@ -1026,6 +1116,15 @@ class BenchmarkRunner:
             checkpoint_evidence["reserved_cost_usd"] = checkpoint_doc.reserved_cost_usd
             checkpoint_evidence["smoke_status"] = checkpoint_doc.smoke_status
             checkpoint_evidence["smoke_cell_count"] = len(checkpoint_doc.smoke_gate)
+            checkpoint_evidence["provider_registry_hash"] = checkpoint_doc.header.provider_registry_hash
+            checkpoint_evidence["selection_preflight"] = checkpoint_doc.selection_preflight
+            checkpoint_evidence["provider_registry_revalidation"] = [
+                {
+                    "snapshot_hash": item["snapshot_hash"],
+                    "invariant_sha256": item.get("invariant_sha256"),
+                }
+                for item in checkpoint_doc.provider_registry_revalidation
+            ]
             checkpoint_evidence["spent"] = checkpoint_doc.spent.model_dump(mode="json")
             checkpoint_evidence["spent_hash"] = checkpoint_doc.spent_hash
             checkpoint_evidence["timing_hash"] = checkpoint_doc.timing_hash
@@ -1768,6 +1867,7 @@ class BenchmarkRunner:
                 await asyncio.to_thread(
                     self._checkpoint_store.bind_pre_smoke_seal,
                     self.pre_smoke_seal_hash,
+                    self.provider_registry,
                 )
         if self.paired_coordinator is not None:
             await self.paired_coordinator.mark_pre_smoke_ready(cast(ArmName, self.arm))
@@ -2067,6 +2167,38 @@ class BenchmarkRunner:
             current_stage = "provider_registry"
             if self.continuation is not None:
                 self.provider_registry = self.continuation.parent_provider_registry()
+            elif self._checkpoint_store is not None and self.resume_path is not None:
+                frozen_registry = self._checkpoint_store.document.provider_registry_snapshot
+                if frozen_registry is None:
+                    raise RuntimeContractError(
+                        "resume checkpoint is missing its frozen provider registry snapshot",
+                        stage="provider_registry",
+                    )
+                if self._checkpoint_store.resumed_from_finalized:
+                    self.provider_registry = frozen_registry
+                else:
+                    current_registry = await self._capture_provider_registry(ledger)
+                    try:
+                        current_hash = _verify_provider_registry_revalidation(
+                            frozen_registry,
+                            current_registry,
+                            self.manifest,
+                        )
+                    except Exception:
+                        async with self._checkpoint_lock:
+                            await asyncio.to_thread(
+                                self._checkpoint_store.record_provider_registry_revalidation,
+                                current_registry,
+                                invariant_sha256=None,
+                            )
+                        raise
+                    async with self._checkpoint_lock:
+                        await asyncio.to_thread(
+                            self._checkpoint_store.record_provider_registry_revalidation,
+                            current_registry,
+                            invariant_sha256=current_hash,
+                        )
+                    self.provider_registry = frozen_registry
             else:
                 await self._capture_provider_registry(ledger)
             for transport in self.manifest.transports:
@@ -2518,15 +2650,27 @@ def _validate_trial_evidence(
 
     before = _state_observations(outcome, task, before=True)
     after = _state_observations(outcome, task, before=False)
-    expected_checkpoints = [checkpoint.after_attempt for checkpoint in task.expected_final_state.checkpoints]
+    material_positions = _material_attempt_positions_by_stage(outcome.tool_calls)
+    expected_checkpoints = [
+        material_positions.get(task.expected_material_attempts[checkpoint.after_attempt - 1].stage_id)
+        for checkpoint in task.expected_final_state.checkpoints
+    ]
     raw_checkpoints = outcome.state_checkpoint_observations
     recorded_checkpoints = [item.get("after_attempt") for item in raw_checkpoints if isinstance(item, dict)]
-    if recorded_checkpoints != expected_checkpoints or len(raw_checkpoints) != len(expected_checkpoints):
+    if (
+        any(position is None for position in expected_checkpoints)
+        or recorded_checkpoints != expected_checkpoints
+        or len(raw_checkpoints) != len(expected_checkpoints)
+    ):
         raise ValueError("state checkpoint observations do not cover the registered checkpoints")
     for item in raw_checkpoints:
         if (
             not isinstance(item, dict)
             or set(item) != {"after_attempt", "available", "status_code", "payload", "error"}
+            or not isinstance(item.get("after_attempt"), int)
+            or isinstance(item.get("after_attempt"), bool)
+            or item["after_attempt"] < 1
+            or item["after_attempt"] > outcome.material_call_count
             or not isinstance(item.get("available"), bool)
             or (item.get("error") is not None and not isinstance(item.get("error"), str))
         ):

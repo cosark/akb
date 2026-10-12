@@ -13,6 +13,7 @@ from mcp_catalog.checkpoint import (
     CheckpointKey,
     CheckpointStore,
     checkpoint_record_hash,
+    provider_registry_snapshot_hash,
 )
 from mcp_catalog.contracts import hash_json, load_run_manifest, load_task_corpus
 from mcp_catalog.execution import BudgetExceeded, BudgetLedger, ToolCallRecord, TrialOutcome
@@ -23,6 +24,18 @@ from paired_artifact_factory import (
 )
 
 ROOT = Path(__file__).parents[1]
+_TEST_PROVIDER_REGISTRY = {"status": "unavailable", "reason": "synthetic checkpoint fixture"}
+_TEST_SELECTION_PREFLIGHT = {
+    "read_only": True,
+    "selection_path": "/tmp/selection.json",
+    "selection_sha256": "a" * 64,
+    "authorization": {},
+    "parents": {},
+    "parent_count": 0,
+    "selected_trial_count": 0,
+    "role_counts": {},
+    "budget": {},
+}
 
 
 def _inputs() -> tuple[object, list[object], CheckpointHeader, CheckpointKey, dict[str, CheckpointKey]]:
@@ -122,8 +135,7 @@ def _store(
     reuse_terminal_trials: bool = False,
 ) -> tuple[CheckpointStore, CheckpointKey]:
     _manifest, tasks, header, key, expected = _inputs()
-    return (
-        CheckpointStore(
+    store = CheckpointStore(
             path,
             header=header,
             expected_keys=expected,
@@ -135,11 +147,13 @@ def _store(
                 "lightweight:stdio": ("lightweight", "qwen/qwen3.8-27b", "stdio"),
             },
             secrets=secrets,
+            selection_preflight=_TEST_SELECTION_PREFLIGHT,
             resume=resume,
             reuse_terminal_trials=reuse_terminal_trials,
-        ),
-        key,
-    )
+        )
+    if not resume:
+        store.bind_pre_smoke_seal("e" * 64, _TEST_PROVIDER_REGISTRY)
+    return store, key
 
 
 def test_trial_checkpoint_is_atomic_redacted_and_reusable(tmp_path: Path) -> None:
@@ -155,6 +169,41 @@ def test_trial_checkpoint_is_atomic_redacted_and_reusable(tmp_path: Path) -> Non
     reused = resumed.completed_outcome_for(key)
     assert reused is not None
     assert resumed.document.spent.model_requests == 1
+
+
+def test_checkpoint_pins_selection_and_exact_provider_registry_snapshots(tmp_path: Path) -> None:
+    path = tmp_path / "pinned-inputs.checkpoint.json"
+    store, _key = _store(path)
+    assert store.document.provider_registry_snapshot == _TEST_PROVIDER_REGISTRY
+    assert store.document.header.provider_registry_hash == provider_registry_snapshot_hash(
+        _TEST_PROVIDER_REGISTRY
+    )
+    assert store.document.selection_preflight == _TEST_SELECTION_PREFLIGHT
+
+    revalidation = {"status": "unavailable", "reason": "synthetic fresh verification"}
+    store.record_provider_registry_revalidation(revalidation, invariant_sha256=None)
+    resumed, _key = _store(path, resume=True)
+    assert resumed.document.provider_registry_snapshot == _TEST_PROVIDER_REGISTRY
+    assert resumed.document.provider_registry_revalidation[0]["snapshot"] == revalidation
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["provider_registry_revalidation"][0]["snapshot"]["reason"] = "tampered"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(CheckpointError, match="revalidation hash"):
+        _store(path, resume=True)
+
+    raw["provider_registry_revalidation"][0]["snapshot"] = revalidation
+    raw["provider_registry_revalidation"][0]["snapshot_hash"] = hash_json(revalidation)
+    raw["provider_registry_snapshot"]["reason"] = "tampered frozen registry"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(CheckpointError, match="provider registry hash"):
+        _store(path, resume=True)
+
+    raw["provider_registry_snapshot"] = _TEST_PROVIDER_REGISTRY
+    raw["selection_preflight"]["selection_sha256"] = "b" * 64
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(CheckpointError, match="selection preflight"):
+        _store(path, resume=True)
 
 
 def test_checkpoint_rejects_model_input_hash_drift_on_reload(tmp_path: Path) -> None:
@@ -193,7 +242,7 @@ def test_checkpoint_rejects_redaction_that_would_break_model_input_hash(tmp_path
     with pytest.raises(CheckpointError, match="model input evidence"):
         store.record_trial(key, outcome, status="completed")
 
-    assert not path.exists()
+    assert json.loads(path.read_text(encoding="utf-8"))["records"] == {}
 
 
 def test_selection_resume_reuses_failed_and_incomplete_terminal_rows(tmp_path: Path) -> None:
@@ -237,6 +286,7 @@ def test_resume_rejects_checkpoint_from_a_prior_task_corpus_seal(tmp_path: Path)
         expected_tasks={task.id: task for task in tasks},
         expected_smoke_cells=smoke_cells,
     )
+    old_store.bind_pre_smoke_seal("e" * 64, _TEST_PROVIDER_REGISTRY)
     old_store.record_trial(old_key, _outcome(old_key), status="completed")
 
     with pytest.raises(CheckpointError):
@@ -375,6 +425,7 @@ def test_explicit_continuation_reuses_failed_parent_outcomes_without_retry(tmp_p
         },
         continuation=lineage,
     )
+    store.bind_pre_smoke_seal("e" * 64, _TEST_PROVIDER_REGISTRY)
     failed = _outcome(key, error="recorded parent failure")
     store.record_trial(key, failed, status="failed")
 

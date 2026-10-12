@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import contextlib
 from pathlib import Path
@@ -18,7 +19,7 @@ from .evidence import safe_json, validate_model_input_evidence
 from .execution import TrialOutcome, has_measured_evidence, has_server_instructions_evidence
 
 
-CHECKPOINT_SCHEMA_VERSION: Literal[3] = 3
+CHECKPOINT_SCHEMA_VERSION: Literal[4] = 4
 
 
 class CheckpointError(ValueError):
@@ -26,12 +27,13 @@ class CheckpointError(ValueError):
 
 
 class CheckpointHeader(ContractModel):
-    schema_version: Literal[3] = CHECKPOINT_SCHEMA_VERSION
+    schema_version: Literal[4] = CHECKPOINT_SCHEMA_VERSION
     source_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     run_manifest_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     task_corpus_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     arm: ArmName
     pre_smoke_seal_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    provider_registry_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class CheckpointKey(ContractModel):
@@ -104,7 +106,7 @@ SmokeTransport = Literal["http", "stdio"]
 
 
 class TrialCheckpoint(ContractModel):
-    schema_version: Literal[3] = CHECKPOINT_SCHEMA_VERSION
+    schema_version: Literal[4] = CHECKPOINT_SCHEMA_VERSION
     status: TrialStatus
     key: CheckpointKey
     outcome: TrialOutcome
@@ -112,7 +114,7 @@ class TrialCheckpoint(ContractModel):
 
 
 class SmokeCellCheckpoint(ContractModel):
-    schema_version: Literal[3] = CHECKPOINT_SCHEMA_VERSION
+    schema_version: Literal[4] = CHECKPOINT_SCHEMA_VERSION
     status: TrialStatus
     model_class: SmokeModelClass
     model_id: str = Field(min_length=1, max_length=200)
@@ -122,7 +124,7 @@ class SmokeCellCheckpoint(ContractModel):
 
 
 class CheckpointDocument(ContractModel):
-    schema_version: Literal[3] = CHECKPOINT_SCHEMA_VERSION
+    schema_version: Literal[4] = CHECKPOINT_SCHEMA_VERSION
     lifecycle: Literal["open", "closing", "finalized"] = "open"
     header: CheckpointHeader
     spent: CheckpointBudget = Field(default_factory=CheckpointBudget)
@@ -135,6 +137,9 @@ class CheckpointDocument(ContractModel):
     records: dict[str, TrialCheckpoint] = Field(default_factory=dict)
     smoke_status: Literal["in_progress", "passed", "failed"] | None = None
     smoke_gate: dict[str, SmokeCellCheckpoint] = Field(default_factory=dict)
+    selection_preflight: dict[str, Any] | None = None
+    provider_registry_snapshot: dict[str, Any] | None = None
+    provider_registry_revalidation: list[dict[str, Any]] = Field(default_factory=list)
     continuation: dict[str, Any] | None = None
 
 
@@ -170,6 +175,18 @@ def spent_hash(spent: CheckpointBudget) -> str:
 
 def timing_hash(timing: CheckpointTiming) -> str:
     return hash_json(timing.model_dump(mode="json"))
+
+
+def provider_registry_snapshot_hash(snapshot: Mapping[str, Any]) -> str:
+    """Return and verify the digest of the exact credential-free registry snapshot."""
+
+    if snapshot.get("status") == "verified":
+        declared = snapshot.get("snapshot_hash")
+        calculated = hash_json({key: value for key, value in snapshot.items() if key != "snapshot_hash"})
+        if not isinstance(declared, str) or declared != calculated:
+            raise CheckpointError("provider registry snapshot digest does not match its contents")
+        return declared
+    return hash_json(dict(snapshot))
 
 
 def valid_completed_outcome(outcome: TrialOutcome, task: TaskManifest) -> bool:
@@ -241,6 +258,7 @@ class CheckpointStore:
         expected_smoke_cells: Mapping[str, tuple[SmokeModelClass, str, SmokeTransport]],
         secrets: tuple[str, ...] = (),
         continuation: dict[str, Any] | None = None,
+        selection_preflight: dict[str, Any] | None = None,
         resume: bool = False,
         reuse_terminal_trials: bool = False,
     ) -> None:
@@ -255,11 +273,15 @@ class CheckpointStore:
         self.expected_smoke_cells = dict(expected_smoke_cells)
         self.secrets = secrets
         self.continuation = continuation
+        self.selection_preflight = selection_preflight
         self.reuse_terminal_trials = reuse_terminal_trials
+        self.resumed_from_finalized = False
         if resume:
             if not self.path.is_file():
                 raise CheckpointError(f"resume checkpoint does not exist: {self.path}")
             self.document = self._load_existing()
+            self.header = self.document.header
+            self.resumed_from_finalized = self.document.lifecycle == "finalized"
         else:
             if self.path.exists():
                 raise CheckpointError(f"checkpoint already exists; use --resume: {self.path}")
@@ -271,6 +293,7 @@ class CheckpointStore:
                 spent_hash=spent_hash(initial_spent),
                 timing=initial_timing,
                 timing_hash=timing_hash(initial_timing),
+                selection_preflight=selection_preflight,
                 continuation=continuation,
             )
         if resume and self.document.lifecycle == "finalized":
@@ -310,10 +333,16 @@ class CheckpointStore:
             raise CheckpointError("continuation checkpoint seed requires a new empty destination")
         if document.lifecycle != "open" or document.reserved_cost_usd != 0:
             raise CheckpointError("continuation checkpoint seed must be open with no reservation")
-        if document.header.model_dump(exclude={"pre_smoke_seal_hash"}) != self.header.model_dump(
-            exclude={"pre_smoke_seal_hash"}
+        if document.header.model_dump(exclude={"pre_smoke_seal_hash", "provider_registry_hash"}) != self.header.model_dump(
+            exclude={"pre_smoke_seal_hash", "provider_registry_hash"}
         ):
             raise CheckpointError("continuation checkpoint header does not match this run")
+        if (
+            document.provider_registry_snapshot is None
+            or document.header.provider_registry_hash != provider_registry_snapshot_hash(document.provider_registry_snapshot)
+            or document.header.pre_smoke_seal_hash is None
+        ):
+            raise CheckpointError("continuation checkpoint is missing its frozen provider registry seal")
         if document.spent_hash != spent_hash(document.spent) or document.timing_hash != timing_hash(document.timing):
             raise CheckpointError("continuation checkpoint accounting digest does not match")
         for trial_record in document.records.values():
@@ -439,6 +468,7 @@ class CheckpointStore:
         reserved_cost_usd: float = 0.0,
     ) -> bool:
         self._ensure_writable()
+        self._ensure_provider_registry_sealed()
         if reserved_cost_usd < 0:
             raise CheckpointError("checkpoint reserved cost cannot be negative")
         self._validate_key(key)
@@ -483,6 +513,7 @@ class CheckpointStore:
         reserved_cost_usd: float = 0.0,
     ) -> bool:
         self._ensure_writable()
+        self._ensure_provider_registry_sealed()
         if reserved_cost_usd < 0:
             raise CheckpointError("checkpoint reserved cost cannot be negative")
         expected = self.expected_smoke_cells.get(cell_key)
@@ -582,12 +613,41 @@ class CheckpointStore:
             document = CheckpointDocument.model_validate(raw)
         except Exception as exc:
             raise CheckpointError(f"resume checkpoint contract validation failed: {exc}") from exc
-        if document.header.model_dump(exclude={"pre_smoke_seal_hash"}) != self.header.model_dump(
-            exclude={"pre_smoke_seal_hash"}
+        if document.header.model_dump(exclude={"pre_smoke_seal_hash", "provider_registry_hash"}) != self.header.model_dump(
+            exclude={"pre_smoke_seal_hash", "provider_registry_hash"}
         ):
             raise CheckpointError("resume checkpoint exact-input header does not match this run")
         if document.continuation != self.continuation:
             raise CheckpointError("resume checkpoint amendment lineage does not match this run")
+        if document.selection_preflight != self.selection_preflight:
+            raise CheckpointError("resume checkpoint selection preflight does not match this run")
+        if document.provider_registry_snapshot is None:
+            if document.header.provider_registry_hash is not None or document.header.pre_smoke_seal_hash is not None:
+                raise CheckpointError("resume checkpoint is missing its sealed provider registry snapshot")
+            if document.records or document.smoke_gate or document.smoke_status is not None:
+                raise CheckpointError("resume checkpoint has paid evidence without a provider registry snapshot")
+        else:
+            if safe_json(document.provider_registry_snapshot, self.secrets) != document.provider_registry_snapshot:
+                raise CheckpointError("resume checkpoint provider registry contains secret-bearing values")
+            registry_hash = provider_registry_snapshot_hash(document.provider_registry_snapshot)
+            if document.header.provider_registry_hash != registry_hash:
+                raise CheckpointError("resume checkpoint provider registry hash does not match its snapshot")
+            if document.header.pre_smoke_seal_hash is None and (
+                document.records or document.smoke_gate or document.smoke_status is not None
+            ):
+                raise CheckpointError("resume checkpoint has paid evidence without its pre-smoke seal")
+        for evidence in document.provider_registry_revalidation:
+            snapshot = evidence.get("snapshot")
+            if not isinstance(snapshot, dict) or safe_json(snapshot, self.secrets) != snapshot:
+                raise CheckpointError("resume checkpoint provider registry revalidation is malformed")
+            if evidence.get("snapshot_hash") != provider_registry_snapshot_hash(snapshot):
+                raise CheckpointError("resume checkpoint provider registry revalidation hash does not match")
+            invariant_sha256 = evidence.get("invariant_sha256")
+            if invariant_sha256 is not None and (
+                not isinstance(invariant_sha256, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", invariant_sha256)
+            ):
+                raise CheckpointError("resume checkpoint provider registry revalidation invariant hash is invalid")
         if document.spent_hash != spent_hash(document.spent):
             raise CheckpointError("resume checkpoint spent-usage digest does not match")
         if document.timing_hash != timing_hash(document.timing):
@@ -641,19 +701,59 @@ class CheckpointStore:
             raise CheckpointError("resume checkpoint timing attempt is both active and finalized")
         return document
 
-    def bind_pre_smoke_seal(self, seal_hash: str) -> None:
+    def bind_pre_smoke_seal(
+        self,
+        seal_hash: str,
+        provider_registry_snapshot: dict[str, Any],
+    ) -> None:
         """Bind or verify the exact pre-paid evidence seal before smoke requests."""
 
         self._ensure_writable()
         if len(seal_hash) != 64 or any(char not in "0123456789abcdef" for char in seal_hash):
             raise CheckpointError("pre-smoke seal must be a SHA-256 digest")
+        if safe_json(provider_registry_snapshot, self.secrets) != provider_registry_snapshot:
+            raise CheckpointError("provider registry snapshot contains secret-bearing values")
+        registry_hash = provider_registry_snapshot_hash(provider_registry_snapshot)
         previous = self.document.header.pre_smoke_seal_hash
         if previous is not None and previous != seal_hash:
             raise CheckpointError("resume checkpoint pre-smoke seal does not match this run")
+        previous_registry_hash = self.document.header.provider_registry_hash
+        if previous_registry_hash is not None and previous_registry_hash != registry_hash:
+            raise CheckpointError("resume checkpoint provider registry snapshot does not match this run")
+        previous_snapshot = self.document.provider_registry_snapshot
+        if previous_snapshot is not None and previous_snapshot != provider_registry_snapshot:
+            raise CheckpointError("resume checkpoint provider registry snapshot changed")
         if previous is None and (self.document.records or self.document.smoke_gate or self.document.smoke_status is not None):
             raise CheckpointError("resume checkpoint with reusable trials is missing its pre-smoke seal")
-        self.header = self.header.model_copy(update={"pre_smoke_seal_hash": seal_hash})
+        self.document.provider_registry_snapshot = provider_registry_snapshot
+        self.header = self.header.model_copy(
+            update={"pre_smoke_seal_hash": seal_hash, "provider_registry_hash": registry_hash}
+        )
         self.document.header = self.header
+        self._write_atomic()
+
+    def record_provider_registry_revalidation(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        invariant_sha256: str | None,
+    ) -> None:
+        """Keep fresh setup verification separate from the frozen run snapshot."""
+
+        self._ensure_writable()
+        if self.document.provider_registry_snapshot is None:
+            raise CheckpointError("provider registry revalidation requires a frozen source snapshot")
+        if safe_json(snapshot, self.secrets) != snapshot:
+            raise CheckpointError("provider registry revalidation contains secret-bearing values")
+        if invariant_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", invariant_sha256):
+            raise CheckpointError("provider registry revalidation invariant hash is invalid")
+        self.document.provider_registry_revalidation.append(
+            {
+                "snapshot": snapshot,
+                "snapshot_hash": provider_registry_snapshot_hash(snapshot),
+                "invariant_sha256": invariant_sha256,
+            }
+        )
         self._write_atomic()
 
     def record_provider_setup_requests(self, count: int) -> None:
@@ -668,6 +768,14 @@ class CheckpointStore:
     def _ensure_writable(self) -> None:
         if self.document.lifecycle != "open":
             raise CheckpointError(f"checkpoint is {self.document.lifecycle}; late writes are forbidden")
+
+    def _ensure_provider_registry_sealed(self) -> None:
+        if (
+            self.document.provider_registry_snapshot is None
+            or self.document.header.provider_registry_hash is None
+            or self.document.header.pre_smoke_seal_hash is None
+        ):
+            raise CheckpointError("checkpoint cannot record paid evidence before sealing the provider registry")
 
     def _update_timing(self, raw_timing: dict[str, object]) -> None:
         attempt = TimingAttempt.model_validate(raw_timing)
