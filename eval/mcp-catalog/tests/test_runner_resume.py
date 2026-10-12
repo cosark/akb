@@ -10,7 +10,7 @@ import pytest
 import mcp_catalog.runner as runner_module
 from mcp_catalog.contracts import load_run_manifest, load_task_corpus
 from mcp_catalog.execution import ToolCallRecord, TrialOutcome
-from mcp_catalog.runner import BenchmarkRunner
+from mcp_catalog.runner import BenchmarkRunner, CredentialResolver
 from mcp_catalog.runtime import RuntimeDescriptor
 from paired_artifact_factory import (
     SYNTHETIC_SERVER_INSTRUCTIONS,
@@ -22,6 +22,32 @@ from paired_artifact_factory import (
 from test_runtime_contract import descriptor_dict
 
 ROOT = Path(__file__).parents[1]
+
+
+def test_credential_resolver_supplies_the_complete_secret_set_for_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = load_run_manifest(ROOT / "config" / "run.json")
+    descriptor = SimpleNamespace(
+        pat_env="MCP_BENCH_PAT",
+        username_env="MCP_BENCH_USERNAME",
+        password_env="MCP_BENCH_PASSWORD",  # pragma: allowlist secret
+    )
+    monkeypatch.setenv("MCP_BENCH_USERNAME", "synthetic-user")
+    monkeypatch.setenv("MCP_BENCH_PASSWORD", "synthetic-password")
+    monkeypatch.setenv("MCP_BENCH_PAT", "environment-pat")
+    resolver = CredentialResolver(manifest, descriptor, ("model-api-key",))
+    resolver.tokens = {"default": "active-pat"}
+    resolver.issued_tokens.add("other-issued-token")
+
+    supplied = set(resolver.secrets_for("default"))
+
+    assert {
+        "model-api-key",
+        "active-pat",
+        "other-issued-token",
+        "synthetic-user",
+        "synthetic-password",
+        "environment-pat",
+    } <= supplied
 
 
 class _RunResolver:

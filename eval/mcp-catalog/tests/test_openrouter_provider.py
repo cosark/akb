@@ -899,17 +899,24 @@ async def test_provider_response_cost_blocks_followup_request_before_the_trial_f
     model_input_evidence: list[Any] = []
     instructions_token = execution_module.SERVER_INSTRUCTIONS.set(instructions)
     evidence_token = execution_module.MODEL_INPUT_EVIDENCE.set(model_input_evidence)
-    call = [ModelRequest(parts=[UserPromptPart("hello")], instructions=instructions)]
+    current_secrets = ["synthetic-user"]
+    secrets_token = execution_module.MODEL_INPUT_SECRET_VALUES.set(lambda: tuple(current_secrets))
+    first_call = [ModelRequest(parts=[UserPromptPart("hello synthetic-user")], instructions=instructions)]
+    second_call = [
+        ModelRequest(parts=[UserPromptPart("hello synthetic-user issued-token")], instructions=instructions)
+    ]
     try:
-        await model.request(call, model.settings, ModelRequestParameters())
+        await model.request(first_call, model.settings, ModelRequestParameters())
+        current_secrets.append("issued-token")
         if second_response_fails:
             with pytest.raises(BudgetExceeded, match="max_cost_per_trial_usd"):
-                await model.request(call, model.settings, ModelRequestParameters())
+                await model.request(second_call, model.settings, ModelRequestParameters())
         else:
-            await model.request(call, model.settings, ModelRequestParameters())
+            await model.request(second_call, model.settings, ModelRequestParameters())
         with pytest.raises(BudgetExceeded, match="max_cost_per_trial_usd"):
-            await model.request(call, model.settings, ModelRequestParameters())
+            await model.request(second_call, model.settings, ModelRequestParameters())
     finally:
+        execution_module.MODEL_INPUT_SECRET_VALUES.reset(secrets_token)
         execution_module.MODEL_INPUT_EVIDENCE.reset(evidence_token)
         execution_module.SERVER_INSTRUCTIONS.reset(instructions_token)
         execution_module.PROVIDER_REQUEST_GUARD.reset(guard_token)
@@ -918,6 +925,8 @@ async def test_provider_response_cost_blocks_followup_request_before_the_trial_f
     assert ledger.cost_usd == Decimal(str(expected_spend))
     assert ledger.reserved_cost_usd == Decimal("0")
     assert request_guard.requests == 2
+    assert all("synthetic-user" not in item.model_input_canonical_json for item in model_input_evidence)
+    assert "issued-token" not in model_input_evidence[1].model_input_canonical_json
     assert [item.request_index for item in model_input_evidence] == [1, 2]
     assert request_guard.provider_cost_usd == Decimal(str(expected_spend))
     await request_guard.release()
@@ -1274,7 +1283,7 @@ async def test_trial_does_not_create_a_provider_client_after_budget_reservation_
             task=task,
             token="fixture-token",
             before=StateObservation(True, 200, {}),
-            secrets=("fixture-token",),
+            secret_values=lambda: ("fixture-token",),
         )
     )
     try:

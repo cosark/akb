@@ -191,6 +191,17 @@ Parent rows remain read-only and are reported beside the new outcomes without
 being merged into the canonical run comparison. A selection sample can never
 produce an adoption verdict.
 
+The operator JSON contains only `schema_version`, `authorization`, the four
+`recovery_*` / `original_*` parent `{path, sha256}` entries, and the ordered
+`selected_trials` rows `{model_class, transport, task_id, repeat_index, role,
+parent_lineage}`. The code fixes the approved 16 identities, eight failures,
+eight controls, authorization digest, and parent hashes; it permits the plan's
+input order but rejects duplicate, missing, extra, or relabeled identities.
+Budget values come from the registered manifest plus the pinned `$8.56720104`
+prior spend basis. Parent trials are checked as raw JSON rows, preserving their
+recorded failure fields without requiring them to parse as new `TrialOutcome`
+objects.
+
 The new shared ledger starts at zero and stops at `$41.43279896`, calculated
 from the `$50` registered cap less the `$8.56720104` prior spend basis. The
 `$0.10` per-trial cap and 300-second request timeout remain in force. No total

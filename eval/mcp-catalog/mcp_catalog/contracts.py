@@ -436,7 +436,7 @@ class ExpectedResultBinding(ContractModel):
     source_field: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
     target_stage: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")
     target_argument: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
-    relation: Literal["equals", "contains"] = "contains"
+    relation: Literal["equals", "contains", "collection_uri"] = "contains"
 
 class ProviderRouting(ContractModel):
     order: list[str] = Field(min_length=1, max_length=1)

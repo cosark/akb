@@ -3287,10 +3287,6 @@
             "stage_id": "verify_collection",
             "logical_operation": "list",
             "resource_type": "document",
-            "arguments": {
-              "vault": "catalog-bench-relations",
-              "collection": "notes"
-            },
             "outcome": "success"
           },
           {
@@ -3367,6 +3363,13 @@
             "target_stage": "verify_unlinked_relationships",
             "target_argument": "uri",
             "relation": "equals"
+          },
+          {
+            "source_stage": "create_document_1",
+            "source_field": "uri",
+            "target_stage": "verify_collection",
+            "target_argument": "uri",
+            "relation": "collection_uri"
           }
         ],
         "forbidden_mutations": [
@@ -3585,15 +3588,25 @@
             "require_non_empty": true,
             "required_any_of": [
               [
-                "이미 존재",
-                "기존 event_id",
-                "반환된 결과"
+                "오류가 나지",
+                "오류가 없",
+                "성공 응답",
+                "멱등"
               ],
               [
                 "event_id 텍스트 열이 하나",
                 "event_id 열은 하나",
-                "event_id가 한 번만"
+                "event_id가 한 번만",
+                "정확히 하나의 event_id 텍스트 열"
               ]
+            ],
+            "forbidden_terms": [
+              "중복 추가가 거부",
+              "중복 열 추가가 거부",
+              "중복 추가를 거부",
+              "두 번째 추가가 거부",
+              "오류를 반환",
+              "오류로 거부"
             ]
           }
         },
@@ -3604,15 +3617,25 @@
             "require_non_empty": true,
             "required_any_of": [
               [
-                "already exists",
-                "already present",
-                "returned schema"
+                "did not error",
+                "not an error",
+                "success response",
+                "idempotent"
               ],
               [
-                "one text event_id column",
-                "exactly one event_id",
-                "event_id appears once"
+                "one text column: event_id",
+                "one user column: `event_id` (type `text`)",
+                "exactly one `event_id` column of type `text`",
+                "exactly one text event_id column"
               ]
+            ],
+            "forbidden_terms": [
+              "duplicate add was rejected",
+              "duplicate column add was rejected",
+              "rejected the duplicate add",
+              "rejected my duplicate add",
+              "second add was rejected",
+              "returned an error"
             ]
           }
         }

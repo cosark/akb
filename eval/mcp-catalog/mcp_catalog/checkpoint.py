@@ -14,7 +14,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from .contracts import ArmName, ContractModel, TaskLocale, TaskManifest, hash_json
-from .evidence import safe_json
+from .evidence import safe_json, validate_model_input_evidence
 from .execution import TrialOutcome, has_measured_evidence, has_server_instructions_evidence
 
 
@@ -575,6 +575,10 @@ class CheckpointStore:
         if safe_json(raw, self.secrets) != raw:
             raise CheckpointError("resume checkpoint contains secret-bearing values")
         try:
+            validate_model_input_evidence(raw, self.secrets)
+        except ValueError as exc:
+            raise CheckpointError("resume checkpoint model input evidence is invalid") from exc
+        try:
             document = CheckpointDocument.model_validate(raw)
         except Exception as exc:
             raise CheckpointError(f"resume checkpoint contract validation failed: {exc}") from exc
@@ -735,9 +739,9 @@ class CheckpointStore:
 
     def _safe_outcome(self, outcome: TrialOutcome) -> TrialOutcome:
         try:
-            return TrialOutcome.model_validate(
-                safe_json(outcome.model_dump(mode="json"), self.secrets)
-            )
+            safe_outcome = safe_json(outcome.model_dump(mode="json"), self.secrets)
+            validate_model_input_evidence(safe_outcome, self.secrets)
+            return TrialOutcome.model_validate(safe_outcome)
         except Exception as exc:
             raise CheckpointError(f"trial outcome cannot be safely checkpointed: {exc}") from exc
 
@@ -767,6 +771,10 @@ class CheckpointStore:
     def _write_atomic(self) -> None:
         self._refresh_integrity()
         safe = safe_json(self.document.model_dump(mode="json"), self.secrets)
+        try:
+            validate_model_input_evidence(safe, self.secrets)
+        except ValueError as exc:
+            raise CheckpointError("checkpoint model input evidence integrity validation failed") from exc
         encoded = json.dumps(safe, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n"
         for secret in self.secrets:
             if secret and secret in encoded:

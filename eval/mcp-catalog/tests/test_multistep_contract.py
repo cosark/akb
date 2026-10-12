@@ -229,7 +229,7 @@ def test_wrong_before_status_prevents_multistep_task_success() -> None:
 
 @pytest.mark.parametrize(
     "mutation",
-    ("missing_step", "wrong_order", "wrong_target", "wrong_resource", "missing_binding", "failed_step", "extra_step"),
+    ("missing_step", "wrong_order", "wrong_target", "wrong_resource", "missing_binding", "failed_step"),
 )
 def test_incomplete_or_semantically_wrong_multistep_trace_fails(mutation: str) -> None:
     _manifest, tasks = _multistep_tasks()
@@ -247,16 +247,26 @@ def test_incomplete_or_semantically_wrong_multistep_trace_fails(mutation: str) -
         calls[1] = calls[1].model_copy(update={"resource_type": "document"})
     elif mutation == "missing_binding":
         calls[2] = calls[2].model_copy(update={"result_fields": {}})
-    elif mutation == "failed_step":
+    else:
         calls[1] = calls[1].model_copy(update={"server_succeeded": False, "server_error_code": "internal_error"})
-    elif mutation == "extra_step":
-        calls.append(_call(6, "akb_get", "read", "document", {"uri": URI}))
 
     calls = [call.model_copy(update={"order": order}) for order, call in enumerate(calls, 1)]
     outcome = _score(tasks[0], calls)
 
     assert outcome.user_outcome_completed is False
     assert outcome.success is False
+
+
+def test_registered_read_after_multistep_completion_is_reported_without_failing_task() -> None:
+    _manifest, tasks = _multistep_tasks()
+    calls = [*_exact_calls(), _call(6, "akb_get", "read", "document", {"uri": URI})]
+
+    outcome = _score(tasks[0], calls)
+
+    assert outcome.user_outcome_completed is True
+    assert outcome.success is True
+    assert outcome.stopping_accuracy is True
+    assert outcome.post_completion_overshoot == 1
 
 
 def test_equivalent_read_tools_are_accepted_when_semantics_and_binding_match() -> None:

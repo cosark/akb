@@ -45,7 +45,13 @@ from .contracts import (
     TaskManifest,
     PublicOperation,
 )
-from .evidence import canonical_json, redact_exception, redact_text, safe_json
+from .evidence import (
+    canonical_json,
+    redact_exception,
+    redact_text,
+    safe_json,
+    validate_model_input_evidence,
+)
 from .runtime import RuntimeContractError, RuntimeFixture, StateObservation
 from .state import StateCheckResult, evaluate_checkpoint_contract, evaluate_state_contract
 from .timing import TimingCategory
@@ -70,6 +76,10 @@ MODEL_INPUT_EVIDENCE: contextvars.ContextVar[list[ModelInputEvidence] | None] = 
 )
 SERVER_INSTRUCTIONS: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "mcp_catalog_server_instructions",
+    default=None,
+)
+MODEL_INPUT_SECRET_VALUES: contextvars.ContextVar[Callable[[], tuple[str, ...]] | None] = contextvars.ContextVar(
+    "mcp_catalog_model_input_secret_values",
     default=None,
 )
 PROVIDER_REQUEST_GUARD: contextvars.ContextVar[ProviderRequestGuard | None] = contextvars.ContextVar(
@@ -106,7 +116,7 @@ def _model_input_evidence_for(
     present = contains_instructions(model_input)
     if not present:
         raise ModelConfigurationError("server instructions are missing from the model input")
-    return ModelInputEvidence(
+    captured = ModelInputEvidence(
         request_index=request_index,
         model_input_sha256=hashlib.sha256(serialized_input.encode("utf-8")).hexdigest(),
         model_input_canonical_json=serialized_input,
@@ -114,6 +124,11 @@ def _model_input_evidence_for(
         server_instructions_text=instructions,
         server_instructions_present=True,
     )
+    try:
+        validate_model_input_evidence(captured.model_dump(mode="json"), secrets)
+    except ValueError as exc:
+        raise ModelConfigurationError("model input evidence integrity validation failed") from exc
+    return captured
 
 
 class BudgetExceeded(RuntimeError):
@@ -193,11 +208,16 @@ class OpenRouterChatModel(OpenAIChatModel):
             if instructions is None:
                 raise ModelConfigurationError("server instructions were not sealed before the model request")
             trial = CURRENT_TRIAL.get()
+            secret_values = (
+                trial.secrets
+                if trial is not None
+                else (MODEL_INPUT_SECRET_VALUES.get() or (lambda: ()))()
+            )
             request_evidence = _model_input_evidence_for(
                 messages,
                 instructions,
                 len(evidence) + 1,
-                secrets=trial.secrets if trial is not None else (),
+                secrets=secret_values,
             )
         else:
             request_evidence = None
@@ -693,6 +713,8 @@ def _registered_bound_result_values(
         source = source_call.result_fields.get(binding.source_field) if source_call is not None else None
         if isinstance(source, str) and source:
             values.add(source)
+            if binding.relation == "collection_uri" and "/doc/" in source:
+                values.add(source.split("/doc/", 1)[0])
     return values
 
 
@@ -730,6 +752,37 @@ def _registered_schema_metadata_query(task: TaskManifest, arguments: dict[str, A
     }
 
 
+def _registered_table_data_query(task: TaskManifest, arguments: dict[str, Any]) -> bool:
+    sql = arguments.get("sql")
+    vault = arguments.get("vault")
+    if not isinstance(sql, str) or not isinstance(vault, str) or set(arguments) != {"vault", "sql"}:
+        return False
+    tables = [
+        attempt.arguments
+        for attempt in task.expected_material_attempts
+        if attempt.resource_type == "table"
+        and isinstance(attempt.arguments.get("name"), str)
+        and isinstance(attempt.arguments.get("vault"), str)
+    ]
+    matching_tables = [item for item in tables if item.get("vault") == vault]
+    if len(matching_tables) != 1:
+        return False
+    table_name = str(matching_tables[0]["name"])
+    sanitized_vault = re.sub(r"[^a-z0-9]", "_", vault.lower().replace("-", "_"))
+    sanitized_table = re.sub(r"[^a-z0-9]", "_", table_name.lower().replace("-", "_"))
+    physical_name = f"vt_{sanitized_vault}__{sanitized_table}"
+    query = re.fullmatch(
+        r"SELECT\s+\*\s+FROM\s+(?:(public)\.)?([A-Za-z_][A-Za-z0-9_]*)"
+        r"\s+LIMIT\s+\d+\s*;?",
+        sql.strip(),
+        re.IGNORECASE,
+    )
+    return query is not None and query.group(2).casefold() in {
+        table_name.casefold(),
+        physical_name.casefold(),
+    }
+
+
 def _registered_readonly_observation(
     call: ToolCallRecord,
     task: TaskManifest,
@@ -748,8 +801,15 @@ def _registered_readonly_observation(
     arguments = call.effective_server_args or call.server_args
     if arguments is None:
         return False
+    if call.logical_operation == "list" and call.resource_type == "vault":
+        filter_value = arguments.get("filter")
+        return (
+            set(arguments) == {"filter"}
+            and isinstance(filter_value, str)
+            and filter_value in _registered_vault_names(task)
+        )
     if call.logical_operation == "search" and call.resource_type == "table":
-        if _registered_schema_metadata_query(task, arguments):
+        if _registered_schema_metadata_query(task, arguments) or _registered_table_data_query(task, arguments):
             return True
 
     vault_names = _registered_vault_names(task)
@@ -1027,6 +1087,10 @@ def has_server_instructions_evidence(
     outcome: TrialOutcome,
     expected_instructions: str | None = None,
 ) -> bool:
+    try:
+        validate_model_input_evidence(outcome.model_dump(mode="json"))
+    except ValueError:
+        return False
     if (
         outcome.server_instructions_sha256 is None
         or outcome.model_requests <= 0
@@ -1316,6 +1380,7 @@ class ToolCallRecorder:
         *,
         operation_map: dict[str, list[str]],
         secrets: tuple[str, ...],
+        secret_values: Callable[[], tuple[str, ...]] | None = None,
         capture_result_fields: dict[str, list[str]] | None = None,
         task: TaskManifest | None = None,
         fixture: RuntimeFixture | None = None,
@@ -1325,7 +1390,8 @@ class ToolCallRecorder:
         public_operations: list[PublicOperation] | None = None,
     ) -> None:
         self.operation_map = operation_map
-        self.secrets = secrets
+        self._secrets = secrets
+        self.secret_values = secret_values
         self.task = task
         self.fixture = fixture
         self.token = token
@@ -1340,6 +1406,12 @@ class ToolCallRecorder:
         self.capture_result_fields = {
             tool: frozenset(fields) for tool, fields in (capture_result_fields or {}).items()
         }
+
+    @property
+    def secrets(self) -> tuple[str, ...]:
+        if self.secret_values is None:
+            return self._secrets
+        return tuple(dict.fromkeys((*self._secrets, *self.secret_values())))
 
     def set_input_schemas(self, schemas: dict[str, dict[str, Any]]) -> None:
         self.input_schemas = schemas
@@ -1363,6 +1435,8 @@ class ToolCallRecorder:
         )
         for index in range(self.next_expected_stage, len(self.task.expected_material_attempts)):
             expected = self.task.expected_material_attempts[index]
+            if index > self.next_expected_stage and dynamic_arguments[expected.stage_id]:
+                continue
             if (
                 (expected.tool_name is not None and expected.tool_name != name)
                 or expected.logical_operation != logical_operation
@@ -1371,9 +1445,10 @@ class ToolCallRecorder:
                 continue
             ignored = set(expected.local_file_arguments) | dynamic_arguments[expected.stage_id] | {"_vault_skill_ack"}
             comparable = {key: value for key, value in effective_arguments.items() if key not in ignored}
-            if _arguments_include(comparable, expected.arguments):
-                self.next_expected_stage = index + 1
-                return expected.stage_id
+            if not _arguments_include(comparable, expected.arguments):
+                continue
+            self.next_expected_stage = index + 1
+            return expected.stage_id
         return None
 
     async def __call__(self, _ctx: Any, call: Callable[..., Any], name: str, server_args: dict[str, Any]) -> Any:
@@ -1780,9 +1855,13 @@ class TrialContext:
     task: TaskManifest
     token: str
     before: list[StateObservation]
-    secrets: tuple[str, ...]
+    secret_values: Callable[[], tuple[str, ...]]
     local_file_paths: dict[str, Path] = field(default_factory=dict)
     context_token: contextvars.Token[TrialContext | None] | None = None
+
+    @property
+    def secrets(self) -> tuple[str, ...]:
+        return self.secret_values()
 
 
 def render_task_prompt(task: TaskManifest, local_file_paths: dict[str, Path]) -> str:
@@ -1866,7 +1945,7 @@ class TrialLifecycle(CaseLifecycle[TaskManifest, TrialOutcome, dict[str, Any]]):
                 task=task,
                 token=token,
                 before=before,
-                secrets=self.secrets_for(task.fixture.credential_profile),
+                secret_values=lambda: self.secrets_for(task.fixture.credential_profile),
                 local_file_paths=local_file_paths,
             )
             self.context.context_token = CURRENT_TRIAL.set(self.context)
@@ -2369,6 +2448,7 @@ class TrialExecutor:
         recorder = ToolCallRecorder(
             operation_map=self.manifest.operation_map,
             secrets=secrets,
+            secret_values=context.secret_values,
             capture_result_fields=capture_result_fields_for_task(
                 task, self.manifest.operation_map, self.manifest.public_operations
             ),
@@ -2460,7 +2540,7 @@ class TrialExecutor:
                 error = (
                     "benchmark incomplete: provider request timeout"
                     if is_timeout_exception(exc)
-                    else redact_exception(exc, secrets)
+                    else redact_exception(exc, context.secrets)
                 )
             finally:
                 SERVER_INSTRUCTIONS.reset(instructions_token)
@@ -2480,7 +2560,7 @@ class TrialExecutor:
                 public_operations=self.manifest.public_operations,
                 error=error,
                 latency=latency,
-                secrets=secrets,
+                secrets=context.secrets,
                 partial_messages=partial_messages,
                 request_count=request_guard.requests,
                 server_instructions_sha256=server_instructions_sha256,
@@ -2524,6 +2604,7 @@ async def execute_smoke(
     fixture: RuntimeFixture,
     token: str,
     secrets: tuple[str, ...],
+    secret_values: Callable[[], tuple[str, ...]],
     request_timeout_seconds: float,
     request_guard: ProviderRequestGuard | None = None,
     input_schemas: dict[str, dict[str, Any]] | None = None,
@@ -2540,6 +2621,7 @@ async def execute_smoke(
     recorder = ToolCallRecorder(
         operation_map=manifest.operation_map,
         secrets=secrets,
+        secret_values=secret_values,
         capture_result_fields=capture_result_fields_for_task(
             task, manifest.operation_map, manifest.public_operations
         ),
@@ -2561,6 +2643,7 @@ async def execute_smoke(
     capture_token = MODEL_RESPONSES.set(partial_messages)
     input_evidence_token = MODEL_INPUT_EVIDENCE.set(model_input_evidence)
     instructions_token = SERVER_INSTRUCTIONS.set(None)
+    input_secrets_token = MODEL_INPUT_SECRET_VALUES.set(secret_values)
     try:
         if transport == "stdio":
             command, args, environment = fixture.stdio_command(token)
@@ -2610,9 +2693,10 @@ async def execute_smoke(
         error = (
             "benchmark incomplete: provider request timeout"
             if is_timeout_exception(exc)
-            else redact_exception(exc, secrets)
+            else redact_exception(exc, secret_values())
         )
     finally:
+        MODEL_INPUT_SECRET_VALUES.reset(input_secrets_token)
         SERVER_INSTRUCTIONS.reset(instructions_token)
         MODEL_INPUT_EVIDENCE.reset(input_evidence_token)
         MODEL_RESPONSES.reset(capture_token)
@@ -2629,7 +2713,7 @@ async def execute_smoke(
         public_operations=manifest.public_operations,
         error=error,
         latency=time.perf_counter() - started,
-        secrets=secrets,
+        secrets=secret_values(),
         partial_messages=partial_messages,
         request_count=request_guard.requests if request_guard is not None else None,
         server_instructions_sha256=server_instructions_sha256,
@@ -2642,7 +2726,7 @@ async def execute_smoke(
             probe = _resolve_result_probe(expectation.probe, result_fields)
             after.append(await fixture.observe(probe, token=token))
         except Exception as exc:
-            after.append(StateObservation(False, None, error=redact_exception(exc, secrets)))
+            after.append(StateObservation(False, None, error=redact_exception(exc, secret_values())))
     outcome.finalize(
         task,
         before,
@@ -3342,6 +3426,8 @@ def _material_result_binding_matches(
         return False
     if binding.relation == "equals":
         return target == source
+    if binding.relation == "collection_uri":
+        return "/doc/" in source and target == source.split("/doc/", 1)[0]
     return source in target
 
 
@@ -3355,12 +3441,6 @@ def _resolved_material_stage_calls(
     expected_set = set(expected_ids)
     groups: dict[str, list[ToolCallRecord]] = defaultdict(list)
     ordered_ids: list[str] = []
-    optional_read_counts: Counter[str] = Counter()
-    material_operation_counts = Counter(
-        call.logical_operation
-        for call in tool_calls
-        if call.operation_kind == "material"
-    )
     valid = True
     for call in tool_calls:
         if call.stage_id is not None:
@@ -3371,19 +3451,10 @@ def _resolved_material_stage_calls(
             if call.stage_id not in ordered_ids:
                 ordered_ids.append(call.stage_id)
         elif call.operation_kind == "material":
-            if _registered_readonly_observation(call, task, tool_calls):
-                optional_read_counts[call.logical_operation] += 1
-            else:
+            if not _registered_readonly_observation(call, task, tool_calls):
                 valid = False
     if ordered_ids != expected_ids:
         valid = False
-    if any(
-        material_operation_counts[operation] > task.material_attempt_limits[operation]
-        for operation in optional_read_counts
-        if operation in task.material_attempt_limits
-    ):
-        valid = False
-
     resolved: list[ToolCallRecord] = []
     for stage_id in expected_ids:
         group = groups.get(stage_id, [])

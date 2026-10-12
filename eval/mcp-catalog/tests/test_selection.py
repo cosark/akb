@@ -15,6 +15,7 @@ from mcp_catalog.contracts import hash_json, load_run_manifest, load_task_corpus
 from mcp_catalog.execution import TrialOutcome
 from mcp_catalog.runner import BenchmarkRunner, PairedArmCoordinator, planned_arm_order
 from mcp_catalog.runtime import RuntimeDescriptor
+from paired_artifact_factory import synthetic_model_input_evidence
 from test_runtime_contract import descriptor_dict
 
 ROOT = Path(__file__).parents[1]
@@ -57,17 +58,20 @@ def _selection_fixture(
             "task_id": task_id,
             "repeat_index": repeat_index,
             "role": role,
-            "parent_lineage": "previous",
+            "parent_lineage": parent_lineage,
         }
-        for (model_class, transport, task_id, repeat_index), role
-        in selection_module._ROLE_BY_IDENTITY.items()
+        for (model_class, transport, task_id, repeat_index), (role, parent_lineage)
+        in selection_module._ROLE_AND_LINEAGE_BY_IDENTITY.items()
     ]
     parent_bindings: dict[str, dict[str, str]] = {}
     tmp_path.mkdir(parents=True, exist_ok=True)
-    for arm in ("baseline", "candidate"):
-        name = f"previous_{arm}"
+    for name in selection_module.APPROVED_PARENT_SHA256:
+        arm = "baseline" if name.endswith("_baseline") else "candidate"
+        lineage = name.removesuffix(f"_{arm}")
         rows = []
         for trial in selected:
+            if trial["parent_lineage"] != lineage:
+                continue
             rows.append(
                 {
                     **{key: trial[key] for key in ("model_class", "transport", "task_id", "repeat_index")},
@@ -101,13 +105,6 @@ def _selection_fixture(
         "authorization": selection_module.APPROVED_AUTHORIZATION.copy(),
         "parents": parent_bindings,
         "selected_trials": selected,
-        "budget": {
-            "session_max_usd": "50",
-            "prior_conservative_spend_usd": str(selection_module.PRIOR_SPEND_USD),
-            "new_execution_limit_usd": str(selection_module.NEW_EXECUTION_LIMIT_USD),
-            "per_trial_usd": "0.10",
-            "request_timeout_seconds": 300,
-        },
     }
     selection_path = tmp_path / "selection.json"
     selection_path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -128,10 +125,92 @@ def test_selection_validates_all_pinned_parent_rows_without_writing_them(
     loaded = selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
 
     assert loaded.sha256 == selection.sha256
-    assert len(loaded.selected_trials) == 14
-    assert sum(trial.role == "failure" for trial in loaded.selected_trials) == 6
+    assert len(loaded.selected_trials) == 16
+    assert sum(trial.role == "failure" for trial in loaded.selected_trials) == 8
     assert sum(trial.role == "control" for trial in loaded.selected_trials) == 8
+    assert set(loaded.parents) == {
+        "recovery_baseline",
+        "recovery_candidate",
+        "original_baseline",
+        "original_candidate",
+    }
     assert {name: Path(item["path"]).read_bytes() for name, item in loaded.parents.items()} == parent_bytes
+
+
+def test_selection_preserves_operator_trial_order_without_requiring_a_canonical_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, tasks, selection = _selection_fixture(tmp_path, monkeypatch)
+    document = json.loads(selection.path.read_text(encoding="utf-8"))
+    document["selected_trials"].reverse()
+    selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    loaded = selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
+
+    assert [trial.identity for trial in loaded.selected_trials] == [
+        (row["model_class"], row["transport"], row["task_id"], row["repeat_index"])
+        for row in document["selected_trials"]
+    ]
+
+
+def test_selection_summary_marks_model_input_hash_drift_malformed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, tasks, selection = _selection_fixture(tmp_path, monkeypatch)
+    trial = selection.selected_trials[0]
+    task = next(item for item in tasks if item.id == trial.task_id)
+    model_id = next(item.model_id for item in manifest.models if item.class_name == trial.model_class)
+    evidence = synthetic_model_input_evidence(1)[0]
+    bad_evidence = evidence.model_copy(
+        update={"model_input_canonical_json": evidence.model_input_canonical_json + " "}
+    )
+    row = TrialOutcome(
+        task_id=trial.task_id,
+        category=task.category,
+        locale=task.locale,
+        arm="baseline",
+        model_class=trial.model_class,
+        model_id=model_id,
+        transport=trial.transport,
+        repeat_index=trial.repeat_index,
+        model_requests=1,
+        model_input_evidence=[bad_evidence],
+    ).model_dump(mode="json")
+    expected_smoke_cells = [
+        f"{model.class_name}:{transport}"
+        for model in manifest.models
+        for transport in manifest.transports
+    ]
+    artifacts = {
+        arm: {
+            "selection": selection.artifact_metadata(),
+            "status": "complete",
+            "runs": {f"{trial.model_class}:{trial.transport}": {"trials": [row] if arm == "baseline" else []}},
+            "smoke_gate": {
+                "status": "passed",
+                "required_cells": expected_smoke_cells,
+                "cells": (
+                    [{"cell": expected_smoke_cells[0], "status": "completed", "outcome": row}]
+                    if arm == "baseline"
+                    else []
+                ),
+            },
+        }
+        for arm in ("baseline", "candidate")
+    }
+
+    summary = selection_module.build_selection_summary(
+        selection,
+        artifacts,
+        {"verdict": "inconclusive"},
+        manifest=manifest,
+        tasks=tasks,
+    )
+
+    assert summary["arms"]["baseline"]["malformed_trials"] == 1
+    assert summary["observed_new_smoke_model_requests"] == 1
 
 
 def test_failure_role_requires_candidate_failure_without_constraining_failure_kind(
@@ -139,7 +218,7 @@ def test_failure_role_requires_candidate_failure_without_constraining_failure_ki
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manifest, tasks, selection = _selection_fixture(tmp_path, monkeypatch)
-    candidate_path = Path(selection.parents["previous_candidate"]["path"])
+    candidate_path = Path(selection.parents["recovery_candidate"]["path"])
     candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
     candidate_failures = [
         row
@@ -152,13 +231,15 @@ def test_failure_role_requires_candidate_failure_without_constraining_failure_ki
     raw = json.dumps(candidate, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     candidate_path.write_bytes(raw)
     document = json.loads(selection.path.read_text(encoding="utf-8"))
-    document["parents"]["previous_candidate"]["sha256"] = hashlib.sha256(raw).hexdigest()
+    document["parents"]["recovery_candidate"]["sha256"] = hashlib.sha256(raw).hexdigest()
     monkeypatch.setattr(
         selection_module,
         "APPROVED_PARENT_SHA256",
         {
-            "previous_baseline": selection.parents["previous_baseline"]["sha256"],
-            "previous_candidate": hashlib.sha256(raw).hexdigest(),
+            "recovery_baseline": selection.parents["recovery_baseline"]["sha256"],
+            "recovery_candidate": hashlib.sha256(raw).hexdigest(),
+            "original_baseline": selection.parents["original_baseline"]["sha256"],
+            "original_candidate": selection.parents["original_candidate"]["sha256"],
         },
     )
     selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -168,13 +249,15 @@ def test_failure_role_requires_candidate_failure_without_constraining_failure_ki
     raw = json.dumps(candidate, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     candidate_path.write_bytes(raw)
     document = json.loads(selection.path.read_text(encoding="utf-8"))
-    document["parents"]["previous_candidate"]["sha256"] = hashlib.sha256(raw).hexdigest()
+    document["parents"]["recovery_candidate"]["sha256"] = hashlib.sha256(raw).hexdigest()
     monkeypatch.setattr(
         selection_module,
         "APPROVED_PARENT_SHA256",
         {
-            "previous_baseline": selection.parents["previous_baseline"]["sha256"],
-            "previous_candidate": hashlib.sha256(raw).hexdigest(),
+            "recovery_baseline": selection.parents["recovery_baseline"]["sha256"],
+            "recovery_candidate": hashlib.sha256(raw).hexdigest(),
+            "original_baseline": selection.parents["original_baseline"]["sha256"],
+            "original_candidate": selection.parents["original_candidate"]["sha256"],
         },
     )
     selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -226,16 +309,20 @@ def test_relative_parent_paths_resolve_from_the_selection_file(
     assert all(Path(parent["path"]).is_absolute() for parent in loaded.parents.values())
 
 
-def test_selection_requires_the_minimal_approved_plan_and_exact_budget(
+def test_selection_requires_the_minimal_approved_plan_and_derives_budget_from_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manifest, tasks, selection = _selection_fixture(tmp_path, monkeypatch)
     document = json.loads(selection.path.read_text(encoding="utf-8"))
-    assert set(document) == {"schema_version", "authorization", "parents", "selected_trials", "budget"}
-    document["budget"]["new_execution_limit_usd"] = "41.1564756453"
+    assert set(document) == {"schema_version", "authorization", "parents", "selected_trials"}
+    assert selection.budget.session_max_usd == Decimal("50")
+    assert selection.budget.prior_conservative_spend_usd == Decimal("8.56720104")
+    assert selection.budget.new_execution_limit_usd == Decimal("41.43279896")
+
+    document["budget"] = {}
     selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
-    with pytest.raises(ValueError, match="budget"):
+    with pytest.raises(ValueError, match="selection file is invalid"):
         selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
 
 
@@ -243,7 +330,7 @@ def test_selection_requires_the_minimal_approved_plan_and_exact_budget(
     ("section", "field", "value", "message"),
     [
         ("authorization", "revision", "0" * 40, "approved AKB-361 revision"),
-        ("parents", "previous_candidate", {"path": "candidate.json", "sha256": "c" * 64}, "parent artifact hashes"),
+        ("parents", "recovery_candidate", {"path": "candidate.json", "sha256": "c" * 64}, "parent artifact hashes"),
     ],
 )
 def test_selection_rejects_unapproved_authority_or_parent_hash(
@@ -295,19 +382,24 @@ def test_selection_rejects_parent_drift_and_budget_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manifest, tasks, selection = _selection_fixture(tmp_path, monkeypatch)
-    parent = Path(selection.parents["previous_baseline"]["path"])
+    parent = Path(selection.parents["recovery_baseline"]["path"])
     parent.write_bytes(parent.read_bytes() + b" ")
     with pytest.raises(ValueError, match="SHA-256"):
         selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
 
     _manifest_again, _tasks_again, second = _selection_fixture(tmp_path / "budget", monkeypatch)
-    wrong_budget = manifest.budget.model_copy(update={"max_cost_per_trial_usd": 0.11})
-    with pytest.raises(ValueError, match="measurement budget"):
-        selection_module.ToolGuidanceSelection.load(
-            second.path,
-            manifest=manifest.model_copy(update={"budget": wrong_budget}),
-            tasks=tasks,
-        )
+    for field, value in (
+        ("max_total_cost_usd", 49),
+        ("max_cost_per_trial_usd", 0.11),
+        ("request_timeout_seconds", 301),
+    ):
+        wrong_budget = manifest.budget.model_copy(update={field: value})
+        with pytest.raises(ValueError, match="measurement budget"):
+            selection_module.ToolGuidanceSelection.load(
+                second.path,
+                manifest=manifest.model_copy(update={"budget": wrong_budget}),
+                tasks=tasks,
+            )
 
 
 def test_selection_filters_schedules_and_hashes_its_pre_smoke_seal(
@@ -320,8 +412,8 @@ def test_selection_filters_schedules_and_hashes_its_pre_smoke_seal(
     planned = runner._planned_keys(manifest.arm_source_revisions["baseline"])
     coordinator = PairedArmCoordinator(manifest, tasks, selection=selection)
 
-    assert len(planned) == 14
-    assert sum(map(len, coordinator._schedule.values())) == 28
+    assert len(planned) == 16
+    assert sum(map(len, coordinator._schedule.values())) == 32
     assert all(selection.contains(key.model_class, key.transport, key.task_id, key.repeat_index) for key in planned.values())
     runtime = {"source_revision": manifest.arm_source_revisions["baseline"], "artifact_versions": {}}
     seal = runner._local_pre_smoke_seal(runtime, {})
@@ -370,7 +462,7 @@ async def test_selection_resume_restores_contiguous_terminal_arm_events(
     await coordinator.register_arm("baseline", reused["baseline"])
     await coordinator.register_arm("candidate", reused["candidate"])
 
-    assert len(coordinator.evidence()["events"]) == 28
+    assert len(coordinator.evidence()["events"]) == 32
     assert coordinator.evidence()["complete"] is True
 
 
@@ -422,7 +514,7 @@ async def test_cli_uses_new_selection_ledger_and_writes_separate_summary(
     assert len(captured) == 2
     ledger = captured[0]["shared_ledger"]
     assert captured[1]["shared_ledger"] is ledger
-    assert ledger.total_cost_limit_usd == Decimal("41.1195297156")
+    assert ledger.total_cost_limit_usd == Decimal("41.43279896")
     assert ledger.requests == 0
     assert ledger.cost_usd == Decimal("0")
     assert all(item["selection"].sha256 == selection.sha256 for item in captured)
@@ -430,4 +522,4 @@ async def test_cli_uses_new_selection_ledger_and_writes_separate_summary(
     summary = json.loads(args.selection_summary_output.read_text(encoding="utf-8"))
     assert summary["status"] == "incomplete"
     assert summary["adopt_eligible"] is False
-    assert summary["expected_new_model_trials"] == 28
+    assert summary["expected_new_model_trials"] == 32

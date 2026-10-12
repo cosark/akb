@@ -13,43 +13,56 @@ from typing import Any, Literal
 from pydantic import Field, model_validator
 
 from .contracts import BenchmarkRunManifest, ContractModel, TaskManifest, Transport
+from .evidence import validate_model_input_evidence
 from .execution import TrialOutcome, has_measured_evidence, has_server_instructions_evidence
 from .pairing import planned_arm_order
 
 SelectionIdentity = tuple[str, str, str, int]
-ParentLineage = Literal["previous"]
-ParentName = Literal["previous_baseline", "previous_candidate"]
+ParentLineage = Literal["recovery", "original"]
+ParentName = Literal[
+    "recovery_baseline",
+    "recovery_candidate",
+    "original_baseline",
+    "original_candidate",
+]
 
 TOTAL_BUDGET_USD = Decimal("50")
-PRIOR_SPEND_USD = Decimal("8.8804702844")
+PRIOR_SPEND_USD = Decimal("8.56720104")
 NEW_EXECUTION_LIMIT_USD = TOTAL_BUDGET_USD - PRIOR_SPEND_USD
 PER_TRIAL_LIMIT_USD = Decimal("0.10")
 REQUEST_TIMEOUT_SECONDS = 300
 APPROVED_AUTHORIZATION = {
     "uri": "akb://reef-akb/coll/issues/doc/akb-361.md",
-    "revision": "dc73422903c7ce946daa035b8fa178a8839e55db",
-    "content_sha256": "40aae57d645160924aaeb6ae953faa8e5dd3a79bbdb479aa1a63cce9a94d92a4",
+    "revision": "006b373f989aaad7ce497912fab437741648d625",  # pragma: allowlist secret
+    "content_sha256": "0f5cb26f254f4eb2377b3798b9fe98a634e501196c2624200c53ed898899d1f8",  # pragma: allowlist secret
 }
-APPROVED_PARENT_SHA256 = {
-    "previous_baseline": "276e0dfdfdad58ce083f65b3ea0c21a22675f31d8a393995dace62b77eaa43a4",
-    "previous_candidate": "3195db132b810dfd37b58a4e1d8169ba92dca965ffa5140ec5c2a4624f6d647c",
+APPROVED_PARENT_SHA256: dict[ParentName, str] = {
+    "recovery_baseline": "e42af85c5ef0456ed5ee3f93b718a44b5e7aa2690fcb9fc68f77c51c3546efd3",  # pragma: allowlist secret
+    "recovery_candidate": "11d3fe0445b9279b1a12016f34b004f7cfed9dcb668d506544f3b8759f030f54",  # pragma: allowlist secret
+    "original_baseline": "5df67aaa44e4ecd8ec5067f136184fcf18c5fbe558876cc39c9a414697d8dfb7",  # pragma: allowlist secret
+    "original_candidate": "28a23de2811a679b315c7069c4df2db8672218eb19da872aa41652d36db0d371",  # pragma: allowlist secret
 }
 
-_ROLE_BY_IDENTITY: dict[SelectionIdentity, Literal["failure", "control"]] = {
-    ("primary", "http", "collection-relation-lifecycle-ko", 2): "failure",
-    ("primary", "http", "table-schema-conflict-en", 2): "failure",
-    ("primary", "stdio", "stdio-image-files-ko", 1): "failure",
-    ("primary", "stdio", "table-publication-en", 1): "failure",
-    ("primary", "stdio", "table-publication-ko", 1): "failure",
-    ("primary", "stdio", "table-schema-conflict-en", 1): "failure",
-    ("primary", "http", "exhaustive-inspection-ko", 1): "control",
-    ("primary", "http", "ambiguous-clarification-ko", 2): "control",
-    ("primary", "http", "exhaustive-inspection-en", 2): "control",
-    ("primary", "http", "ambiguous-clarification-en", 2): "control",
-    ("primary", "stdio", "exhaustive-inspection-ko", 2): "control",
-    ("primary", "stdio", "stdio-local-ko", 2): "control",
-    ("primary", "stdio", "exhaustive-inspection-en", 2): "control",
-    ("primary", "stdio", "read-vaults-en", 2): "control",
+_ROLE_AND_LINEAGE_BY_IDENTITY: dict[
+    SelectionIdentity,
+    tuple[Literal["failure", "control"], ParentLineage],
+] = {
+    ("primary", "http", "collection-relation-lifecycle-ko", 2): ("failure", "recovery"),
+    ("primary", "http", "table-schema-conflict-en", 2): ("failure", "recovery"),
+    ("primary", "stdio", "identity-access-ko", 2): ("failure", "recovery"),
+    ("primary", "stdio", "stdio-image-files-ko", 1): ("failure", "recovery"),
+    ("primary", "stdio", "stdio-local-en", 2): ("failure", "recovery"),
+    ("primary", "stdio", "table-publication-en", 1): ("failure", "recovery"),
+    ("primary", "stdio", "table-publication-ko", 1): ("failure", "recovery"),
+    ("primary", "stdio", "table-schema-conflict-en", 1): ("failure", "recovery"),
+    ("primary", "http", "exhaustive-inspection-ko", 1): ("control", "recovery"),
+    ("primary", "http", "ambiguous-clarification-ko", 2): ("control", "recovery"),
+    ("primary", "http", "exhaustive-inspection-en", 2): ("control", "recovery"),
+    ("primary", "http", "ambiguous-clarification-en", 2): ("control", "recovery"),
+    ("primary", "stdio", "exhaustive-inspection-ko", 2): ("control", "recovery"),
+    ("primary", "stdio", "stdio-local-ko", 2): ("control", "original"),
+    ("primary", "stdio", "exhaustive-inspection-en", 2): ("control", "recovery"),
+    ("primary", "stdio", "read-vaults-en", 2): ("control", "recovery"),
 }
 
 
@@ -89,36 +102,26 @@ class SelectionDocument(ContractModel):
     schema_version: Literal[1]
     authorization: AuthorizationPin
     parents: dict[ParentName, ParentArtifact]
-    selected_trials: list[SelectedTrial] = Field(min_length=14, max_length=14)
-    budget: SelectionBudget
+    selected_trials: list[SelectedTrial] = Field(min_length=16, max_length=16)
 
     @model_validator(mode="after")
     def validate_approved_selection(self) -> SelectionDocument:
         if self.authorization.model_dump(mode="json") != APPROVED_AUTHORIZATION:
             raise ValueError("selection authorization differs from the approved AKB-361 revision")
-        if set(self.parents) != {"previous_baseline", "previous_candidate"}:
-            raise ValueError("selection must pin the previous baseline and candidate artifacts")
+        if set(self.parents) != set(APPROVED_PARENT_SHA256):
+            raise ValueError("selection must pin all four original and recovery parent artifacts")
         if {name: parent.sha256 for name, parent in self.parents.items()} != APPROVED_PARENT_SHA256:
             raise ValueError("selection parent artifact hashes differ from the approved AKB-361 artifacts")
         identities = [trial.identity for trial in self.selected_trials]
         if len(set(identities)) != len(identities):
             raise ValueError("selection contains duplicate trial identities")
-        if set(identities) != set(_ROLE_BY_IDENTITY):
+        if set(identities) != set(_ROLE_AND_LINEAGE_BY_IDENTITY):
             raise ValueError("selection identities differ from the approved AKB-361 sample")
         for trial in self.selected_trials:
-            if trial.role != _ROLE_BY_IDENTITY[trial.identity] or trial.parent_lineage != "previous":
+            if (trial.role, trial.parent_lineage) != _ROLE_AND_LINEAGE_BY_IDENTITY[trial.identity]:
                 raise ValueError("selection role or parent lineage differs from the approved sample")
-        if Counter(trial.role for trial in self.selected_trials) != Counter(failure=6, control=8):
-            raise ValueError("selection must contain six failures and eight controls")
-        budget = self.budget
-        if (
-            budget.session_max_usd != TOTAL_BUDGET_USD
-            or budget.prior_conservative_spend_usd != PRIOR_SPEND_USD
-            or budget.new_execution_limit_usd != NEW_EXECUTION_LIMIT_USD
-            or budget.per_trial_usd != PER_TRIAL_LIMIT_USD
-            or budget.request_timeout_seconds != REQUEST_TIMEOUT_SECONDS
-        ):
-            raise ValueError("selection budget differs from the approved measurement limits")
+        if Counter(trial.role for trial in self.selected_trials) != Counter(failure=8, control=8):
+            raise ValueError("selection must contain eight failures and eight controls")
         return self
 
 
@@ -175,13 +178,13 @@ class ToolGuidanceSelection:
             document = SelectionDocument.model_validate_json(raw)
         except (ValueError, UnicodeDecodeError) as exc:
             raise ValueError(f"selection file is invalid: {exc}") from exc
-        _validate_manifest(manifest, document.selected_trials, tasks)
+        budget = _validate_manifest(manifest, document.selected_trials, tasks)
         parents = _validate_parents(document.parents, selection_directory=path.parent)
         return cls(
             path=path,
             sha256=selection_sha256,
             authorization=document.authorization,
-            budget=document.budget,
+            budget=budget,
             parents=parents,
             selected_trials=tuple(document.selected_trials),
             parent_results=_parent_results(parents, document.selected_trials),
@@ -192,7 +195,7 @@ def _validate_manifest(
     manifest: BenchmarkRunManifest,
     selected_trials: list[SelectedTrial],
     tasks: list[TaskManifest],
-) -> None:
+) -> SelectionBudget:
     budget = manifest.budget
     if set(manifest.arms) != {"baseline", "candidate"} or set(manifest.transports) != {"http", "stdio"}:
         raise ValueError("run manifest does not contain the approved paired transports and arms")
@@ -222,6 +225,15 @@ def _validate_manifest(
             raise ValueError("selection contains a task outside its registered transport scope")
         if trial.repeat_index > manifest.repeats:
             raise ValueError("selection contains a repeat outside the registered run plan")
+    if PRIOR_SPEND_USD != Decimal("8.56720104") or NEW_EXECUTION_LIMIT_USD != Decimal("41.43279896"):
+        raise ValueError("selection prior spend basis differs from the approved measurement limits")
+    return SelectionBudget(
+        session_max_usd=Decimal(str(budget.max_total_cost_usd)),
+        prior_conservative_spend_usd=PRIOR_SPEND_USD,
+        new_execution_limit_usd=NEW_EXECUTION_LIMIT_USD,
+        per_trial_usd=Decimal(str(budget.max_cost_per_trial_usd)),
+        request_timeout_seconds=budget.request_timeout_seconds,
+    )
 
 
 def _parent_rows(artifact: dict[str, Any]) -> list[dict[str, Any]]:
@@ -247,7 +259,7 @@ def _validate_parents(
     selection_directory: Path,
 ) -> dict[str, dict[str, str]]:
     metadata: dict[str, dict[str, str]] = {}
-    for name in ("previous_baseline", "previous_candidate"):
+    for name in APPROVED_PARENT_SHA256:
         parent = parents[name]
         try:
             parent_path = Path(parent.path).expanduser()
@@ -286,7 +298,7 @@ def _parent_results(
     for trial in selected_trials:
         rows_by_arm: dict[str, dict[str, Any]] = {}
         for arm in ("baseline", "candidate"):
-            name = f"previous_{arm}"
+            name = f"{trial.parent_lineage}_{arm}"
             rows = [
                 row
                 for row in _parent_rows(artifacts[name])
@@ -404,10 +416,17 @@ def build_selection_summary(
                 identity = (identity_value[0], identity_value[1], identity_value[2], identity_value[3])
                 all_ids.add(identity)
                 counts[identity] += 1
+                input_evidence_invalid = False
+                try:
+                    validate_model_input_evidence(raw)
+                except ValueError:
+                    malformed += 1
+                    input_evidence_invalid = True
                 try:
                     outcome = TrialOutcome.model_validate(raw)
                 except ValueError:
-                    malformed += 1
+                    if not input_evidence_invalid:
+                        malformed += 1
                     continue
                 if outcome.arm != arm:
                     malformed += 1
@@ -455,6 +474,10 @@ def build_selection_summary(
             if not isinstance(raw_outcome, dict):
                 smoke_valid = False
                 continue
+            try:
+                validate_model_input_evidence(raw_outcome)
+            except ValueError:
+                smoke_valid = False
             try:
                 smoke_outcome = TrialOutcome.model_validate(raw_outcome)
             except ValueError:

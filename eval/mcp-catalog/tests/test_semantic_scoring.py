@@ -14,6 +14,7 @@ from mcp_catalog.execution import (
     bind_tool_calls,
     capture_result_fields_for_task,
     _resolved_material_stage_calls,
+    response_matches_rubric,
 )
 from mcp_catalog.runtime import StateObservation
 from mcp_catalog.state import evaluate_state_contract
@@ -235,7 +236,13 @@ def test_collection_relation_oracle_requires_canonical_paths_bodies_and_revision
     assert near_miss_passed is False
 
 
-def _relation_lifecycle_trace(task, *, wrong_document: bool = False, wrong_relation: bool = False):
+def _relation_lifecycle_trace(
+    task,
+    *,
+    wrong_document: bool = False,
+    wrong_relation: bool = False,
+    wrong_collection: bool = False,
+):
     left_uri = "akb://catalog-bench-relations/coll/notes/doc/left.md"
     right_uri = "akb://catalog-bench-relations/coll/notes/doc/right.md"
     source_by_stage = {
@@ -264,12 +271,16 @@ def _relation_lifecycle_trace(task, *, wrong_document: bool = False, wrong_relat
         for binding in task.expected_result_bindings:
             if binding.target_stage == attempt.stage_id:
                 value = source_by_stage[binding.source_stage]
+                if binding.relation == "collection_uri":
+                    value = value.split("/doc/", 1)[0]
                 arguments[binding.target_argument] = value
         if attempt.stage_id == "update_relation_1":
             if wrong_document:
                 arguments["source"] = "akb://catalog-bench-relations/coll/notes/doc/unrelated.md"
             if wrong_relation:
                 arguments["relation"] = "contains"
+        if attempt.stage_id == "verify_collection" and wrong_collection:
+            arguments["uri"] = "akb://catalog-bench-relations/coll/unrelated"
         result_fields = {"uri": source_by_stage[attempt.stage_id]} if attempt.stage_id in source_by_stage else {}
         calls.append(
             ToolCallRecord(
@@ -291,8 +302,7 @@ def _relation_lifecycle_trace(task, *, wrong_document: bool = False, wrong_relat
         )
         if attempt.stage_id == "delete_relation_1":
             browse_arguments = {
-                "vault": "catalog-bench-relations",
-                "collection": "notes",
+                "uri": "akb://catalog-bench-relations/coll/notes",
                 "depth": -1,
             }
             calls.append(
@@ -367,6 +377,7 @@ def test_relation_workflow_accepts_alternate_public_reads_and_rejects_wrong_edge
     complete = _relation_lifecycle_trace(task)
     wrong_document = _relation_lifecycle_trace(task, wrong_document=True)
     wrong_relation = _relation_lifecycle_trace(task, wrong_relation=True)
+    wrong_collection = _relation_lifecycle_trace(task, wrong_collection=True)
 
     assert complete.state_contract_passed is True
     assert complete.tool_outcome_match is True
@@ -378,6 +389,8 @@ def test_relation_workflow_accepts_alternate_public_reads_and_rejects_wrong_edge
     assert wrong_document.success is False
     assert wrong_relation.state_contract_passed is False
     assert wrong_relation.success is False
+    assert wrong_collection.result_binding_accuracy is False
+    assert wrong_collection.success is False
 
 
 def test_publication_contract_accepts_only_registered_read_observations() -> None:
@@ -446,14 +459,11 @@ def test_publication_contract_accepts_only_registered_read_observations() -> Non
         ),
         observation(11, "akb_vault_info", "read", "vault", {"vault": "catalog-bench-data"}),
     ]
-    observation_room = task.model_copy(
-        update={
-            "material_attempt_limits": {"create": 3, "search": 2, "list": 3, "delete": 1, "read": 2}
-        }
-    )
-    _resolved, accepted_valid = _resolved_material_stage_calls(observation_room, [*calls, *accepted])
+    _resolved, accepted_valid = _resolved_material_stage_calls(task, [*calls, *accepted])
 
     wrong_vault = observation(9, "akb_publications", "list", "publication", {"vault": "other-vault"})
+    wrong_filter = observation(9, "akb_list_vaults", "list", "vault", {"filter": "catalog-bench"})
+    vault_filter = observation(9, "akb_list_vaults", "list", "vault", {"filter": "catalog-bench-data"})
     wrong_query = observation(
         9,
         "akb_sql",
@@ -468,14 +478,146 @@ def test_publication_contract_accepts_only_registered_read_observations() -> Non
         "table",
         {"vault": "catalog-bench-data", "sql": "DROP TABLE scores"},
     )
-    _resolved, wrong_vault_valid = _resolved_material_stage_calls(observation_room, [*calls, wrong_vault])
-    _resolved, wrong_query_valid = _resolved_material_stage_calls(observation_room, [*calls, wrong_query])
-    _resolved, write_query_valid = _resolved_material_stage_calls(observation_room, [*calls, write_query])
+    guide_mutation = observation(
+        9,
+        "akb_update",
+        "update",
+        "document",
+        {"uri": "akb://catalog-bench-data/doc/guide.md", "content": "unrequested guide rewrite"},
+    )
+    _resolved, wrong_vault_valid = _resolved_material_stage_calls(task, [*calls, wrong_vault])
+    _resolved, wrong_filter_valid = _resolved_material_stage_calls(task, [*calls, wrong_filter])
+    _resolved, vault_filter_valid = _resolved_material_stage_calls(task, [*calls, vault_filter])
+    _resolved, wrong_query_valid = _resolved_material_stage_calls(task, [*calls, wrong_query])
+    _resolved, write_query_valid = _resolved_material_stage_calls(task, [*calls, write_query])
+    _resolved, guide_mutation_valid = _resolved_material_stage_calls(task, [*calls, guide_mutation])
 
     assert accepted_valid is True
     assert wrong_vault_valid is False
+    assert wrong_filter_valid is False
+    assert vault_filter_valid is True
     assert wrong_query_valid is False
     assert write_query_valid is False
+    assert guide_mutation_valid is False
+
+
+def test_schema_read_observation_requires_a_registered_table_and_scoped_read() -> None:
+    task = _tasks()["table-schema-conflict-en"]
+    calls = [
+        ToolCallRecord(
+            order=index,
+            tool_name="fixture_tool",
+            logical_operation=attempt.logical_operation,
+            resource_type=attempt.resource_type,
+            operation_kind="material",
+            stage_id=attempt.stage_id,
+            server_args=dict(attempt.arguments),
+            effective_server_args=dict(attempt.arguments),
+            raw_args_valid=True,
+            server_args_equal_raw=True,
+            transport_succeeded=True,
+            server_succeeded=True,
+        )
+        for index, attempt in enumerate(task.expected_material_attempts, start=1)
+    ]
+
+    def observation(sql: str) -> ToolCallRecord:
+        return ToolCallRecord(
+            order=len(calls) + 1,
+            tool_name="akb_sql",
+            logical_operation="search",
+            resource_type="table",
+            operation_kind="material",
+            server_args={"vault": "catalog-bench-schema", "sql": sql},
+            effective_server_args={"vault": "catalog-bench-schema", "sql": sql},
+            raw_args_valid=True,
+            server_args_equal_raw=True,
+            transport_succeeded=True,
+            server_succeeded=True,
+        )
+
+    _resolved, valid_table_read = _resolved_material_stage_calls(
+        task,
+        [*calls, observation("SELECT * FROM events LIMIT 0;")],
+    )
+    _resolved, wrong_metadata_name = _resolved_material_stage_calls(
+        task,
+        [*calls, observation("SELECT column_name FROM information_schema.columns WHERE table_name = 'events';")],
+    )
+    _resolved, wrong_metadata_schema = _resolved_material_stage_calls(
+        task,
+        [
+            *calls,
+            observation(
+                "SELECT column_name FROM information_schema.columns WHERE table_schema = 'catalog-bench-schema' AND table_name = 'events';"
+            ),
+        ],
+    )
+    _resolved, wrong_physical_name = _resolved_material_stage_calls(
+        task,
+        [*calls, observation("SELECT * FROM vt_wrong__events LIMIT 0;")],
+    )
+
+    assert valid_table_read is True
+    assert wrong_metadata_name is False
+    assert wrong_metadata_schema is False
+    assert wrong_physical_name is False
+
+
+def test_schema_conflict_rubric_accepts_success_noop_and_rejects_missing_or_false_explanations() -> None:
+    task = _tasks()["table-schema-conflict-en"]
+    accurate_answers = [
+        "The tool did not error; it returned a normal success response with one text column: event_id — text. "
+        "The duplicate add was silently ignored as an idempotent no-op.",
+        "The tool returned a success payload, not an error. Its unchanged schema has one user column: "
+        "`event_id` (type `text`), and the duplicate add did not add another.",
+        "It did not error; the tool returned a success response, not a duplicate-column rejection. "
+        "The unchanged schema has exactly one text event_id column.",
+        "The call returned successfully and was idempotent. The schema has exactly one `event_id` column "
+        "of type `text`.",
+    ]
+    for answer in accurate_answers:
+        assert response_matches_rubric(answer, task), answer
+
+    missing_explanation = "The final schema contains exactly one text event_id column."
+    false_rejection = (
+        "The duplicate column add was rejected as already existing; the final schema contains exactly one "
+        "text event_id column."
+    )
+    duplicate_column = "The tool returned a normal success response and the schema contains two text event_id columns."
+
+    assert response_matches_rubric(missing_explanation, task) is False
+    assert response_matches_rubric(false_rejection, task) is False
+    assert response_matches_rubric(duplicate_column, task) is False
+
+
+def test_relation_recorder_preserves_pending_stage_when_scoped_read_has_extra_argument() -> None:
+    task = _tasks()["collection-relation-lifecycle-ko"]
+    recorder = ToolCallRecorder(operation_map={}, secrets=(), task=task)
+    vault = "catalog-bench-relations"
+    collection_uri = f"akb://{vault}/coll/notes"
+    left_uri = f"{collection_uri}/doc/left.md"
+    right_uri = f"{collection_uri}/doc/right.md"
+    sequence = [
+        ("akb_create_vault", "create", "vault", {"name": vault}, "create_vault_1"),
+        ("akb_create_collection", "create", "collection", {"vault": vault, "path": "notes"}, "create_collection_1"),
+        ("akb_put", "create", "document", {"vault": vault, "collection": "notes", "title": "left", "content": "left"}, "create_document_1"),
+        ("akb_put", "create", "document", {"vault": vault, "collection": "notes", "title": "right", "content": "right"}, "create_document_2"),
+        ("akb_link", "update", "relation", {"relation": "related_to", "source": left_uri, "target": right_uri}, "update_relation_1"),
+        ("akb_relations", "read", "relation", {"direction": "both", "uri": left_uri}, "read_relation_1"),
+        ("akb_relations", "read", "relation", {"direction": "both", "uri": right_uri}, None),
+        ("akb_unlink", "delete", "relation", {"relation": "related_to", "source": left_uri, "target": right_uri}, "delete_relation_1"),
+        ("akb_get", "read", "document", {"uri": left_uri}, None),
+        ("akb_browse", "list", "document", {"uri": collection_uri}, "verify_collection"),
+        ("akb_relations", "read", "relation", {"direction": "both", "uri": left_uri}, "verify_unlinked_relationships"),
+    ]
+
+    observed = [
+        recorder._stage_id_for_material_call(name, operation, resource, arguments)
+        for name, operation, resource, arguments, _expected_stage in sequence
+    ]
+
+    assert observed == [expected for *_, expected in sequence]
 
 
 def test_post_completion_read_is_efficiency_only_and_finalize_roundtrip_is_idempotent() -> None:
@@ -639,7 +781,8 @@ async def _schema_conflict_outcome(
         model_id="fixture-model",
         transport="http",
         final_answer_text=(
-            "The duplicate add was already present; the tool returned the existing schema with one text event_id column."
+            "The tool returned a normal success response, not an error. The duplicate add was a no-op; "
+            "the unchanged schema has exactly one text event_id column."
         ),
         first_logical_operation="create",
         tool_calls=calls,

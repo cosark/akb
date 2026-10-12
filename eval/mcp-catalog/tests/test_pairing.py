@@ -108,6 +108,14 @@ def test_selected_artifacts_keep_the_full_corpus_verdict_inconclusive() -> None:
     assert result["gate"]["reasons"] == [
         "selected trial evidence cannot support the full benchmark adoption verdict"
     ]
+    diagnostics = result["observed_selected_diagnostics"]
+    assert diagnostics["classification"] == "diagnostic_only"
+    assert diagnostics["adoption_eligible"] is False
+    assert diagnostics["arms"]["baseline"]["observed_trials"] == 1
+    assert diagnostics["arms"]["candidate"]["observed_trials"] == 1
+    assert diagnostics["combined"]["observed_trials"] == 2
+    assert diagnostics["combined"]["efficiency_metrics"]["trials"] == 2
+    assert "cost_usd" in diagnostics["combined"]
 
 
 @pytest.mark.parametrize(
@@ -133,6 +141,7 @@ def test_selected_artifact_tampering_is_rejected_before_partial_verdict(mutation
 
     assert result["verdict"] == "inconclusive"
     assert result["gate"]["reasons"] == ["candidate artifact integrity digest does not match"]
+    assert result["observed_selected_diagnostics"]["classification"] == "diagnostic_only"
 
 
 def test_complete_artifacts_over_retired_request_and_wall_caps_still_compare() -> None:
@@ -255,6 +264,18 @@ def test_mutated_or_incomplete_artifacts_produce_inconclusive_verdicts() -> None
     incomplete = compare_artifacts(baseline, candidate)
     assert incomplete["verdict"] == "inconclusive"
     assert "incomplete baseline" in incomplete["gate"]["reasons"][0]
+
+
+def test_compare_rejects_resealed_artifact_with_model_input_hash_drift() -> None:
+    baseline, candidate = complete_paired_artifacts()
+    evidence = candidate["runs"]["primary:http"]["trials"][0]["model_input_evidence"][0]
+    evidence["model_input_canonical_json"] += " "
+    _seal(candidate)
+
+    result = compare_artifacts(baseline, candidate)
+
+    assert result["verdict"] == "inconclusive"
+    assert "model input evidence integrity" in result["gate"]["reasons"][0]
 
 
 def test_independent_arm_evidence_cannot_be_adopted() -> None:

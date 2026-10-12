@@ -12,6 +12,7 @@ from mcp_catalog.checkpoint import (
     CheckpointHeader,
     CheckpointKey,
     CheckpointStore,
+    checkpoint_record_hash,
 )
 from mcp_catalog.contracts import hash_json, load_run_manifest, load_task_corpus
 from mcp_catalog.execution import BudgetExceeded, BudgetLedger, ToolCallRecord, TrialOutcome
@@ -154,6 +155,45 @@ def test_trial_checkpoint_is_atomic_redacted_and_reusable(tmp_path: Path) -> Non
     reused = resumed.completed_outcome_for(key)
     assert reused is not None
     assert resumed.document.spent.model_requests == 1
+
+
+def test_checkpoint_rejects_model_input_hash_drift_on_reload(tmp_path: Path) -> None:
+    path = tmp_path / "model-input.checkpoint.json"
+    store, key = _store(path)
+    store.record_trial(key, _outcome(key), status="completed")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    digest = hash_json(key.model_dump(mode="json"))
+    record = raw["records"][digest]
+    record["outcome"]["model_input_evidence"][0]["model_input_canonical_json"] = (
+        '{"instructions":"Synthetic server instructions.","request_index":1,"tampered":true}'
+    )
+    outcome = TrialOutcome.model_validate(record["outcome"])
+    record["record_hash"] = checkpoint_record_hash(record["status"], key, outcome)
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(CheckpointError, match="model input evidence"):
+        _store(path, resume=True)
+
+
+def test_checkpoint_rejects_redaction_that_would_break_model_input_hash(tmp_path: Path) -> None:
+    marker = "synthetic-user"
+    path = tmp_path / "redacted-input.checkpoint.json"
+    store, key = _store(path, secrets=(marker,))
+    outcome = _outcome(key)
+    evidence = outcome.model_input_evidence[0]
+    serialized = '{"instructions":"Synthetic server instructions.","username":"synthetic-user"}'
+    redaction_sensitive = evidence.model_copy(
+        update={
+            "model_input_canonical_json": serialized,
+            "model_input_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+        }
+    )
+    outcome = outcome.model_copy(update={"model_input_evidence": [redaction_sensitive]})
+
+    with pytest.raises(CheckpointError, match="model input evidence"):
+        store.record_trial(key, outcome, status="completed")
+
+    assert not path.exists()
 
 
 def test_selection_resume_reuses_failed_and_incomplete_terminal_rows(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -276,6 +277,50 @@ def test_evidence_redaction_failure_does_not_persist_the_unredacted_file(tmp_pat
         evidence.write_json(path, {"value": marker}, (marker,))
 
     assert not path.exists()
+
+
+def test_json_writer_rejects_redaction_that_would_invalidate_model_input_hash(tmp_path: Path) -> None:
+    marker = "synthetic-account-name"
+    serialized = evidence.canonical_json({"message": marker})
+    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    value = {
+        "model_input_evidence": [
+            {
+                "model_input_canonical_json": serialized,
+                "model_input_sha256": digest,
+            }
+        ]
+    }
+    path = tmp_path / "model-input.json"
+
+    with pytest.raises(RuntimeError, match="model input evidence integrity"):
+        write_json(path, value, (marker,))
+
+    assert not path.exists()
+
+
+def test_json_writer_preserves_hash_for_model_input_redacted_before_capture(tmp_path: Path) -> None:
+    marker = "synthetic-account-name"
+    serialized = evidence.canonical_json({"message": "[redacted]"})
+    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    value = {
+        "model_input_evidence": [
+            {
+                "model_input_canonical_json": serialized,
+                "model_input_sha256": digest,
+            }
+        ]
+    }
+    path = tmp_path / "model-input.json"
+
+    write_json(path, value, (marker,))
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    item = saved["model_input_evidence"][0]
+
+    assert hashlib.sha256(item["model_input_canonical_json"].encode("utf-8")).hexdigest() == item[
+        "model_input_sha256"
+    ]
+    assert marker not in path.read_text(encoding="utf-8")
 
 
 def test_exception_evidence_keeps_redacted_nested_cause_and_status() -> None:

@@ -46,7 +46,14 @@ from .contracts import (
     load_tool_coverage,
     validate_public_catalog,
 )
-from .evidence import redact_exception, redact_text, serialize_report, write_json, safe_json
+from .evidence import (
+    redact_exception,
+    redact_text,
+    safe_json,
+    serialize_report,
+    validate_model_input_evidence,
+    write_json,
+)
 from .execution import (
     BudgetLedger,
     BudgetExceeded,
@@ -239,7 +246,7 @@ class CredentialResolver:
         return value
 
     def secrets_for(self, profile: str) -> tuple[str, ...]:
-        return tuple(dict.fromkeys((*self.model_secrets, self.token_for(profile))))
+        return tuple(dict.fromkeys((*self.secret_values(), self.token_for(profile))))
 
     def required_profiles(self, tasks: list[TaskManifest]) -> list[str]:
         return sorted({task.fixture.credential_profile for task in tasks})
@@ -1337,6 +1344,7 @@ class BenchmarkRunner:
                         fixture=cell_fixture,
                         token=token,
                         secrets=self.secrets,
+                        secret_values=resolver.secret_values,
                         request_timeout_seconds=request_timeout_seconds,
                         request_guard=request_guard,
                         input_schemas=input_schemas,
@@ -1356,6 +1364,7 @@ class BenchmarkRunner:
                             fixture=cell_fixture,
                             token=token,
                             secrets=self.secrets,
+                            secret_values=resolver.secret_values,
                             request_timeout_seconds=request_timeout_seconds,
                             request_guard=request_guard,
                             input_schemas=input_schemas,
@@ -3009,12 +3018,149 @@ def _provider_distribution_sensitivity(
 
 
 def _empty_comparison(baseline: dict[str, Any], candidate: dict[str, Any], reason: str) -> dict[str, Any]:
-    return {
+    result = {
         "schema_version": 4,
         "baseline_source_revision": baseline.get("source_revision"),
         "candidate_source_revision": candidate.get("source_revision"),
         "verdict": "inconclusive",
         "gate": {"status": "inconclusive", "reasons": [reason]},
+    }
+    if isinstance(baseline.get("selection"), dict) and isinstance(candidate.get("selection"), dict):
+        result["observed_selected_diagnostics"] = _selected_diagnostic_summary(baseline, candidate)
+    return result
+
+
+def _selected_diagnostic_summary(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    """Summarize selected observations without changing the inconclusive gate."""
+
+    plans: dict[str, set[tuple[str, str, str, int]]] = {}
+    for arm, artifact in (("baseline", baseline), ("candidate", candidate)):
+        selection = artifact.get("selection")
+        raw_plan = selection.get("selected_trials") if isinstance(selection, dict) else None
+        identities: set[tuple[str, str, str, int]] = set()
+        for item in raw_plan if isinstance(raw_plan, list) else []:
+            if not isinstance(item, dict):
+                continue
+            model_class, transport, task_id, repeat_index = (
+                item.get("model_class"),
+                item.get("transport"),
+                item.get("task_id"),
+                item.get("repeat_index"),
+            )
+            if (
+                isinstance(model_class, str)
+                and isinstance(transport, str)
+                and isinstance(task_id, str)
+                and type(repeat_index) is int
+            ):
+                identities.add((model_class, transport, task_id, repeat_index))
+        plans[arm] = identities
+
+    totals: dict[str, dict[str, Any]] = {}
+    parsed_by_arm: dict[str, list[TrialOutcome]] = {}
+    count_fields = (
+        "observed_trials",
+        "successes",
+        "task_errors",
+        "safe_trials",
+        "unsafe_mutation_trials",
+        "tool_attempts",
+        "model_requests",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+    )
+    for arm, artifact in (("baseline", baseline), ("candidate", candidate)):
+        runs = artifact.get("runs")
+        plan = plans[arm]
+        raw_rows: list[dict[str, Any]] = []
+        excluded = 0
+        if isinstance(runs, dict):
+            for run in runs.values():
+                if not isinstance(run, dict):
+                    continue
+                trials = run.get("trials")
+                if not isinstance(trials, list):
+                    continue
+                for row in trials:
+                    if not isinstance(row, dict):
+                        excluded += 1
+                        continue
+                    identity = (
+                        row.get("model_class"),
+                        row.get("transport"),
+                        row.get("task_id"),
+                        row.get("repeat_index"),
+                    )
+                    if (
+                        isinstance(identity[0], str)
+                        and isinstance(identity[1], str)
+                        and isinstance(identity[2], str)
+                        and type(identity[3]) is int
+                        and identity in plan
+                    ):
+                        raw_rows.append(row)
+                    else:
+                        excluded += 1
+
+        totals[arm] = {key: 0 for key in count_fields}
+        totals[arm]["observed_trials"] = len(raw_rows)
+        totals[arm]["malformed_outcomes"] = 0
+        totals[arm]["invalid_cost_rows"] = 0
+        totals[arm]["unselected_or_unidentified_rows"] = excluded
+        cost = Decimal("0")
+        parsed: list[TrialOutcome] = []
+        for row in raw_rows:
+            totals[arm]["successes"] += row.get("success") is True
+            totals[arm]["task_errors"] += row.get("trial_error") is True
+            totals[arm]["safe_trials"] += row.get("safety") is True
+            totals[arm]["unsafe_mutation_trials"] += row.get("unsafe_mutation") is True
+            tool_calls = row.get("tool_calls")
+            totals[arm]["tool_attempts"] += len(tool_calls) if isinstance(tool_calls, list) else 0
+            for metric_name in ("model_requests", "input_tokens", "output_tokens", "total_tokens"):
+                value = row.get(metric_name, 0)
+                if type(value) is int and value >= 0:
+                    totals[arm][metric_name] += value
+            raw_cost = row.get("cost_usd", 0)
+            try:
+                row_cost = Decimal(str(raw_cost))
+                if not row_cost.is_finite() or row_cost < 0:
+                    raise InvalidOperation
+                cost += row_cost
+            except (InvalidOperation, TypeError, ValueError):
+                totals[arm]["invalid_cost_rows"] += 1
+            try:
+                parsed.append(TrialOutcome.model_validate(row))
+            except ValueError:
+                totals[arm]["malformed_outcomes"] += 1
+        totals[arm]["cost_usd"] = str(cost)
+        totals[arm]["parsed_outcomes"] = len(parsed)
+        totals[arm]["efficiency_metrics"] = summarize_outcomes(parsed)
+        parsed_by_arm[arm] = parsed
+
+    combined: dict[str, Any] = {
+        key: sum(int(totals[arm][key]) for arm in ("baseline", "candidate")) for key in count_fields
+    }
+    combined.update(
+        {
+            "malformed_outcomes": sum(int(totals[arm]["malformed_outcomes"]) for arm in ("baseline", "candidate")),
+            "invalid_cost_rows": sum(int(totals[arm]["invalid_cost_rows"]) for arm in ("baseline", "candidate")),
+            "unselected_or_unidentified_rows": sum(
+                int(totals[arm]["unselected_or_unidentified_rows"]) for arm in ("baseline", "candidate")
+            ),
+            "cost_usd": str(sum((Decimal(totals[arm]["cost_usd"]) for arm in ("baseline", "candidate")), start=Decimal("0"))),
+            "parsed_outcomes": sum(int(totals[arm]["parsed_outcomes"]) for arm in ("baseline", "candidate")),
+            "efficiency_metrics": summarize_outcomes(parsed_by_arm["baseline"] + parsed_by_arm["candidate"]),
+        }
+    )
+    return {
+        "classification": "diagnostic_only",
+        "adoption_eligible": False,
+        "arms": totals,
+        "combined": combined,
     }
 
 
@@ -3112,6 +3258,11 @@ def _artifact_integrity_error(artifact: dict[str, Any], arm: ArmName) -> str | N
     manifest = artifact.get("manifest")
     if not isinstance(hash_input, dict) or not isinstance(artifact_hash, str) or not isinstance(manifest, dict):
         return f"{arm} artifact is missing its integrity envelope"
+    try:
+        validate_model_input_evidence(artifact.get("runs", {}))
+        validate_model_input_evidence(artifact.get("smoke_gate", {}))
+    except ValueError:
+        return f"{arm} model input evidence integrity digest does not match"
     trial_order = hash_input.get("trial_order")
     if not isinstance(trial_order, list):
         return f"{arm} artifact trial plan is missing"
