@@ -145,6 +145,47 @@ def test_relative_parent_paths_resolve_from_the_selection_file(
     assert all(Path(parent["path"]).is_absolute() for parent in loaded.parents.values())
 
 
+def test_selection_validates_the_approved_plan_provenance_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, tasks, selection = _selection_fixture(tmp_path, monkeypatch)
+    document = json.loads(selection.path.read_text(encoding="utf-8"))
+    for trial in document["selected_trials"]:
+        if trial["role"] == "failure":
+            trial["prior_candidate_failure_kind"] = "tool"
+        else:
+            trial["prior_both_arms_success"] = True
+    document.update(
+        {
+            "purpose": "tool_guidance_regression",
+            "selected_identity_count": 16,
+            "new_trial_count": 32,
+            "smoke_trial_count": 8,
+            "comparison": "fresh flat baseline versus corrected mixed candidate",
+            "prepared_at": "2026-10-12T00:52:00.192696+00:00",
+            "budget": {
+                "session_max_usd": 50,
+                "prior_conservative_spend_usd": "8.56720104",
+                "new_execution_limit_usd": "41.43279896",
+                "per_trial_usd": "0.10",
+                "request_timeout_seconds": 300,
+                "request_count_limit": None,
+                "wall_time_stop_limit": None,
+            },
+        }
+    )
+    selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    loaded = selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
+
+    assert len(loaded.selected_trials) == 16
+    document["budget"]["new_execution_limit_usd"] = "41.43279897"
+    selection.path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid"):
+        selection_module.ToolGuidanceSelection.load(selection.path, manifest=manifest, tasks=tasks)
+
+
 @pytest.mark.parametrize("mutation", ["duplicate", "missing", "extra", "wrong_role", "wrong_lineage"])
 def test_selection_rejects_identity_or_role_changes(
     tmp_path: Path,

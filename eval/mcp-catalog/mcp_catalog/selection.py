@@ -78,6 +78,16 @@ class ParentArtifact(ContractModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class SelectionBudget(ContractModel):
+    session_max_usd: Decimal
+    prior_conservative_spend_usd: Decimal
+    new_execution_limit_usd: Decimal
+    per_trial_usd: Decimal
+    request_timeout_seconds: int
+    request_count_limit: None
+    wall_time_stop_limit: None
+
+
 class SelectedTrial(ContractModel):
     model_class: Literal["primary", "lightweight"]
     transport: Transport
@@ -85,6 +95,8 @@ class SelectedTrial(ContractModel):
     repeat_index: int = Field(ge=1)
     role: Literal["failure", "control"]
     parent_lineage: ParentLineage
+    prior_candidate_failure_kind: Literal["tool"] | None = None
+    prior_both_arms_success: Literal[True] | None = None
 
     @property
     def identity(self) -> SelectionIdentity:
@@ -96,6 +108,13 @@ class SelectionDocument(ContractModel):
     authorization: AuthorizationPin
     parents: dict[ParentName, ParentArtifact]
     selected_trials: list[SelectedTrial] = Field(min_length=1)
+    purpose: Literal["tool_guidance_regression"] | None = None
+    selected_identity_count: int | None = Field(default=None, ge=0)
+    new_trial_count: int | None = Field(default=None, ge=0)
+    smoke_trial_count: int | None = Field(default=None, ge=0)
+    comparison: str | None = None
+    prepared_at: str | None = Field(default=None, min_length=1)
+    budget: SelectionBudget | None = None
 
     @model_validator(mode="after")
     def validate_approved_selection(self) -> SelectionDocument:
@@ -117,8 +136,29 @@ class SelectionDocument(ContractModel):
             expected_role, expected_lineage = _ROLE_BY_IDENTITY[trial.identity]
             if (trial.role, trial.parent_lineage) != (expected_role, expected_lineage):
                 raise ValueError("selection role or parent lineage differs from the approved sample")
+            if trial.role == "failure":
+                if trial.prior_both_arms_success is not None:
+                    raise ValueError("prior success metadata is only valid for selected controls")
+            elif trial.prior_candidate_failure_kind is not None:
+                raise ValueError("prior failure metadata is only valid for selected failures")
         if Counter(trial.role for trial in self.selected_trials) != Counter(failure=8, control=8):
             raise ValueError("selection must contain eight failures and eight controls")
+        if self.selected_identity_count is not None and self.selected_identity_count != len(self.selected_trials):
+            raise ValueError("selection identity count differs from its selected trials")
+        if self.new_trial_count is not None and self.new_trial_count != 2 * len(self.selected_trials):
+            raise ValueError("selection paired trial count differs from its selected identities")
+        if self.smoke_trial_count is not None and self.smoke_trial_count != 8:
+            raise ValueError("selection smoke count differs from the four paired smoke cells")
+        if self.budget is not None and (
+            self.budget.session_max_usd != TOTAL_BUDGET_USD
+            or self.budget.prior_conservative_spend_usd != PRIOR_SPEND_USD
+            or self.budget.new_execution_limit_usd != NEW_EXECUTION_LIMIT_USD
+            or self.budget.per_trial_usd != PER_TRIAL_LIMIT_USD
+            or self.budget.request_timeout_seconds != REQUEST_TIMEOUT_SECONDS
+            or self.budget.request_count_limit is not None
+            or self.budget.wall_time_stop_limit is not None
+        ):
+            raise ValueError("selection budget metadata differs from the approved measurement limits")
         return self
 
 
@@ -297,6 +337,15 @@ def _parent_results(
                 raise ValueError("selected failure is not a prior candidate tool failure")
         elif baseline.get("success") is not True or candidate.get("success") is not True:
             raise ValueError("selected control was not successful in both pinned parent arms")
+        if (
+            trial.prior_candidate_failure_kind is not None
+            and candidate.get("failure_kind") != trial.prior_candidate_failure_kind
+        ):
+            raise ValueError("selected prior candidate failure metadata differs from its pinned parent row")
+        if trial.prior_both_arms_success is not None and trial.prior_both_arms_success != (
+            baseline.get("success") is True and candidate.get("success") is True
+        ):
+            raise ValueError("selected prior control metadata differs from its pinned parent rows")
         results[trial.identity] = rows_by_arm
     return results
 
