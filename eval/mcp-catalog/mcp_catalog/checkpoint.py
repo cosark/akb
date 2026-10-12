@@ -179,19 +179,31 @@ def valid_completed_outcome(outcome: TrialOutcome, task: TaskManifest) -> bool:
 
 
 def valid_smoke_outcome(outcome: TrialOutcome, task: TaskManifest) -> bool:
-    return (
-        outcome.error is None
-        and valid_completed_outcome(outcome, task)
-        and has_server_instructions_evidence(outcome)
-        and len(outcome.provider_evidence) == outcome.model_requests
-        and all(
-            _smoke_response_has_usage(item, outcome.model_id)
-            for item in outcome.provider_evidence
-        )
-        and outcome.successful_mcp_tool_calls > 0
-        and outcome.model_requests >= 2
-        and outcome.follow_up_terminal_response
-    )
+    return smoke_outcome_failure_reason(outcome, task) is None
+
+
+def smoke_outcome_failure_reason(
+    outcome: TrialOutcome,
+    task: TaskManifest,
+    expected_instructions: str | None = None,
+) -> str | None:
+    if outcome.error is not None:
+        return "contains an execution error"
+    if not valid_completed_outcome(outcome, task):
+        return "does not contain complete measured execution evidence"
+    if not has_server_instructions_evidence(outcome, expected_instructions):
+        return "does not prove the sealed server instructions reached every model request"
+    if len(outcome.provider_evidence) != outcome.model_requests:
+        return "does not contain one provider receipt per model request"
+    if not all(_smoke_response_has_usage(item, outcome.model_id) for item in outcome.provider_evidence):
+        return "contains a provider receipt without valid model usage"
+    if outcome.successful_mcp_tool_calls <= 0:
+        return "does not contain a successful MCP tool call"
+    if outcome.model_requests < 2:
+        return "does not contain a follow-up model request"
+    if not outcome.follow_up_terminal_response:
+        return "does not contain a follow-up terminal response"
+    return None
 
 
 def _smoke_response_has_usage(evidence: dict[str, object], model_id: str) -> bool:

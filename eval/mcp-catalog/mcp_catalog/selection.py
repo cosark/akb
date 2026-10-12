@@ -21,14 +21,14 @@ ParentLineage = Literal["previous"]
 ParentName = Literal["previous_baseline", "previous_candidate"]
 
 TOTAL_BUDGET_USD = Decimal("50")
-PRIOR_SPEND_USD = Decimal("8.8435243548")
+PRIOR_SPEND_USD = Decimal("8.8804702844")
 NEW_EXECUTION_LIMIT_USD = TOTAL_BUDGET_USD - PRIOR_SPEND_USD
 PER_TRIAL_LIMIT_USD = Decimal("0.10")
 REQUEST_TIMEOUT_SECONDS = 300
 APPROVED_AUTHORIZATION = {
     "uri": "akb://reef-akb/coll/issues/doc/akb-361.md",
-    "revision": "f5a1ff84d9229dbd24867f2835bb5662cff6ece2",
-    "content_sha256": "32a646f9412e3776f8272a9d535031ad1f4b8dc8616bd1cf69dd3a843ea707d1",
+    "revision": "dc73422903c7ce946daa035b8fa178a8839e55db",
+    "content_sha256": "40aae57d645160924aaeb6ae953faa8e5dd3a79bbdb479aa1a63cce9a94d92a4",
 }
 APPROVED_PARENT_SHA256 = {
     "previous_baseline": "276e0dfdfdad58ce083f65b3ea0c21a22675f31d8a393995dace62b77eaa43a4",

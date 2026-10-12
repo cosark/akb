@@ -55,6 +55,7 @@ def synthetic_model_input_evidence(request_count: int) -> list[ModelInputEvidenc
                 model_input_sha256=hashlib.sha256(model_input.encode("utf-8")).hexdigest(),
                 model_input_canonical_json=model_input,
                 server_instructions_sha256=instructions_sha256,
+                server_instructions_text=SYNTHETIC_SERVER_INSTRUCTIONS,
                 server_instructions_present=True,
             )
         )

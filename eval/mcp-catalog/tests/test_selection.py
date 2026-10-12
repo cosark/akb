@@ -422,7 +422,7 @@ async def test_cli_uses_new_selection_ledger_and_writes_separate_summary(
     assert len(captured) == 2
     ledger = captured[0]["shared_ledger"]
     assert captured[1]["shared_ledger"] is ledger
-    assert ledger.total_cost_limit_usd == Decimal("41.1564756452")
+    assert ledger.total_cost_limit_usd == Decimal("41.1195297156")
     assert ledger.requests == 0
     assert ledger.cost_usd == Decimal("0")
     assert all(item["selection"].sha256 == selection.sha256 for item in captured)

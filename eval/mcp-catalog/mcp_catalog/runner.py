@@ -31,7 +31,7 @@ from .checkpoint import (
     SmokeModelClass,
     SmokeTransport,
     valid_completed_outcome,
-    valid_smoke_outcome,
+    smoke_outcome_failure_reason,
 )
 from .contracts import (
     ArmName,
@@ -1393,29 +1393,43 @@ class BenchmarkRunner:
                 model_spec,
                 registered_model,
             )
-            identity_matches = (
+            model_identity_matches = (
                 outcome.model_class == model_spec.class_name
                 and outcome.model_id == model_spec.model_id
                 and outcome.transport == transport
-                and (outcome.routing_observed, outcome.routing_valid) == (route_observed, route_valid)
-                and route_valid
-                and has_server_instructions_evidence(outcome, server_instructions)
-                and all(
-                    item.get("model") == model_spec.model_id
-                    for item in outcome.provider_evidence
-                )
             )
-            valid = identity_matches and valid_smoke_outcome(outcome, task)
+            route_matches = (
+                (outcome.routing_observed, outcome.routing_valid) == (route_observed, route_valid)
+                and route_valid
+            )
+            provider_models_match = all(
+                item.get("model") == model_spec.model_id
+                for item in outcome.provider_evidence
+            )
+            smoke_failure = smoke_outcome_failure_reason(outcome, task, server_instructions)
+            valid = model_identity_matches and route_matches and provider_models_match and smoke_failure is None
             if not valid and outcome.error is None:
-                if not identity_matches:
-                    outcome.error = "smoke gate outcome did not match the requested model, provider route, and transport"
+                if not model_identity_matches:
+                    outcome.error = "smoke gate outcome did not match the requested model and transport"
                     outcome.failure_kind = "provider"
-                elif outcome.successful_mcp_tool_calls == 0:
-                    outcome.error = "smoke gate did not observe a successful MCP tool call"
-                    outcome.failure_kind = "tool"
+                elif not route_matches:
+                    outcome.error = "smoke gate provider route did not match the registered route"
+                    outcome.failure_kind = "provider"
+                elif not provider_models_match:
+                    outcome.error = "smoke gate provider receipt model did not match the requested model"
+                    outcome.failure_kind = "provider"
+                elif smoke_failure is not None:
+                    outcome.error = f"smoke gate {smoke_failure}"
+                    outcome.failure_kind = (
+                        "tool"
+                        if smoke_failure == "does not contain a successful MCP tool call"
+                        else "terminal_response"
+                        if smoke_failure == "does not contain a follow-up terminal response"
+                        else "provider"
+                    )
                 else:
-                    outcome.error = "smoke gate did not observe a follow-up terminal response"
-                    outcome.failure_kind = "terminal_response"
+                    outcome.error = "smoke gate outcome failed an unclassified model or evidence check"
+                    outcome.failure_kind = "provider"
             status: Literal["completed", "failed", "incomplete"] = "completed" if valid else (
                 "incomplete" if outcome.error and outcome.error.startswith("benchmark incomplete:") else "failed"
             )
@@ -1464,8 +1478,13 @@ class BenchmarkRunner:
                 "required_cells": required_cells,
                 "cells": [cells[key] for key in required_cells if key in cells],
             }
+            raw_outcome = item.get("outcome")
+            failure_detail = raw_outcome.get("error") if isinstance(raw_outcome, dict) else None
+            detail = failure_detail if isinstance(failure_detail, str) and failure_detail else (
+                "returned incomplete model, provider, instruction, or terminal-response evidence"
+            )
             raise RuntimeContractError(
-                f"smoke gate cell {cell_key} did not produce model usage and a terminal routed outcome",
+                f"smoke gate cell {cell_key} failed: {detail}",
                 stage="smoke_gate",
             )
 

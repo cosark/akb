@@ -36,6 +36,7 @@ from mcp_catalog.execution import (
     has_server_instructions_evidence,
 )
 from mcp_catalog.contracts import TaskManifest
+from mcp_catalog.evidence import canonical_json
 
 SERVER_INSTRUCTIONS = runpy.run_path(
     str(Path(__file__).resolve().parents[3] / "backend" / "mcp_server" / "instructions.py")
@@ -221,5 +222,75 @@ def test_model_input_evidence_preserves_redacted_sdk_messages_and_verifiable_has
         model_input_evidence=[evidence],
     )
     assert has_server_instructions_evidence(outcome, instructions)
+    assert has_server_instructions_evidence(outcome)
+    assert evidence.server_instructions_text == instructions
     evidence.model_input_canonical_json += "tampered"
     assert not has_server_instructions_evidence(outcome, instructions)
+
+
+@pytest.mark.parametrize(
+    ("transport", "instructions", "sdk_instruction_text"),
+    [
+        ("http", SERVER_INSTRUCTIONS, SERVER_INSTRUCTIONS.rstrip("\r\n")),
+        ("stdio", "first line\nsecond line", "first line\nsecond line"),
+    ],
+    ids=("http-terminal-lf", "stdio-multiline-raw"),
+)
+def test_instruction_evidence_checks_raw_source_and_sdk_input(
+    transport: str,
+    instructions: str,
+    sdk_instruction_text: str,
+) -> None:
+    evidence = _model_input_evidence_for(
+        [ModelRequest(parts=[InstructionPart(content=sdk_instruction_text)])],
+        instructions,
+        1,
+    )
+    source_sha256 = hashlib.sha256(instructions.encode("utf-8")).hexdigest()
+    outcome = TrialOutcome(
+        task_id="instruction-evidence",
+        category="single_operation",
+        arm="candidate",
+        model_class="primary",
+        model_id="test-model",
+        transport=transport,
+        model_requests=1,
+        server_instructions_sha256=source_sha256,
+        model_input_evidence=[evidence],
+    )
+
+    assert evidence.server_instructions_sha256 == source_sha256
+    assert evidence.server_instructions_text == instructions
+    assert has_server_instructions_evidence(outcome, instructions)
+    assert has_server_instructions_evidence(outcome)
+
+    parsed = json.loads(evidence.model_input_canonical_json)
+    first_line = sdk_instruction_text.split("\n", 1)[0]
+    parsed[0]["parts"][0]["content"] = sdk_instruction_text.replace(
+        first_line,
+        f"{first_line} changed",
+        1,
+    )
+    changed_input = canonical_json(parsed)
+    changed_evidence = evidence.model_copy(
+        update={
+            "model_input_canonical_json": changed_input,
+            "model_input_sha256": hashlib.sha256(changed_input.encode("utf-8")).hexdigest(),
+        }
+    )
+    changed_outcome = outcome.model_copy(update={"model_input_evidence": [changed_evidence]})
+    assert not has_server_instructions_evidence(changed_outcome, instructions)
+
+    wrong_source_hash = outcome.model_copy(update={"server_instructions_sha256": "0" * 64})
+    assert not has_server_instructions_evidence(wrong_source_hash, instructions)
+
+    wrong_evidence_hash = evidence.model_copy(update={"server_instructions_sha256": "0" * 64})
+    assert not has_server_instructions_evidence(
+        outcome.model_copy(update={"model_input_evidence": [wrong_evidence_hash]}),
+        instructions,
+    )
+
+    changed_source_text = evidence.model_copy(update={"server_instructions_text": f"{instructions} changed"})
+    assert not has_server_instructions_evidence(
+        outcome.model_copy(update={"model_input_evidence": [changed_source_text]}),
+    )

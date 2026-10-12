@@ -111,6 +111,7 @@ def _model_input_evidence_for(
         model_input_sha256=hashlib.sha256(serialized_input.encode("utf-8")).hexdigest(),
         model_input_canonical_json=serialized_input,
         server_instructions_sha256=instructions_sha256,
+        server_instructions_text=instructions,
         server_instructions_present=True,
     )
 
@@ -283,6 +284,7 @@ class ModelInputEvidence(BaseModel):
     model_input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     model_input_canonical_json: str = Field(min_length=2)
     server_instructions_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    server_instructions_text: str = Field(min_length=1)
     server_instructions_present: bool
 
 
@@ -1025,22 +1027,33 @@ def has_server_instructions_evidence(
     outcome: TrialOutcome,
     expected_instructions: str | None = None,
 ) -> bool:
-    if expected_instructions is None:
-        if outcome.server_instructions_sha256 is None:
-            return False
-        expected_sha256 = outcome.server_instructions_sha256
-    else:
-        if not expected_instructions.strip():
-            return False
-        expected_sha256 = hashlib.sha256(expected_instructions.encode("utf-8")).hexdigest()
-
-    expected_text = expected_instructions.rstrip("\r\n") if expected_instructions is not None else None
+    if (
+        outcome.server_instructions_sha256 is None
+        or outcome.model_requests <= 0
+        or len(outcome.model_input_evidence) != outcome.model_requests
+        or [item.request_index for item in outcome.model_input_evidence]
+        != list(range(1, outcome.model_requests + 1))
+    ):
+        return False
+    source_instructions = (
+        expected_instructions
+        if expected_instructions is not None
+        else outcome.model_input_evidence[0].server_instructions_text
+    )
+    if not source_instructions.strip():
+        return False
+    expected_sha256 = hashlib.sha256(source_instructions.encode("utf-8")).hexdigest()
+    expected_text = source_instructions.rstrip("\r\n")
+    if (
+        not expected_text
+        or outcome.server_instructions_sha256 != expected_sha256
+        or any(item.server_instructions_text != source_instructions for item in outcome.model_input_evidence)
+    ):
+        return False
 
     def contains_instructions(value: Any) -> bool:
         if isinstance(value, str):
-            if expected_text is not None:
-                return expected_text in value
-            return hashlib.sha256(value.encode("utf-8")).hexdigest() == expected_sha256
+            return expected_text in value
         if isinstance(value, dict):
             return any(contains_instructions(item) for item in value.values())
         if isinstance(value, list):
@@ -1048,6 +1061,8 @@ def has_server_instructions_evidence(
         return False
 
     def input_evidence_matches(item: ModelInputEvidence) -> bool:
+        if item.server_instructions_sha256 != expected_sha256:
+            return False
         serialized_input = item.model_input_canonical_json
         if hashlib.sha256(serialized_input.encode("utf-8")).hexdigest() != item.model_input_sha256:
             return False
@@ -1058,14 +1073,8 @@ def has_server_instructions_evidence(
         return item.server_instructions_present and contains_instructions(parsed_input)
 
     return (
-        outcome.server_instructions_sha256 == expected_sha256
-        and outcome.model_requests > 0
-        and len(outcome.model_input_evidence) == outcome.model_requests
-        and [item.request_index for item in outcome.model_input_evidence]
-        == list(range(1, outcome.model_requests + 1))
-        and all(
+        all(
             item.server_instructions_present
-            and item.server_instructions_sha256 == expected_sha256
             and input_evidence_matches(item)
             for item in outcome.model_input_evidence
         )
