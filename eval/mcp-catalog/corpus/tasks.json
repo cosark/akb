@@ -421,7 +421,10 @@
               "pointer": "/items",
               "operator": "contains",
               "value": {
-                "name": "quick-update.md"
+                "type": "document",
+                "name": "quick-update",
+                "path": "notes/quick-update.md",
+                "uri": "akb://catalog-bench-knowledge/coll/notes/doc/quick-update.md"
               }
             }
           ]
@@ -2251,7 +2254,10 @@
               "pointer": "/items",
               "operator": "contains",
               "value": {
-                "name": "status-note.md"
+                "type": "document",
+                "name": "status-note",
+                "path": "status-note.md",
+                "uri": "akb://catalog-bench-overlap/doc/status-note.md"
               }
             }
           ]
@@ -2414,7 +2420,10 @@
               "pointer": "/items",
               "operator": "contains",
               "value": {
-                "name": "grep-target.md"
+                "type": "document",
+                "name": "grep-target",
+                "path": "grep-target.md",
+                "uri": "akb://catalog-bench-grep/doc/grep-target.md"
               }
             }
           ],
@@ -2629,7 +2638,10 @@
               "pointer": "/items",
               "operator": "not_contains",
               "value": {
-                "name": "revision-note.md"
+                "type": "document",
+                "name": "revision-note",
+                "path": "moved/revision-note.md",
+                "uri": "akb://catalog-bench-revisions/coll/moved/doc/revision-note.md"
               }
             }
           ],

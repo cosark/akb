@@ -88,6 +88,206 @@ def _score(
     return outcome
 
 
+def _score_browse_state(task_id: str, items: list[dict[str, object]], calls: list[ToolCallRecord] | None = None) -> TrialOutcome:
+    task = _tasks()[task_id]
+    observations = task.expected_final_state.observation_sets
+    before = [
+        StateObservation(
+            True,
+            item.resolved_before_expected_status if item.check_before else item.probe.expected_status,
+            {"detail": "Vault not found"},
+        )
+        for item in observations
+    ]
+    after = [
+        StateObservation(True, item.probe.expected_status, {"items": items})
+        for item in observations
+    ]
+    outcome = TrialOutcome(
+        task_id=task.id,
+        category=task.category,
+        locale=task.locale,
+        arm="baseline",
+        model_class="primary",
+        model_id="fixture-model",
+        transport="http",
+        final_answer_text="모든 단계가 완료됐습니다. 문서 내용을 확인했습니다.",
+        first_logical_operation=calls[0].logical_operation if calls else "none",
+        tool_calls=calls or [],
+    )
+    outcome.finalize(task, before, after)
+    return outcome
+
+
+def _knowledge_workflow_calls(content: str = "A short note for the team.") -> list[ToolCallRecord]:
+    vault = "catalog-bench-knowledge"
+    uri = "akb://catalog-bench-knowledge/coll/notes/doc/quick-update.md"
+    calls = [
+        _record(1, {
+            "tool_name": "akb_create_vault",
+            "logical_operation": "create",
+            "resource_type": "vault",
+            "stage_id": "create_vault_1",
+            "arguments": {"name": vault},
+        }),
+        _record(2, {
+            "tool_name": "akb_create_collection",
+            "logical_operation": "create",
+            "resource_type": "collection",
+            "stage_id": "create_collection_1",
+            "arguments": {"vault": vault, "path": "notes"},
+        }),
+        _record(3, {
+            "tool_name": "akb_put",
+            "logical_operation": "create",
+            "resource_type": "document",
+            "stage_id": "create_document_1",
+            "arguments": {
+                "vault": vault,
+                "collection": "notes",
+                "title": "quick-update",
+                "content": content,
+            },
+        }),
+        _record(4, {
+            "tool_name": "akb_get",
+            "logical_operation": "read",
+            "resource_type": "document",
+            "stage_id": "read_document_1",
+            "arguments": {"uri": uri},
+        }),
+        _record(5, {
+            "tool_name": "akb_provenance",
+            "logical_operation": "read",
+            "resource_type": "document",
+            "stage_id": "read_document_2",
+            "arguments": {"uri": uri},
+        }),
+    ]
+    calls[2].result_fields["uri"] = uri
+    return calls
+
+
+_BROWSE_DOCUMENT_CASES = (
+    (
+        "knowledge-workflow-ko",
+        {
+            # BrowseItem from the preserved baseline primary/HTTP trace.
+            "name": "quick-update",
+            "path": "notes/quick-update.md",
+            "type": "document",
+            "uri": "akb://catalog-bench-knowledge/coll/notes/doc/quick-update.md",
+        },
+    ),
+    (
+        "overlapping-document-ko",
+        {
+            "name": "status-note",
+            "path": "status-note.md",
+            "type": "document",
+            "uri": "akb://catalog-bench-overlap/doc/status-note.md",
+        },
+    ),
+    (
+        "grep-write-ko",
+        {
+            "name": "grep-target",
+            "path": "grep-target.md",
+            "type": "document",
+            "uri": "akb://catalog-bench-grep/doc/grep-target.md",
+        },
+    ),
+)
+
+
+def _same_title_decoys(item: dict[str, object]) -> tuple[dict[str, object], ...]:
+    path = str(item["path"])
+    uri = str(item["uri"])
+    filename = path.rsplit("/", 1)[-1]
+    parent_path = path.rsplit("/", 1)[0] if "/" in path else ""
+    scheme, _, authority_and_path = uri.partition("://")
+    authority, _, uri_path = authority_and_path.partition("/")
+    return (
+        {
+            **item,
+            "path": f"{parent_path + '/' if parent_path else ''}other-document.md",
+            "uri": f"{uri.rsplit('/', 1)[0]}/other-document.md",
+        },
+        {
+            **item,
+            "path": f"archive/{filename}",
+            "uri": f"{scheme}://{authority}/coll/archive/doc/{filename}",
+        },
+        {**item, "uri": f"{scheme}://another-vault/{uri_path}"},
+        {**item, "name": "different-title"},
+        {**item, "type": "file"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("task_id", "item"),
+    _BROWSE_DOCUMENT_CASES,
+)
+def test_document_browse_state_accepts_the_public_title_and_canonical_identity(
+    task_id: str,
+    item: dict[str, object],
+) -> None:
+    outcome = _score_browse_state(task_id, [item])
+
+    assert outcome.state_contract_passed is True
+
+
+@pytest.mark.parametrize(("task_id", "item"), _BROWSE_DOCUMENT_CASES)
+def test_document_browse_state_rejects_same_title_at_a_different_identity(
+    task_id: str,
+    item: dict[str, object],
+) -> None:
+    assert _score_browse_state(task_id, [item]).state_contract_passed is True
+    decoys = _same_title_decoys(item)
+    for decoy in decoys:
+        assert _score_browse_state(task_id, [decoy]).state_contract_passed is False
+
+
+def test_document_delete_state_requires_absence_by_title_after_a_collection_move() -> None:
+    still_present = {
+        "name": "revision-note",
+        "path": "moved/revision-note.md",
+        "type": "document",
+        "uri": "akb://catalog-bench-revisions/coll/moved/doc/revision-note.md",
+    }
+
+    assert _score_browse_state("document-revisions-ko", []).state_contract_passed is True
+    assert _score_browse_state("document-revisions-ko", [still_present]).state_contract_passed is False
+
+
+def test_knowledge_workflow_still_rejects_wrong_content_and_missing_document_creation() -> None:
+    task = _tasks()["knowledge-workflow-ko"]
+    document = {
+        "name": "quick-update",
+        "path": "notes/quick-update.md",
+        "type": "document",
+        "uri": "akb://catalog-bench-knowledge/coll/notes/doc/quick-update.md",
+    }
+    valid_calls = _knowledge_workflow_calls()
+    valid = _score_browse_state(task.id, [document], valid_calls)
+    wrong_content = _knowledge_workflow_calls("A different body.")
+    wrong = _score_browse_state(task.id, [document], wrong_content)
+    missing_document = [call for call in _knowledge_workflow_calls() if call.stage_id != "create_document_1"]
+    missing = _score_browse_state(task.id, [], missing_document)
+
+    assert valid.state_contract_passed is True
+    assert valid.tool_outcome_match is True
+    assert valid.required_attempts_completed is True
+    assert wrong.state_contract_passed is True
+    assert wrong.tool_outcome_match is False
+    assert wrong.required_attempts_completed is False
+    assert wrong.success is False
+    assert missing.state_contract_passed is False
+    assert missing.tool_outcome_match is False
+    assert missing.required_attempts_completed is False
+    assert missing.success is False
+
+
 def test_tracked_synthetic_and_real_shaped_traces_keep_semantics_separate() -> None:
     document = json.loads((ROOT / "tests" / "fixtures" / "semantic-traces.json").read_text())
 

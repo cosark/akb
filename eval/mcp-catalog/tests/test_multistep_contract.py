@@ -28,7 +28,7 @@ VAULT = "catalog-bench-knowledge"
 COLLECTION = "notes"
 TITLE = "quick-update"
 CONTENT = "A short note for the team."
-URI = f"akb://{VAULT}/coll/{COLLECTION}/doc/quick-update"
+URI = f"akb://{VAULT}/coll/{COLLECTION}/doc/quick-update.md"
 
 
 class _ListedToolset:
@@ -172,7 +172,20 @@ def _score(
         task.expected_final_state.resolved_before_expected_status,
         {"code": "not_found", "detail": f"Vault not found: {VAULT}"},
     )
-    after = StateObservation(True, 200, {"items": [{"name": "quick-update.md"}]})
+    after = StateObservation(
+        True,
+        200,
+        {
+            "items": [
+                {
+                    "name": TITLE,
+                    "path": f"{COLLECTION}/quick-update.md",
+                    "type": "document",
+                    "uri": URI,
+                }
+            ]
+        },
+    )
     outcome.finalize(task, before, after)
     return outcome
 
