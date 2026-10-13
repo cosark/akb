@@ -14,7 +14,15 @@ from pathlib import Path
 from typing import Any
 
 from .amendment import AmendmentPlan, CONTINUATION_RUN_CAP_USD
-from .contracts import ArmName, load_json
+from .contracts import (
+    ArmName,
+    BenchmarkRunManifest,
+    TaskManifest,
+    load_json,
+    load_run_manifest,
+    load_task_corpus,
+    load_tool_coverage,
+)
 from .evidence import write_json
 from .execution import BudgetLedger
 from .selection import ToolGuidanceSelection, build_selection_summary
@@ -26,6 +34,7 @@ from .runner import (
     _reconcile_paired_artifact_reservations,
     attach_paired_execution_evidence,
     compare_artifacts,
+    load_paired_resume_source,
     load_inputs,
 )
 from .runtime import RuntimeContractError, RuntimeDescriptor
@@ -241,19 +250,91 @@ async def run(args: argparse.Namespace) -> int:
     return 0 if artifact["status"] == "complete" else 1
 
 
+def _load_paired_resume_inputs(
+    args: argparse.Namespace,
+) -> tuple[BenchmarkRunManifest, list[TaskManifest], RuntimeDescriptor, RuntimeDescriptor]:
+    try:
+        source_artifact = json.loads(args.baseline_output.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read baseline paired resume manifest: {exc}") from exc
+    if not isinstance(source_artifact, dict):
+        raise ValueError("baseline paired resume artifact must be a JSON object")
+    try:
+        manifest = BenchmarkRunManifest.model_validate(source_artifact["manifest"])
+        raw_tasks = source_artifact["task_contracts"]
+        if not isinstance(raw_tasks, list):
+            raise ValueError("paired resume task contracts must be a list")
+        tasks = [TaskManifest.model_validate(item) for item in raw_tasks]
+    except Exception as exc:
+        raise ValueError(f"paired resume source run contract is invalid: {exc}") from exc
+
+    if args.manifest.resolve(strict=False) != DEFAULT_MANIFEST.resolve(strict=False):
+        if load_run_manifest(args.manifest) != manifest:
+            raise ValueError("explicit --manifest does not match the paired resume source")
+    if load_task_corpus(args.corpus) != tasks:
+        raise ValueError("--corpus does not match the paired resume source task contracts")
+    coverage = load_tool_coverage(args.coverage)
+    manifest.validate_tasks(tasks)
+    coverage.validate_tasks(tasks)
+    coverage.validate_manifest(manifest)
+    return (
+        manifest,
+        tasks,
+        RuntimeDescriptor.from_file(args.baseline_descriptor),
+        RuntimeDescriptor.from_file(args.candidate_descriptor),
+    )
+
+
 async def run_paired(args: argparse.Namespace) -> int:
-    baseline_manifest, baseline_tasks, baseline_descriptor = load_inputs(
-        args.manifest,
-        args.corpus,
-        args.baseline_descriptor,
-        args.coverage,
+    full_resume = (
+        args.resume
+        and getattr(args, "amendment", None) is None
+        and getattr(args, "selection", None) is None
     )
-    candidate_manifest, candidate_tasks, candidate_descriptor = load_inputs(
-        args.manifest,
-        args.corpus,
-        args.candidate_descriptor,
-        args.coverage,
-    )
+    source_resume: dict[str, Any] | None = None
+    if full_resume:
+        source_paths = {
+            "baseline": args.baseline_output,
+            "candidate": args.candidate_output,
+        }
+        missing_sources = [arm for arm, path in source_paths.items() if not path.is_file()]
+        if missing_sources:
+            missing = ", ".join(
+                f"{arm} artifact ({source_paths[arm]})" for arm in missing_sources
+            )
+            raise ValueError(f"paired --resume requires both existing arm artifacts; missing {missing}")
+        baseline_manifest, baseline_tasks, baseline_descriptor, candidate_descriptor = (
+            _load_paired_resume_inputs(args)
+        )
+        source_resume = load_paired_resume_source(
+            artifact_paths={
+                "baseline": args.baseline_output,
+                "candidate": args.candidate_output,
+            },
+            checkpoint_paths={
+                "baseline": args.baseline_checkpoint,
+                "candidate": args.candidate_checkpoint,
+            },
+            manifest=baseline_manifest,
+            tasks=baseline_tasks,
+        )
+    else:
+        baseline_manifest, baseline_tasks, baseline_descriptor = load_inputs(
+            args.manifest,
+            args.corpus,
+            args.baseline_descriptor,
+            args.coverage,
+        )
+        candidate_manifest, candidate_tasks, candidate_descriptor = load_inputs(
+            args.manifest,
+            args.corpus,
+            args.candidate_descriptor,
+            args.coverage,
+        )
+        if baseline_manifest != candidate_manifest or baseline_tasks != candidate_tasks:
+            raise ValueError("paired arms must use identical manifest and corpus inputs")
+    if full_resume:
+        candidate_manifest, candidate_tasks = baseline_manifest, baseline_tasks
     if baseline_manifest != candidate_manifest or baseline_tasks != candidate_tasks:
         raise ValueError("paired arms must use identical manifest and corpus inputs")
     selection_path = getattr(args, "selection", None)
@@ -318,7 +399,7 @@ async def run_paired(args: argparse.Namespace) -> int:
 
     started = time.perf_counter()
     if continuation is None:
-        initial_events = None
+        initial_events = source_resume["events"] if source_resume is not None else None
     elif args.resume:
         initial_events = continuation.history_events_for_resume(
             {"baseline": args.baseline_checkpoint, "candidate": args.candidate_checkpoint}
@@ -342,6 +423,17 @@ async def run_paired(args: argparse.Namespace) -> int:
             else None
         ),
     )
+    if source_resume is not None:
+        source_budget = source_resume["budget_used"]
+        await ledger.restore_additive(
+            model_requests=source_budget["model_requests"] + source_budget["provider_setup_requests"],
+            provider_setup_requests=source_budget["provider_setup_requests"],
+            input_tokens=source_budget["input_tokens"],
+            output_tokens=source_budget["output_tokens"],
+            cost_usd=source_budget["cost_usd"],
+            wall_seconds=source_budget["wall_seconds"],
+            model_work_seconds=source_budget["model_work_seconds"],
+        )
     baseline_runner = BenchmarkRunner(
         baseline_manifest,
         baseline_tasks,
@@ -353,6 +445,7 @@ async def run_paired(args: argparse.Namespace) -> int:
         shared_ledger=ledger,
         continuation=continuation,
         selection=selection,
+        paired_budget_restored=source_resume is not None,
     )
     candidate_runner = BenchmarkRunner(
         candidate_manifest,
@@ -365,6 +458,7 @@ async def run_paired(args: argparse.Namespace) -> int:
         shared_ledger=ledger,
         continuation=continuation,
         selection=selection,
+        paired_budget_restored=source_resume is not None,
     )
     run_tasks = {
         "baseline": asyncio.create_task(baseline_runner.run(), name="catalog-benchmark-baseline"),
@@ -411,6 +505,10 @@ async def run_paired(args: argparse.Namespace) -> int:
             failures.append(result)
         else:
             artifacts[arm] = result
+
+    if source_resume is not None:
+        for artifact in artifacts.values():
+            artifact["resume_source"] = source_resume["metadata"]
 
     evidence = coordinator.evidence()
     paired_budget: dict[str, int | float | str] = {

@@ -134,10 +134,10 @@ def complete_paired_artifacts(
     for model in manifest_model.models:
         for transport in manifest_model.transports:
             cell = f"{model.class_name}:{transport}"
-            for task in tasks:
-                if transport not in task.fixture.transports:
-                    continue
-                for repeat_index in range(1, manifest_model.repeats + 1):
+            for repeat_index in range(1, manifest_model.repeats + 1):
+                for task in tasks:
+                    if transport not in task.fixture.transports:
+                        continue
                     order = planned_arm_order(task.id, repeat_index, manifest_model.paired_order_seed)
                     for order_position, arm in enumerate(order):
                         sequence += 1

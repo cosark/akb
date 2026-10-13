@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import importlib.metadata
+import json
 import math
 import os
 import platform
@@ -30,8 +31,14 @@ from .checkpoint import (
     CheckpointStore,
     SmokeModelClass,
     SmokeTransport,
+    checkpoint_key_digest,
+    checkpoint_record_hash,
+    provider_registry_snapshot_hash,
+    smoke_record_hash,
+    spent_hash,
     valid_completed_outcome,
     smoke_outcome_failure_reason,
+    timing_hash,
 )
 from .contracts import (
     ArmName,
@@ -59,6 +66,8 @@ from .execution import (
     BudgetExceeded,
     TrialExecutor,
     TrialOutcome,
+    MetricsReportEvaluator,
+    TrialEvaluator,
     build_model,
     canonicalize_arguments,
     decode_raw_args,
@@ -531,10 +540,17 @@ class PairedArmCoordinator:
         if sequences != list(range(1, len(self._events) + 1)):
             raise RuntimeContractError("paired continuation history must have a contiguous execution sequence")
         self._sequence = len(self._events)
-        self._historical_identities = {
-            (event["cell"], event["task_id"], event["repeat_index"], event["arm"])
-            for event in self._events
-        }
+        self._events_by_identity: dict[tuple[str, str, int, ArmName], list[dict[str, Any]]] = defaultdict(list)
+        self._terminal_event_sequences: set[int] = set()
+        for event in self._events:
+            identity = (
+                event["cell"],
+                event["task_id"],
+                event["repeat_index"],
+                cast(ArmName, event["arm"]),
+            )
+            self._events_by_identity[identity].append(event)
+        self._historical_identities = set(self._events_by_identity)
         self._condition = asyncio.Condition()
         self._provider_registry: dict[str, Any] | None = None
         self._provider_registry_lock = asyncio.Lock()
@@ -559,6 +575,22 @@ class PairedArmCoordinator:
                         f"paired resume evidence is missing or invalid for {cell}:{task_id}:{repeat_index}:{arm}"
                     )
                 self._reused[arm].add(identity)
+                sequence = outcome.paired_execution_sequence
+                if sequence is not None:
+                    event = next(
+                        (item for item in self._events if item.get("sequence") == sequence),
+                        None,
+                    )
+                    if event is not None:
+                        event_identity = (
+                            event.get("cell"),
+                            event.get("task_id"),
+                            event.get("repeat_index"),
+                            event.get("arm"),
+                        )
+                        if event_identity != (cell, task_id, repeat_index, arm):
+                            raise RuntimeContractError("paired resume outcome points at another execution event")
+                        self._terminal_event_sequences.add(sequence)
             self._registered.add(arm)
             if self._registered == {"baseline", "candidate"}:
                 self._validate_reused_prefixes()
@@ -567,6 +599,28 @@ class PairedArmCoordinator:
                 for cell in self._schedule:
                     self._advance_reused(cell)
             self._condition.notify_all()
+
+    def mark_terminal_outcome(self, outcome: TrialOutcome) -> None:
+        """Bind a persisted outcome to the exact paired event that produced it."""
+
+        sequence = outcome.paired_execution_sequence
+        if sequence is None:
+            return
+        event = next((item for item in self._events if item.get("sequence") == sequence), None)
+        identity = (
+            f"{outcome.model_class}:{outcome.transport}",
+            outcome.task_id,
+            outcome.repeat_index,
+            outcome.arm,
+        )
+        if event is None or (
+            event.get("cell"),
+            event.get("task_id"),
+            event.get("repeat_index"),
+            event.get("arm"),
+        ) != identity:
+            raise RuntimeContractError("trial checkpoint does not match its paired execution event")
+        self._terminal_event_sequences.add(sequence)
 
     def _validate_reused_prefixes(self) -> None:
         for cell, schedule in self._schedule.items():
@@ -602,10 +656,15 @@ class PairedArmCoordinator:
         sequences = [event["sequence"] for event in restored]
         if sequences != list(range(1, len(restored) + 1)):
             raise RuntimeContractError("selection resume checkpoint has a gap or duplicate in paired execution lineage")
-        seen: set[tuple[str, str, int, str]] = set()
+        seen: set[tuple[str, str, int, ArmName]] = set()
         per_cell: dict[str, list[tuple[str, int, ArmName]]] = defaultdict(list)
         for event in restored:
-            key = (event["cell"], event["task_id"], event["repeat_index"], event["arm"])
+            key = (
+                event["cell"],
+                event["task_id"],
+                event["repeat_index"],
+                cast(ArmName, event["arm"]),
+            )
             if key in seen:
                 raise RuntimeContractError("selection resume checkpoint duplicates a paired execution event")
             seen.add(key)
@@ -703,16 +762,21 @@ class PairedArmCoordinator:
                 order_position=expected_position,
                 execution_sequence=self._sequence,
             )
-            self._events.append(
-                {
-                    "sequence": turn.execution_sequence,
-                    "cell": cell,
-                    "task_id": task_id,
-                    "repeat_index": repeat_index,
-                    "arm": arm,
-                    "order_position": expected_position,
-                }
-            )
+            identity = (cell, task_id, repeat_index, arm)
+            prior_events = self._events_by_identity.get(identity, [])
+            event = {
+                "sequence": turn.execution_sequence,
+                "cell": cell,
+                "task_id": task_id,
+                "repeat_index": repeat_index,
+                "arm": arm,
+                "order_position": expected_position,
+            }
+            if prior_events:
+                event["attempt"] = len(prior_events) + 1
+                event["retry_of_sequence"] = prior_events[-1]["sequence"]
+            self._events.append(event)
+            self._events_by_identity[identity].append(event)
         completed = False
         try:
             yield turn
@@ -734,6 +798,11 @@ class PairedArmCoordinator:
             "seed": self.manifest.paired_order_seed,
             "complete": complete,
             "events": list(self._events),
+            "unfinished_starts": [
+                dict(event)
+                for event in self._events
+                if event["sequence"] not in self._terminal_event_sequences
+            ],
             "reused": [
                 {
                     "cell": cell,
@@ -772,6 +841,7 @@ class BenchmarkRunner:
         shared_ledger: BudgetLedger | None = None,
         continuation: AmendmentPlan | None = None,
         selection: ToolGuidanceSelection | None = None,
+        paired_budget_restored: bool = False,
     ) -> None:
         if checkpoint_path is not None and resume_path is not None and checkpoint_path != resume_path:
             raise ValueError("--checkpoint and --resume must reference the same path")
@@ -785,6 +855,7 @@ class BenchmarkRunner:
         self.shared_ledger = shared_ledger
         self.continuation = continuation
         self.selection = selection
+        self.paired_budget_restored = paired_budget_restored
         if continuation is not None and selection is not None:
             raise ValueError("AKB-361 selection cannot reuse amendment continuation inputs")
         if continuation is not None and paired_coordinator is None:
@@ -1266,28 +1337,40 @@ class BenchmarkRunner:
         outcome: TrialOutcome,
         status: Literal["completed", "failed", "incomplete"],
     ) -> None:
+        cancelled_during_write = False
         if self._checkpoint_store is not None:
             async with self._checkpoint_lock:
                 self._refresh_store_secrets()
                 checkpoint_started = time.perf_counter()
-                existed = await asyncio.to_thread(
-                    self._checkpoint_store.record_trial,
-                    key,
-                    outcome,
-                    status=status,
-                    timing=self._timing_snapshot(),
-                    elapsed_wall_seconds=(
-                        self._ledger.current_wall_seconds()
-                        if self._ledger is not None
-                        else None
-                    ),
-                    reserved_cost_usd=(float(self._ledger.reserved_cost_usd) if self._ledger is not None else 0.0),
+                write_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        self._checkpoint_store.record_trial,
+                        key,
+                        outcome,
+                        status=status,
+                        timing=self._timing_snapshot(),
+                        elapsed_wall_seconds=(
+                            self._ledger.current_wall_seconds()
+                            if self._ledger is not None
+                            else None
+                        ),
+                        reserved_cost_usd=(float(self._ledger.reserved_cost_usd) if self._ledger is not None else 0.0),
+                    )
                 )
+                try:
+                    existed = await asyncio.shield(write_task)
+                except asyncio.CancelledError:
+                    existed = await write_task
+                    cancelled_during_write = True
                 if self._timing is not None:
                     self._timing.record("checkpoint", checkpoint_started)
             if not existed:
                 self._checkpoint_new_trials += 1
+        if self.paired_coordinator is not None:
+            self.paired_coordinator.mark_terminal_outcome(outcome)
         self._record_trial(run_key, outcome)
+        if cancelled_during_write:
+            raise asyncio.CancelledError
 
     def _refresh_store_secrets(self) -> None:
         if self._checkpoint_store is not None:
@@ -1390,6 +1473,57 @@ class BenchmarkRunner:
                     )
             reservation = worst_case_cost(model_spec, self.manifest.budget)
             outcome: TrialOutcome | None = None
+
+            async def checkpoint_smoke(
+                settled_outcome: TrialOutcome,
+                status: Literal["completed", "failed", "incomplete"],
+            ) -> None:
+                if self._checkpoint_store is None:
+                    return
+                async with self._checkpoint_lock:
+                    self._refresh_store_secrets()
+                    write_task = asyncio.create_task(
+                        asyncio.to_thread(
+                            self._checkpoint_store.record_smoke_cell,
+                            cell_key,
+                            settled_outcome,
+                            status=status,
+                            timing=self._timing_snapshot(),
+                            elapsed_wall_seconds=(
+                                self._ledger.current_wall_seconds()
+                                if self._ledger is not None
+                                else None
+                            ),
+                            reserved_cost_usd=(
+                                float(self._ledger.reserved_cost_usd)
+                                if self._ledger is not None
+                                else 0.0
+                            ),
+                        )
+                    )
+                    try:
+                        await asyncio.shield(write_task)
+                    except asyncio.CancelledError:
+                        await write_task
+                        raise
+
+            async def settle_smoke_charge(settled_outcome: TrialOutcome) -> None:
+                charge_task = asyncio.create_task(ledger.charge(settled_outcome, guard=request_guard))
+                try:
+                    await asyncio.shield(charge_task)
+                except asyncio.CancelledError:
+                    try:
+                        await charge_task
+                    except BudgetExceeded as exc:
+                        settled_outcome.error = f"benchmark incomplete: {exc}"
+                        settled_outcome.failure_kind = "budget"
+                    await checkpoint_smoke(settled_outcome, "failed")
+                    raise
+                except BudgetExceeded as exc:
+                    settled_outcome.error = f"benchmark incomplete: {exc}"
+                    settled_outcome.failure_kind = "budget"
+                await checkpoint_smoke(settled_outcome, "failed")
+
             try:
                 request_guard = await ledger.reserve_trial(reservation)
             except Exception as exc:
@@ -1470,7 +1604,7 @@ class BenchmarkRunner:
                             expected_server_instructions=server_instructions,
                             timing_sink=self._timing.record if self._timing is not None else None,
                         )
-                await ledger.charge(outcome, guard=request_guard)
+                await settle_smoke_charge(outcome)
             except Exception as exc:
                 with_context = exc if isinstance(exc, RuntimeContractError) else RuntimeContractError(
                     f"smoke gate cell {cell_key} failed: {redact_exception(exc, self.secrets)}",
@@ -1891,6 +2025,19 @@ class BenchmarkRunner:
         catalog_server_instructions: Mapping[str, str] | None = None,
     ) -> None:
         model = build_model(model_spec)
+
+        async def checkpoint_settled_outcome(outcome: TrialOutcome) -> None:
+            identity = self._trial_identity(outcome)
+            checkpoint_key = planned_by_identity.get(identity)
+            if checkpoint_key is None:
+                raise RuntimeContractError("settled trial is not an exact planned checkpoint input")
+            await self._checkpoint_trial(
+                run_key,
+                checkpoint_key,
+                outcome,
+                status="failed",
+            )
+
         executor = TrialExecutor(
             self.manifest,
             arm=self.arm,
@@ -1918,6 +2065,7 @@ class BenchmarkRunner:
                 if catalog_server_instructions is not None
                 else None
             ),
+            outcome_sink=(checkpoint_settled_outcome if self._checkpoint_store is not None else None),
             timing_sink=self._timing.record if self._timing is not None else None,
         )
         report_fragments: list[dict[str, Any]] = []
@@ -1963,6 +2111,7 @@ class BenchmarkRunner:
                 else _uncoordinated_turn()
             )
             async with turn_context as paired_turn:
+                executor.set_repeat_index(repeat_index)
                 if paired_turn is not None:
                     executor.set_paired_turn(
                         order_position=paired_turn.order_position,
@@ -2102,7 +2251,7 @@ class BenchmarkRunner:
                     model_work_seconds=spent.model_work_seconds,
                     budget_failure=self._checkpoint_store.budget_failure_reason(),
                 )
-            else:
+            elif not self.paired_budget_restored:
                 await ledger.restore_additive(
                     model_requests=spent.model_requests,
                     provider_setup_requests=spent.provider_setup_requests,
@@ -3916,7 +4065,521 @@ def _build_artifact_hash_input(artifact: dict[str, Any], *, trial_order: list[di
         hash_input["continuation_runtime_provenance"] = artifact["continuation_runtime_provenance"]
     if "selection" in artifact:
         hash_input["selection"] = artifact["selection"]
+    if "resume_source" in artifact:
+        hash_input["resume_source"] = artifact["resume_source"]
     return hash_input
+
+
+def load_paired_resume_source(
+    *,
+    artifact_paths: Mapping[ArmName, Path],
+    checkpoint_paths: Mapping[ArmName, Path],
+    manifest: BenchmarkRunManifest,
+    tasks: list[TaskManifest],
+) -> dict[str, Any]:
+    """Read and validate the paired artifacts/checkpoints before a resume can write."""
+
+    manifest_data = manifest.model_dump(mode="json")
+    manifest_digest = hash_json(manifest_data)
+    task_data = [task.model_dump(mode="json") for task in tasks]
+    corpus_digest = hash_json(task_data)
+    expected_keys: dict[ArmName, dict[tuple[str, str, int, str], CheckpointKey]] = {
+        "baseline": {},
+        "candidate": {},
+    }
+    trial_order: dict[ArmName, list[dict[str, Any]]] = {"baseline": [], "candidate": []}
+    expected_schedule: dict[str, list[tuple[str, int, ArmName]]] = {}
+    for model in manifest.models:
+        for transport in manifest.transports:
+            cell = f"{model.class_name}:{transport}"
+            schedule: list[tuple[str, int, ArmName]] = []
+            for repeat_index in range(1, manifest.repeats + 1):
+                for task in tasks:
+                    if transport not in task.fixture.transports:
+                        continue
+                    for arm in planned_arm_order(task.id, repeat_index, manifest.paired_order_seed):
+                        schedule.append((task.id, repeat_index, arm))
+                        source_revision = manifest.arm_source_revisions[arm]
+                        key = CheckpointKey(
+                            source_revision=source_revision,
+                            run_manifest_hash=manifest_digest,
+                            task_corpus_hash=corpus_digest,
+                            arm=arm,
+                            model_class=model.class_name,
+                            model_id=model.model_id,
+                            transport=transport,
+                            task_id=task.id,
+                            repeat_index=repeat_index,
+                            locale=task.locale,
+                        )
+                        identity = (cell, task.id, repeat_index, arm)
+                        expected_keys[arm][identity] = key
+            expected_schedule[cell] = schedule
+    for model in manifest.models:
+        for transport in manifest.transports:
+            cell = f"{model.class_name}:{transport}"
+            for task in tasks:
+                if transport not in task.fixture.transports:
+                    continue
+                for repeat_index in range(1, manifest.repeats + 1):
+                    for arm in (cast(ArmName, "baseline"), cast(ArmName, "candidate")):
+                        trial_order[arm].append(
+                            expected_keys[arm][(cell, task.id, repeat_index, arm)].model_dump(mode="json")
+                        )
+
+    expected_order_plan = [
+        {
+            "task_id": task.id,
+            "repeat_index": repeat_index,
+            "arm_order": list(planned_arm_order(task.id, repeat_index, manifest.paired_order_seed)),
+        }
+        for repeat_index in range(1, manifest.repeats + 1)
+        for task in tasks
+    ]
+    source_artifacts: dict[ArmName, dict[str, Any]] = {}
+    source_checkpoints: dict[ArmName, CheckpointDocument] = {}
+    source_hashes: dict[ArmName, dict[str, Any]] = {}
+    outcome_costs: dict[ArmName, Decimal] = {"baseline": Decimal("0"), "candidate": Decimal("0")}
+    execution: dict[str, Any] | None = None
+    shared_budget: dict[str, Any] | None = None
+
+    for arm in (cast(ArmName, "baseline"), cast(ArmName, "candidate")):
+        try:
+            artifact_bytes = artifact_paths[arm].read_bytes()
+            checkpoint_bytes = checkpoint_paths[arm].read_bytes()
+            artifact = json.loads(artifact_bytes)
+            checkpoint_raw = json.loads(checkpoint_bytes)
+        except OSError as exc:
+            raise ValueError(f"cannot read {arm} paired resume source: {exc}") from exc
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{arm} paired resume source is invalid JSON") from exc
+        if not isinstance(artifact, dict) or not isinstance(checkpoint_raw, dict):
+            raise ValueError(f"{arm} paired resume source must be JSON objects")
+        try:
+            checkpoint = CheckpointDocument.model_validate(checkpoint_raw)
+        except Exception as exc:
+            raise ValueError(f"{arm} paired resume checkpoint contract validation failed: {exc}") from exc
+
+        if artifact.get("schema_version") != 2 or artifact.get("arm") != arm:
+            raise ValueError(f"{arm} paired resume artifact identity is invalid")
+        if artifact.get("run_manifest_hash") != manifest_digest or artifact.get("manifest") != manifest_data:
+            raise ValueError(f"{arm} paired resume artifact does not match the current run manifest")
+        if artifact.get("task_corpus_hash") != corpus_digest or artifact.get("task_contracts") != task_data:
+            raise ValueError(f"{arm} paired resume artifact does not match the current task corpus")
+        if artifact.get("task_ids") != [task.id for task in tasks]:
+            raise ValueError(f"{arm} paired resume artifact task order changed")
+        if artifact.get("source_revision") != manifest.arm_source_revisions[arm]:
+            raise ValueError(f"{arm} paired resume artifact source revision changed")
+        if artifact.get("paired_order_plan") != expected_order_plan:
+            raise ValueError(f"{arm} paired resume artifact paired order changed")
+        hash_input = artifact.get("artifact_hash_input")
+        if not isinstance(hash_input, dict) or hash_input.get("trial_order") != trial_order[arm]:
+            raise ValueError(f"{arm} paired resume artifact trial order changed")
+        try:
+            recalculated_hash_input = _build_artifact_hash_input(artifact, trial_order=trial_order[arm])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"{arm} paired resume artifact hash input is invalid") from exc
+        if recalculated_hash_input != hash_input or artifact.get("artifact_hash") != hash_json(hash_input):
+            raise ValueError(f"{arm} paired resume artifact hash does not match its contents")
+
+        if (
+            checkpoint.lifecycle != "finalized"
+            or checkpoint.reserved_cost_usd != 0
+            or checkpoint.smoke_status != "passed"
+            or checkpoint.continuation is not None
+            or checkpoint.selection_preflight is not None
+        ):
+            raise ValueError(f"{arm} paired resume checkpoint is not a finalized full-run source")
+        header = checkpoint.header
+        provider_registry = artifact.get("provider_registry")
+        if not isinstance(provider_registry, dict):
+            raise ValueError(f"{arm} paired resume artifact provider registry is invalid")
+        if (
+            header.arm != arm
+            or header.source_revision != manifest.arm_source_revisions[arm]
+            or header.run_manifest_hash != manifest_digest
+            or header.task_corpus_hash != corpus_digest
+            or header.pre_smoke_seal_hash != artifact.get("pre_smoke_seal_hash")
+            or header.provider_registry_hash != provider_registry.get("snapshot_hash")
+            or checkpoint.spent_hash != spent_hash(checkpoint.spent)
+            or checkpoint.timing_hash != timing_hash(checkpoint.timing)
+        ):
+            raise ValueError(f"{arm} paired resume checkpoint header or accounting digest changed")
+        if checkpoint.provider_registry_snapshot is None or (
+            provider_registry_snapshot_hash(checkpoint.provider_registry_snapshot) != header.provider_registry_hash
+        ):
+            raise ValueError(f"{arm} paired resume checkpoint provider registry seal is invalid")
+        if len(checkpoint.smoke_gate) != 4 or set(checkpoint.smoke_gate) != {
+            f"{model.class_name}:{transport}"
+            for model in manifest.models
+            for transport in manifest.transports
+        }:
+            raise ValueError(f"{arm} paired resume checkpoint smoke gate is incomplete")
+
+        receipt = artifact.get("checkpoint")
+        if not isinstance(receipt, dict):
+            raise ValueError(f"{arm} paired resume artifact is missing its checkpoint receipt")
+        for name, value in (
+            ("lifecycle", checkpoint.lifecycle),
+            ("record_count", len(checkpoint.records)),
+            ("reserved_cost_usd", checkpoint.reserved_cost_usd),
+            ("smoke_status", checkpoint.smoke_status),
+            ("smoke_cell_count", len(checkpoint.smoke_gate)),
+            ("provider_registry_hash", header.provider_registry_hash),
+            ("spent", checkpoint.spent.model_dump(mode="json")),
+            ("spent_hash", checkpoint.spent_hash),
+            ("timing", checkpoint.timing.model_dump(mode="json")),
+            ("timing_hash", checkpoint.timing_hash),
+        ):
+            if receipt.get(name) != value:
+                raise ValueError(f"{arm} paired resume checkpoint receipt does not match {name}")
+
+        raw_trials: dict[tuple[str, str, int, ArmName], dict[str, Any]] = {}
+        raw_statuses: dict[tuple[str, str, int, ArmName], str] = {}
+        runs = artifact.get("runs")
+        if not isinstance(runs, dict):
+            raise ValueError(f"{arm} paired resume artifact runs are invalid")
+        for cell, report in runs.items():
+            if cell not in expected_schedule or not isinstance(report, dict):
+                raise ValueError(f"{arm} paired resume artifact contains an unknown run cell")
+            model_class, transport = cell.split(":", 1)
+            trials = report.get("trials")
+            statuses = report.get("statuses")
+            if not isinstance(trials, list) or not isinstance(statuses, list):
+                raise ValueError(f"{arm} paired resume artifact rows are malformed for {cell}")
+            for raw_outcome in trials:
+                if not isinstance(raw_outcome, dict):
+                    raise ValueError(f"{arm} paired resume trial row is malformed")
+                try:
+                    outcome = TrialOutcome.model_validate(raw_outcome)
+                except Exception as exc:
+                    raise ValueError(f"{arm} paired resume trial outcome contract validation failed: {exc}") from exc
+                identity = (cell, outcome.task_id, outcome.repeat_index, arm)
+                expected_key = expected_keys[arm].get(identity)
+                if (
+                    expected_key is None
+                    or outcome.arm != arm
+                    or outcome.model_class != model_class
+                    or outcome.model_id != expected_key.model_id
+                    or outcome.transport != transport
+                    or outcome.locale != expected_key.locale
+                    or identity in raw_trials
+                ):
+                    raise ValueError(f"{arm} paired resume trial identity is invalid or duplicated")
+                raw_trials[identity] = raw_outcome
+                if type(outcome.paired_execution_sequence) is not int:
+                    raise ValueError(f"{arm} paired resume trial is missing its execution sequence")
+                outcome_costs[arm] += max(
+                    Decimal(str(outcome.cost_usd)),
+                    Decimal(str(outcome.provider_cost_usd or 0.0)),
+                )
+            for raw_status in statuses:
+                if not isinstance(raw_status, dict):
+                    raise ValueError(f"{arm} paired resume status row is malformed")
+                status_task_id = raw_status.get("task_id")
+                status_repeat_index = raw_status.get("repeat_index")
+                status = raw_status.get("status")
+                if (
+                    not isinstance(status_task_id, str)
+                    or type(status_repeat_index) is not int
+                    or status not in {"completed", "failed"}
+                ):
+                    raise ValueError(f"{arm} paired resume status identity is invalid or nonterminal")
+                identity = (cell, status_task_id, status_repeat_index, arm)
+                if identity not in expected_keys[arm] or identity in raw_statuses:
+                    raise ValueError(f"{arm} paired resume status identity is invalid or nonterminal")
+                raw_statuses[identity] = cast(str, status)
+
+        if set(raw_trials) != set(raw_statuses) or set(raw_trials) != {
+            (f"{record.key.model_class}:{record.key.transport}", record.key.task_id, record.key.repeat_index, arm)
+            for record in checkpoint.records.values()
+        }:
+            raise ValueError(f"{arm} paired resume artifact rows do not match checkpoint identities")
+        for digest, record in checkpoint.records.items():
+            identity = (
+                f"{record.key.model_class}:{record.key.transport}",
+                record.key.task_id,
+                record.key.repeat_index,
+                arm,
+            )
+            if (
+                digest != checkpoint_key_digest(record.key)
+                or record.status not in {"completed", "failed"}
+                or record.record_hash != checkpoint_record_hash(record.status, record.key, record.outcome)
+                or identity not in raw_trials
+                or record.status != raw_statuses[identity]
+                or record.outcome.model_dump(mode="json") != raw_trials[identity]
+            ):
+                raise ValueError(f"{arm} paired resume checkpoint trial row changed")
+            key_expected = expected_keys[arm].get(identity)
+            if key_expected is None or record.key != key_expected:
+                raise ValueError(f"{arm} paired resume checkpoint trial key changed")
+
+        smoke_cells = artifact.get("smoke_gate", {}).get("cells") if isinstance(artifact.get("smoke_gate"), dict) else None
+        if not isinstance(smoke_cells, list) or len(smoke_cells) != 4:
+            raise ValueError(f"{arm} paired resume artifact smoke gate is incomplete")
+        artifact_smoke = {cell.get("cell"): cell for cell in smoke_cells if isinstance(cell, dict)}
+        if len(artifact_smoke) != 4 or set(artifact_smoke) != set(checkpoint.smoke_gate):
+            raise ValueError(f"{arm} paired resume artifact smoke identities changed")
+        for cell_key, smoke_record in checkpoint.smoke_gate.items():
+            raw_cell = artifact_smoke[cell_key]
+            if (
+                smoke_record.status != "completed"
+                or raw_cell.get("status") != smoke_record.status
+                or raw_cell.get("outcome") != smoke_record.outcome.model_dump(mode="json")
+                or smoke_record.record_hash
+                != smoke_record_hash(
+                    smoke_record.status,
+                    smoke_record.model_class,
+                    smoke_record.model_id,
+                    smoke_record.transport,
+                    smoke_record.outcome,
+                )
+            ):
+                raise ValueError(f"{arm} paired resume checkpoint smoke row changed")
+            outcome_costs[arm] += max(
+                Decimal(str(smoke_record.outcome.cost_usd)),
+                Decimal(str(smoke_record.outcome.provider_cost_usd or 0.0)),
+            )
+
+        paired = artifact.get("paired_execution")
+        budget = artifact.get("paired_budget_used")
+        if not isinstance(paired, dict) or not isinstance(budget, dict):
+            raise ValueError(f"{arm} paired resume artifact is missing shared execution accounting")
+        if execution is None:
+            execution = paired
+            shared_budget = budget
+        elif paired != execution or budget != shared_budget:
+            raise ValueError("paired resume artifacts disagree on shared execution or budget evidence")
+        source_artifacts[arm] = artifact
+        source_checkpoints[arm] = checkpoint
+        source_hashes[arm] = {
+            "artifact_sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+            "artifact_hash": artifact.get("artifact_hash"),
+            "checkpoint_sha256": hashlib.sha256(checkpoint_bytes).hexdigest(),
+            "checkpoint_spent_hash": checkpoint.spent_hash,
+            "source_revision": artifact.get("source_revision"),
+            "protocol_revision": artifact.get("protocol_revision"),
+            "parent_evaluator_commit": (
+                artifact.get("evaluator_commit") if isinstance(artifact.get("evaluator_commit"), str) else None
+            ),
+            "parent_evaluator_commit_recorded": isinstance(artifact.get("evaluator_commit"), str),
+        }
+
+    assert execution is not None and shared_budget is not None
+    if execution.get("mode") != manifest.paired_order or execution.get("seed") != manifest.paired_order_seed:
+        raise ValueError("paired resume source changed its preregistered order")
+    events = execution.get("events")
+    if not isinstance(events, list):
+        raise ValueError("paired resume source events are invalid")
+    sequences = [event.get("sequence") for event in events if isinstance(event, dict)]
+    if len(sequences) != len(events) or sequences != list(range(1, len(events) + 1)):
+        raise ValueError("paired resume source event sequence is not contiguous")
+    events_by_identity: dict[tuple[str, str, int, ArmName], list[dict[str, Any]]] = defaultdict(list)
+    events_by_sequence: dict[int, dict[str, Any]] = {}
+    first_attempts_by_cell: dict[str, list[tuple[str, int, ArmName]]] = defaultdict(list)
+    for event in events:
+        cell = event.get("cell")
+        task_id = event.get("task_id")
+        repeat_index = event.get("repeat_index")
+        arm = event.get("arm")
+        identity = (cell, task_id, repeat_index, arm)
+        if (
+            not isinstance(cell, str)
+            or not isinstance(task_id, str)
+            or arm not in {"baseline", "candidate"}
+            or type(repeat_index) is not int
+            or type(event.get("sequence")) is not int
+            or cell not in expected_schedule
+            or identity not in expected_keys[cast(ArmName, arm)]
+            or type(event.get("order_position")) is not int
+            or event.get("order_position")
+            != planned_arm_order(task_id, repeat_index, manifest.paired_order_seed).index(arm)
+        ):
+            raise ValueError("paired resume source contains an invalid execution identity")
+        chain = events_by_identity[cast(tuple[str, str, int, ArmName], identity)]
+        attempt = event.get("attempt", 1)
+        if type(attempt) is not int or attempt != len(chain) + 1:
+            raise ValueError("paired resume source retry attempt index is invalid")
+        if attempt == 1:
+            if "retry_of_sequence" in event:
+                raise ValueError("first paired execution attempt cannot reference a retry")
+            first_attempts_by_cell[cell].append((task_id, repeat_index, cast(ArmName, arm)))
+        elif event.get("retry_of_sequence") != chain[-1].get("sequence"):
+            raise ValueError("paired resume source retry does not link to its previous start")
+        chain.append(event)
+        events_by_sequence[event["sequence"]] = event
+    for cell, observed in first_attempts_by_cell.items():
+        if observed != expected_schedule[cell][: len(observed)]:
+            raise ValueError(f"paired resume source did not preserve the scheduled prefix for {cell}")
+
+    terminal_sequences: set[int] = set()
+    for arm, artifact in source_artifacts.items():
+        for cell, report in artifact["runs"].items():
+            for raw in report["trials"]:
+                outcome = TrialOutcome.model_validate(raw)
+                identity = (cell, outcome.task_id, outcome.repeat_index, arm)
+                chain = events_by_identity.get(identity, [])
+                sequence = outcome.paired_execution_sequence
+                if (
+                    not chain
+                    or type(sequence) is not int
+                    or sequence != chain[-1].get("sequence")
+                    or events_by_sequence.get(sequence) is None
+                ):
+                    raise ValueError("paired resume source trial does not map to its latest execution start")
+                terminal_sequences.add(sequence)
+    unfinished_starts = [dict(event) for event in events if event["sequence"] not in terminal_sequences]
+    declared_unfinished = execution.get("unfinished_starts")
+    if declared_unfinished is not None and declared_unfinished != unfinished_starts:
+        raise ValueError("paired resume source unfinished-start evidence does not match its trial rows")
+    expected_total = sum(len(schedule) for schedule in expected_schedule.values())
+    terminal_count = sum(len(checkpoint.records) for checkpoint in source_checkpoints.values())
+    if execution.get("complete") is not (terminal_count == expected_total):
+        raise ValueError("paired resume source completion flag does not match checkpoint rows")
+
+    paired_model_requests = shared_budget.get("model_requests")
+    paired_setup_requests = shared_budget.get("provider_setup_requests")
+    if (
+        type(paired_model_requests) is not int
+        or type(paired_setup_requests) is not int
+        or paired_model_requests < 0
+        or paired_setup_requests < 0
+        or shared_budget.get("max_total_cost_usd") != manifest.budget.max_total_cost_usd
+    ):
+        raise ValueError("paired resume source ledger does not match the registered budget")
+    joint_cost_value = shared_budget.get("cost_usd")
+    joint_model_work_value = shared_budget.get("model_work_seconds")
+    joint_wall_value = shared_budget.get("wall_seconds")
+    if type(joint_cost_value) not in {int, float, str} or type(joint_model_work_value) not in {int, float} or type(
+        joint_wall_value
+    ) not in {int, float}:
+        raise ValueError("paired resume source ledger totals are invalid")
+    try:
+        joint_cost = Decimal(str(joint_cost_value))
+        joint_model_work = float(cast(int | float, joint_model_work_value))
+        joint_wall = float(cast(int | float, joint_wall_value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("paired resume source ledger totals are invalid") from exc
+    joint_inputs = shared_budget.get("input_tokens")
+    joint_outputs = shared_budget.get("output_tokens")
+    joint_total_tokens = shared_budget.get("total_tokens")
+    if not joint_cost.is_finite() or joint_cost < 0:
+        raise ValueError("paired resume source cost is invalid")
+    if (
+        type(joint_inputs) is not int
+        or type(joint_outputs) is not int
+        or type(joint_total_tokens) is not int
+        or min(joint_inputs, joint_outputs, joint_total_tokens) < 0
+        or joint_total_tokens != joint_inputs + joint_outputs
+        or not math.isfinite(joint_model_work)
+        or joint_model_work < 0
+        or not math.isfinite(joint_wall)
+        or joint_wall < 0
+    ):
+        raise ValueError("paired resume source ledger totals are invalid")
+    joint_inputs = cast(int, joint_inputs)
+    joint_outputs = cast(int, joint_outputs)
+    joint_total_tokens = cast(int, joint_total_tokens)
+    if any(
+        checkpoint.spent.provider_setup_requests > checkpoint.spent.model_requests
+        for checkpoint in source_checkpoints.values()
+    ):
+        raise ValueError("paired resume checkpoint setup requests exceed total requests")
+    checkpoint_model_requests = sum(
+        checkpoint.spent.model_requests - checkpoint.spent.provider_setup_requests
+        for checkpoint in source_checkpoints.values()
+    )
+    checkpoint_setup_requests = sum(
+        checkpoint.spent.provider_setup_requests for checkpoint in source_checkpoints.values()
+    )
+    checkpoint_inputs = sum(checkpoint.spent.input_tokens for checkpoint in source_checkpoints.values())
+    checkpoint_outputs = sum(checkpoint.spent.output_tokens for checkpoint in source_checkpoints.values())
+    checkpoint_cost = sum(
+        (Decimal(str(checkpoint.spent.cost_usd)) for checkpoint in source_checkpoints.values()),
+        Decimal("0"),
+    )
+    checkpoint_work = sum(checkpoint.spent.model_work_seconds for checkpoint in source_checkpoints.values())
+    residual_model_requests = paired_model_requests - checkpoint_model_requests
+    residual_setup_requests = paired_setup_requests - checkpoint_setup_requests
+    residual_inputs = joint_inputs - checkpoint_inputs
+    residual_outputs = joint_outputs - checkpoint_outputs
+    residual_cost = joint_cost - checkpoint_cost
+    residual_conservative_cost = joint_cost - sum(outcome_costs.values(), Decimal("0"))
+    residual_model_work = joint_model_work - checkpoint_work
+    residual_wall = joint_wall - max(checkpoint.spent.wall_seconds for checkpoint in source_checkpoints.values())
+    if (
+        min(residual_model_requests, residual_setup_requests, residual_inputs, residual_outputs) < 0
+        or residual_cost < 0
+        or residual_conservative_cost < 0
+        or not math.isfinite(residual_model_work)
+        or residual_model_work < -1e-9
+        or not math.isfinite(residual_wall)
+        or residual_wall < -1e-9
+    ):
+        raise ValueError("paired resume source ledger is below its checkpoint accounting")
+    residual: dict[str, int | float | str] = {
+        "model_requests": residual_model_requests,
+        "provider_setup_requests": residual_setup_requests,
+        "input_tokens": residual_inputs,
+        "output_tokens": residual_outputs,
+        "cost_usd": str(residual_cost),
+        "conservative_cost_usd": str(residual_conservative_cost),
+        "model_work_seconds": residual_model_work,
+        "wall_seconds_above_max_checkpoint": residual_wall,
+    }
+    if joint_total_tokens != joint_inputs + joint_outputs:
+        raise ValueError("paired resume source token total is inconsistent")
+
+    prior_lineage = source_artifacts["baseline"].get("resume_source")
+    if prior_lineage != source_artifacts["candidate"].get("resume_source"):
+        raise ValueError("paired resume source ancestry differs between artifacts")
+    writer_hashes = {}
+    for filename in ("runner.py", "cli.py", "execution.py"):
+        source_path = Path(__file__).with_name(filename)
+        writer_hashes[filename] = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    metadata = {
+        "schema_version": 1,
+        "parents": source_hashes,
+        "input_contract": {
+            "manifest_source": "parent_artifacts",
+            "run_manifest_hash": manifest_digest,
+            "task_corpus_hash": corpus_digest,
+        },
+        "parent_resume_source_sha256": hash_json(prior_lineage) if prior_lineage is not None else None,
+        "source_execution": {
+            "event_count": len(events),
+            "terminal_outcome_count": terminal_count,
+            "unfinished_starts": unfinished_starts,
+        },
+        "source_accounting": {
+            "joint_budget_used": shared_budget,
+            "checkpoint_model_requests": checkpoint_model_requests,
+            "checkpoint_provider_setup_requests": checkpoint_setup_requests,
+            "checkpoint_input_tokens": checkpoint_inputs,
+            "checkpoint_output_tokens": checkpoint_outputs,
+            "checkpoint_cost_usd": str(checkpoint_cost),
+            "checkpoint_model_work_seconds": checkpoint_work,
+            "raw_mixed_field_request_difference_audit_only": (
+                paired_model_requests
+                - sum(checkpoint.spent.model_requests for checkpoint in source_checkpoints.values())
+            ),
+            "model_request_equation": (
+                f"{paired_model_requests} = {checkpoint_model_requests} + {residual['model_requests']}"
+            ),
+            "residual": residual,
+        },
+        "writer": {
+            "semantic_evaluator_version": TrialEvaluator().get_evaluator_version(),
+            "report_evaluator_version": MetricsReportEvaluator().get_evaluator_version(),
+            "source_sha256": writer_hashes,
+        },
+    }
+    return {
+        "events": [dict(event) for event in events],
+        "budget_used": dict(shared_budget),
+        "metadata": metadata,
+    }
 
 
 def _paired_artifact_receipts_reconcile(
@@ -3925,6 +4588,45 @@ def _paired_artifact_receipts_reconcile(
 ) -> bool:
     if set(artifacts) != {"baseline", "candidate"}:
         return False
+    if artifacts["baseline"].get("resume_source") != artifacts["candidate"].get("resume_source"):
+        return False
+
+    residual_model_requests = 0
+    residual_setup_requests = 0
+    residual_input_tokens = 0
+    residual_output_tokens = 0
+    residual_conservative_cost = Decimal("0")
+    residual_model_work = 0.0
+    resume_source = artifacts["baseline"].get("resume_source")
+    if resume_source is not None:
+        source_accounting = resume_source.get("source_accounting") if isinstance(resume_source, dict) else None
+        source_residual = source_accounting.get("residual") if isinstance(source_accounting, dict) else None
+        if not isinstance(source_residual, dict):
+            return False
+        for key in ("model_requests", "provider_setup_requests", "input_tokens", "output_tokens"):
+            value = source_residual.get(key)
+            if type(value) is not int or value < 0:
+                return False
+            if key == "model_requests":
+                residual_model_requests = value
+            elif key == "provider_setup_requests":
+                residual_setup_requests = value
+            elif key == "input_tokens":
+                residual_input_tokens = value
+            else:
+                residual_output_tokens = value
+        try:
+            residual_conservative_cost = Decimal(str(source_residual["conservative_cost_usd"]))
+            residual_model_work = float(source_residual["model_work_seconds"])
+        except (InvalidOperation, KeyError, TypeError, ValueError):
+            return False
+        if (
+            not residual_conservative_cost.is_finite()
+            or residual_conservative_cost < 0
+            or not math.isfinite(residual_model_work)
+            or residual_model_work < -1e-9
+        ):
+            return False
 
     totals = {
         "model_requests": 0,
@@ -4146,9 +4848,15 @@ def _paired_artifact_receipts_reconcile(
         total_cost += arm_conservative_cost
         total_work += arm_work
 
-    if any(paired_budget_used.get(key) != value for key, value in totals.items()):
+    expected_totals = {
+        "model_requests": totals["model_requests"] + residual_model_requests,
+        "provider_setup_requests": totals["provider_setup_requests"] + residual_setup_requests,
+        "input_tokens": totals["input_tokens"] + residual_input_tokens,
+        "output_tokens": totals["output_tokens"] + residual_output_tokens,
+    }
+    if any(paired_budget_used.get(key) != value for key, value in expected_totals.items()):
         return False
-    if paired_budget_used.get("total_tokens") != totals["input_tokens"] + totals["output_tokens"]:
+    if paired_budget_used.get("total_tokens") != expected_totals["input_tokens"] + expected_totals["output_tokens"]:
         return False
     try:
         paired_cost = float(paired_budget_used["cost_usd"])
@@ -4158,11 +4866,21 @@ def _paired_artifact_receipts_reconcile(
         return False
     return (
         math.isfinite(paired_cost)
-        and math.isclose(paired_cost, float(total_cost), rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(
+            paired_cost,
+            float(total_cost + residual_conservative_cost),
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        )
         and math.isfinite(paired_wall)
         and paired_wall >= max_checkpoint_wall
         and math.isfinite(paired_work)
-        and math.isclose(paired_work, total_work, rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(
+            paired_work,
+            total_work + residual_model_work,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        )
     )
 
 
@@ -4240,61 +4958,141 @@ def _validate_paired_execution_evidence(baseline: dict[str, Any], candidate: dic
         raise ValueError("paired execution evidence does not match preregistration")
     events = evidence.get("events")
     reused = evidence.get("reused")
-    if not isinstance(events, list) or not isinstance(reused, list):
+    unfinished = evidence.get("unfinished_starts", [])
+    if not isinstance(events, list) or not isinstance(reused, list) or not isinstance(unfinished, list):
         raise ValueError("paired execution records are invalid")
     event_sequences = [item.get("sequence") for item in events if isinstance(item, dict)]
     if event_sequences != list(range(1, len(events) + 1)):
         raise ValueError("paired execution sequence is not contiguous")
-    records: dict[tuple[str, str, int, str], tuple[str, int | None]] = {}
-    for status, items in (("executed", events), ("reused", reused)):
-        for item in items:
-            if not isinstance(item, dict):
-                raise ValueError("paired execution record is invalid")
-            identity = (
-                item.get("cell"),
-                item.get("task_id"),
-                item.get("repeat_index"),
-                item.get("arm"),
-            )
-            if not (
-                isinstance(identity[0], str)
-                and isinstance(identity[1], str)
-                and isinstance(identity[2], int)
-                and identity[3] in {"baseline", "candidate"}
-            ) or identity in records:
-                raise ValueError("paired execution identity is invalid or duplicated")
-            records[cast(tuple[str, str, int, str], identity)] = (
-                status,
-                item.get("sequence") if status == "executed" else None,
-            )
+    event_chains: dict[tuple[str, str, int, str], list[dict[str, Any]]] = defaultdict(list)
+    event_by_sequence: dict[int, dict[str, Any]] = {}
+    first_attempts_by_cell: dict[str, list[tuple[str, int, ArmName]]] = defaultdict(list)
+    for event in events:
+        if not isinstance(event, dict):
+            raise ValueError("paired execution event is invalid")
+        identity = (
+            event.get("cell"),
+            event.get("task_id"),
+            event.get("repeat_index"),
+            event.get("arm"),
+        )
+        if not (
+            isinstance(identity[0], str)
+            and isinstance(identity[1], str)
+            and type(identity[2]) is int
+            and identity[3] in {"baseline", "candidate"}
+            and type(event.get("sequence")) is int
+            and type(event.get("order_position")) is int
+        ):
+            raise ValueError("paired execution identity is invalid")
+        cell, task_id, repeat_index, arm = cast(tuple[str, str, int, ArmName], identity)
+        typed_identity = (cell, task_id, repeat_index, arm)
+        expected_order = planned_arm_order(task_id, repeat_index, manifest["paired_order_seed"])
+        if event["order_position"] != expected_order.index(arm):
+            raise ValueError("paired execution changed the preregistered arm order")
+        chain = event_chains[typed_identity]
+        attempt = event.get("attempt", 1)
+        if type(attempt) is not int or attempt != len(chain) + 1:
+            raise ValueError("paired execution retry index is invalid")
+        if attempt == 1:
+            if "retry_of_sequence" in event:
+                raise ValueError("first paired execution attempt cannot reference a retry")
+            first_attempts_by_cell[cell].append((task_id, repeat_index, arm))
+        elif event.get("retry_of_sequence") != chain[-1].get("sequence"):
+            raise ValueError("paired execution retry does not link to its preceding start")
+        chain.append(event)
+        event_by_sequence[event["sequence"]] = event
+
+    task_contracts = baseline.get("task_contracts")
+    if not isinstance(task_contracts, list):
+        raise ValueError("paired execution task contracts are missing")
+    tasks = [TaskManifest.model_validate(item) for item in task_contracts]
+    expected_schedule_by_cell: dict[str, list[tuple[str, int, ArmName]]] = {}
+    for model_spec in manifest["models"]:
+        for transport in manifest["transports"]:
+            cell = f"{model_spec['class_name']}:{transport}"
+            expected_schedule_by_cell[cell] = [
+                (task.id, repeat_index, arm)
+                for repeat_index in range(1, int(manifest["repeats"]) + 1)
+                for task in tasks
+                if transport in task.fixture.transports
+                for arm in planned_arm_order(task.id, repeat_index, manifest["paired_order_seed"])
+            ]
+    for cell, first_attempts in first_attempts_by_cell.items():
+        schedule = expected_schedule_by_cell.get(cell)
+        if schedule is None or first_attempts != schedule[: len(first_attempts)]:
+            raise ValueError("paired execution did not preserve the per-cell schedule prefix")
+
+    reused_identities: set[tuple[str, str, int, str]] = set()
+    for item in reused:
+        if not isinstance(item, dict):
+            raise ValueError("paired reuse record is invalid")
+        identity = (item.get("cell"), item.get("task_id"), item.get("repeat_index"), item.get("arm"))
+        if (
+            not isinstance(identity[0], str)
+            or not isinstance(identity[1], str)
+            or type(identity[2]) is not int
+            or identity[3] not in {"baseline", "candidate"}
+            or identity in reused_identities
+            or identity in event_chains
+        ):
+            raise ValueError("paired reuse identity is invalid or duplicated")
+        expected_order = planned_arm_order(identity[1], identity[2], manifest["paired_order_seed"])
+        if item.get("order_position") != expected_order.index(identity[3]):
+            raise ValueError("paired reuse changed the preregistered arm order")
+        reused_identities.add(cast(tuple[str, str, int, str], identity))
+
     outcomes: dict[tuple[str, str, int, str], TrialOutcome] = {}
+    terminal_event_sequences: set[int] = set()
     for artifact in (baseline, candidate):
         for cell, run in artifact["runs"].items():
             for raw in run.get("trials", []):
                 outcome = TrialOutcome.model_validate(raw)
-                identity = (cell, outcome.task_id, outcome.repeat_index, artifact["arm"])
+                identity = (cell, outcome.task_id, outcome.repeat_index, cast(ArmName, artifact["arm"]))
+                if identity in outcomes:
+                    raise ValueError("paired execution has duplicate terminal outcomes")
                 outcomes[identity] = outcome
-    if set(records) != set(outcomes):
+                chain_events = event_chains.get(identity)
+                if chain_events:
+                    if outcome.paired_execution_sequence != chain_events[-1].get("sequence"):
+                        raise ValueError("trial execution sequence does not match its latest paired attempt")
+                    terminal_event_sequences.add(cast(int, chain_events[-1]["sequence"]))
+                elif identity not in reused_identities:
+                    raise ValueError("paired execution evidence does not cover every trial")
+    if set(outcomes) != set(event_chains) | reused_identities:
         raise ValueError("paired execution evidence does not cover every trial")
+    expected_unfinished = [
+        event for event in events if event["sequence"] not in terminal_event_sequences
+    ]
+    if unfinished != expected_unfinished:
+        raise ValueError("paired unfinished-start evidence does not match terminal trial rows")
+    if any(
+        chain[-1]["sequence"] not in terminal_event_sequences
+        for chain in event_chains.values()
+    ):
+        raise ValueError("complete paired execution has an unfinished latest attempt")
+
     for identity, outcome in outcomes.items():
-        cell, task_id, repeat_index, arm = identity
+        cell, task_id, repeat_index, outcome_arm = identity
         expected = planned_arm_order(task_id, repeat_index, manifest["paired_order_seed"])
-        if outcome.paired_order_position != expected.index(cast(ArmName, arm)):
+        if outcome.paired_order_position != expected.index(cast(ArmName, outcome_arm)):
             raise ValueError("trial paired order position does not match preregistration")
-        status, sequence = records[identity]
-        if status == "executed" and outcome.paired_execution_sequence != sequence:
-            raise ValueError("trial execution sequence does not match paired evidence")
-        counterpart = "candidate" if arm == "baseline" else "baseline"
+        counterpart: ArmName = "candidate" if outcome_arm == "baseline" else "baseline"
         counterpart_identity = (cell, task_id, repeat_index, counterpart)
-        if counterpart_identity not in records:
+        if counterpart_identity not in outcomes:
             raise ValueError("paired execution counterpart is missing")
-    for cell, task_id, repeat_index, _arm in records:
+
+    for cell, task_id, repeat_index, _arm in outcomes:
         expected = planned_arm_order(task_id, repeat_index, manifest["paired_order_seed"])
-        first = records[(cell, task_id, repeat_index, expected[0])]
-        second = records[(cell, task_id, repeat_index, expected[1])]
-        if first[0] == "executed" and second[0] == "executed" and not cast(int, first[1]) < cast(int, second[1]):
+        first_identity = (cell, task_id, repeat_index, expected[0])
+        second_identity = (cell, task_id, repeat_index, expected[1])
+        first_chain = event_chains.get(first_identity)
+        second_chain = event_chains.get(second_identity)
+        if first_chain and second_chain and not (
+            first_chain[0]["sequence"] < second_chain[0]["sequence"]
+        ):
             raise ValueError("paired execution violated the preregistered arm order")
-        if first[0] == "executed" and second[0] == "reused":
+        if first_chain and second_identity in reused_identities:
             raise ValueError("paired resume reused the second arm before the first arm completed")
 
 
@@ -4337,6 +5135,7 @@ def _validate_artifact_pair(baseline: dict[str, Any], candidate: dict[str, Any])
         "paired_order_plan",
         "paired_execution",
         "paired_budget_used",
+        "resume_source",
         "continuation_lineage",
         "provider_registry",
         "pre_smoke_seal_hash",

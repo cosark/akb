@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,8 +9,9 @@ from types import SimpleNamespace
 import pytest
 
 import mcp_catalog.runner as runner_module
-from mcp_catalog.contracts import load_run_manifest, load_task_corpus
-from mcp_catalog.execution import BudgetExceeded, BudgetLedger, TrialOutcome
+from mcp_catalog.checkpoint import CheckpointHeader, CheckpointKey, CheckpointStore
+from mcp_catalog.contracts import hash_json, load_run_manifest, load_task_corpus
+from mcp_catalog.execution import BudgetExceeded, BudgetLedger, TrialExecutor, TrialOutcome
 from mcp_catalog.runner import BenchmarkRunner, PairedArmCoordinator, planned_arm_order
 from mcp_catalog.runtime import RuntimeContractError
 from paired_artifact_factory import provider_registry_snapshot
@@ -25,6 +27,10 @@ class _Executor:
         self.transport = transport
         self.order_position: int | None = None
         self.execution_sequence: int | None = None
+        self.repeat_index: int | None = None
+
+    def set_repeat_index(self, repeat_index: int) -> None:
+        self.repeat_index = repeat_index
 
     def set_paired_turn(self, *, order_position: int, execution_sequence: int) -> None:
         self.order_position = order_position
@@ -33,6 +39,7 @@ class _Executor:
     def clear_paired_turn(self) -> None:
         self.order_position = None
         self.execution_sequence = None
+        self.repeat_index = None
 
 
 class _Resolver:
@@ -168,6 +175,171 @@ async def test_paired_continuation_appends_after_parent_execution_sequence() -> 
     events = coordinator.evidence()["events"]
     assert [item["sequence"] for item in events] == [1, 2]
     assert events[0] == parent_event
+
+
+@pytest.mark.asyncio
+async def test_paired_resume_retries_unfinished_start_with_attempt_lineage() -> None:
+    manifest = load_run_manifest(ROOT / "config" / "run.json")
+    task = next(item for item in load_task_corpus(ROOT / "corpus" / "tasks.json") if item.id == "read-vaults-en")
+    cell = "primary:http"
+    first_arm = planned_arm_order(task.id, 1, manifest.paired_order_seed)[0]
+    parent_event = {
+        "sequence": 1,
+        "cell": cell,
+        "task_id": task.id,
+        "repeat_index": 1,
+        "arm": first_arm,
+        "order_position": 0,
+    }
+    coordinator = PairedArmCoordinator(manifest, [task], initial_events=[parent_event])
+    await coordinator.register_arm("baseline", {})
+    await coordinator.register_arm("candidate", {})
+
+    async with coordinator.turn(cell=cell, task_id=task.id, repeat_index=1, arm=first_arm) as turn:
+        outcome = TrialOutcome(
+            task_id=task.id,
+            category=task.category,
+            locale=task.locale,
+            arm=first_arm,
+            model_class="primary",
+            model_id=manifest.models[0].model_id,
+            transport="http",
+            repeat_index=1,
+            paired_order_position=turn.order_position,
+            paired_execution_sequence=turn.execution_sequence,
+        )
+        coordinator.mark_terminal_outcome(outcome)
+
+    evidence = coordinator.evidence()
+    assert evidence["events"][1] == {
+        "sequence": 2,
+        "cell": cell,
+        "task_id": task.id,
+        "repeat_index": 1,
+        "arm": first_arm,
+        "order_position": 0,
+        "attempt": 2,
+        "retry_of_sequence": 1,
+    }
+    assert evidence["unfinished_starts"] == [parent_event]
+
+
+@pytest.mark.asyncio
+async def test_trial_settlement_checkpoint_keeps_registered_repeat_index() -> None:
+    manifest = load_run_manifest(ROOT / "config" / "run.json")
+    task = next(item for item in load_task_corpus(ROOT / "corpus" / "tasks.json") if item.id == "read-vaults-en")
+    captured: list[TrialOutcome] = []
+
+    async def sink(outcome: TrialOutcome) -> None:
+        captured.append(outcome)
+
+    executor = TrialExecutor(
+        manifest,
+        arm="baseline",
+        model_spec=manifest.models[0],
+        registered_model={},
+        model=object(),  # type: ignore[arg-type]
+        transport="http",
+        fixture=object(),  # type: ignore[arg-type]
+        token_for=lambda _profile: "token",
+        secrets_for=lambda _profile: (),
+        ledger=BudgetLedger(manifest),
+        outcome_sink=sink,
+    )
+    executor.set_repeat_index(2)
+    outcome = TrialOutcome(
+        task_id=task.id,
+        category=task.category,
+        locale=task.locale,
+        arm="baseline",
+        model_class=manifest.models[0].class_name,
+        model_id=manifest.models[0].model_id,
+        transport="http",
+    )
+    executor._tag_paired_turn(outcome)
+    await executor._record_outcome(outcome)
+
+    assert captured[0].repeat_index == 2
+
+
+@pytest.mark.asyncio
+async def test_cancelled_first_checkpoint_write_is_settled_before_cancellation_escapes() -> None:
+    manifest = load_run_manifest(ROOT / "config" / "run.json")
+    task = next(item for item in load_task_corpus(ROOT / "corpus" / "tasks.json") if item.id == "read-vaults-en")
+    model = manifest.models[0]
+    arm = planned_arm_order(task.id, 1, manifest.paired_order_seed)[0]
+    cell = f"{model.class_name}:http"
+    manifest_hash = hash_json(manifest.model_dump(mode="json"))
+    corpus_hash = hash_json([item.model_dump(mode="json") for item in [task]])
+    checkpoint_key = CheckpointKey(
+        source_revision="a" * 40,
+        run_manifest_hash=manifest_hash,
+        task_corpus_hash=corpus_hash,
+        arm=arm,
+        model_class=model.class_name,
+        model_id=model.model_id,
+        transport="http",
+        task_id=task.id,
+        repeat_index=1,
+        locale=task.locale,
+    )
+    started = threading.Event()
+    release = threading.Event()
+
+    class _BlockingCheckpointStore:
+        def __init__(self) -> None:
+            self.recorded: tuple[CheckpointKey, TrialOutcome, str] | None = None
+
+        def set_secrets(self, _secrets: tuple[str, ...]) -> None:
+            return None
+
+        def record_trial(
+            self,
+            key: CheckpointKey,
+            outcome: TrialOutcome,
+            *,
+            status: str,
+            **_kwargs: object,
+        ) -> bool:
+            started.set()
+            if not release.wait(timeout=5):
+                raise TimeoutError("test did not release the checkpoint writer")
+            self.recorded = (key, outcome, status)
+            return False
+
+    coordinator = PairedArmCoordinator(manifest, [task])
+    await coordinator.register_arm("baseline", {})
+    await coordinator.register_arm("candidate", {})
+    runner = BenchmarkRunner(manifest, [task], object(), arm=arm, paired_coordinator=coordinator)  # type: ignore[arg-type]
+    store = _BlockingCheckpointStore()
+    runner._checkpoint_store = store  # type: ignore[assignment]
+
+    async with coordinator.turn(cell=cell, task_id=task.id, repeat_index=1, arm=arm) as turn:
+        outcome = TrialOutcome(
+            task_id=task.id,
+            category=task.category,
+            locale=task.locale,
+            arm=arm,
+            model_class=model.class_name,
+            model_id=model.model_id,
+            transport="http",
+            repeat_index=1,
+            paired_order_position=turn.order_position,
+            paired_execution_sequence=turn.execution_sequence,
+        )
+        write = asyncio.create_task(runner._checkpoint_trial(cell, checkpoint_key, outcome, "incomplete"))
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            write.cancel()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await write
+        finally:
+            release.set()
+
+    assert store.recorded == (checkpoint_key, outcome, "incomplete")
+    assert runner._completed_trials[cell] == [outcome]
+    assert coordinator.evidence()["unfinished_starts"] == []
 
 
 @pytest.mark.asyncio
@@ -436,3 +608,187 @@ async def test_paired_resume_rejects_completed_trials_after_a_gap() -> None:
     await coordinator.register_arm("baseline", reused["baseline"])
     with pytest.raises(RuntimeContractError, match="completed prefix"):
         await coordinator.register_arm("candidate", reused["candidate"])
+
+
+@pytest.mark.asyncio
+async def test_full_resume_reuses_failed_prefix_and_settles_two_unfinished_starts(
+    tmp_path: Path,
+) -> None:
+    manifest = load_run_manifest(ROOT / "config" / "run.json")
+    tasks = load_task_corpus(ROOT / "corpus" / "tasks.json")
+    task_by_id = {task.id: task for task in tasks}
+    model_by_class = {model.class_name: model for model in manifest.models}
+    coordinator = PairedArmCoordinator(manifest, tasks)
+    schedule = coordinator._schedule
+    total_identities = sum(len(cell_schedule) for cell_schedule in schedule.values())
+    assert total_identities == 608
+
+    initial_events: list[dict[str, object]] = []
+    sequences: dict[tuple[str, str, int, str], int] = {}
+    sequence = 0
+    for cell, cell_schedule in schedule.items():
+        for task_id, repeat_index, arm in cell_schedule:
+            sequence += 1
+            identity = (cell, task_id, repeat_index, arm)
+            sequences[identity] = sequence
+            initial_events.append(
+                {
+                    "sequence": sequence,
+                    "cell": cell,
+                    "task_id": task_id,
+                    "repeat_index": repeat_index,
+                    "arm": arm,
+                    "order_position": planned_arm_order(
+                        task_id,
+                        repeat_index,
+                        manifest.paired_order_seed,
+                    ).index(arm),
+                }
+            )
+
+    unfinished_identities = {
+        (cell, *cell_schedule[-1])
+        for cell, cell_schedule in list(schedule.items())[:2]
+    }
+    first_cell, first_task_id, first_repeat_index, first_arm = next(iter(sequences))
+    first_task = task_by_id[first_task_id]
+    first_model_class, first_transport = first_cell.split(":", 1)
+    first_model = model_by_class[first_model_class]
+    manifest_hash = hash_json(manifest.model_dump(mode="json"))
+    corpus_hash = hash_json([task.model_dump(mode="json") for task in tasks])
+    failed_key = CheckpointKey(
+        source_revision=manifest.arm_source_revisions[first_arm],
+        run_manifest_hash=manifest_hash,
+        task_corpus_hash=corpus_hash,
+        arm=first_arm,
+        model_class=first_model_class,
+        model_id=first_model.model_id,
+        transport=first_transport,
+        task_id=first_task_id,
+        repeat_index=first_repeat_index,
+        locale=first_task.locale,
+    )
+    checkpoint_path = tmp_path / "ordinary-resume.checkpoint.json"
+    checkpoint_header = CheckpointHeader(
+        source_revision=failed_key.source_revision,
+        run_manifest_hash=manifest_hash,
+        task_corpus_hash=corpus_hash,
+        arm=first_arm,
+    )
+    expected_keys = {hash_json(failed_key.model_dump(mode="json")): failed_key}
+
+    def open_checkpoint(*, resume: bool) -> CheckpointStore:
+        return CheckpointStore(
+            checkpoint_path,
+            header=checkpoint_header,
+            expected_keys=expected_keys,
+            expected_tasks=task_by_id,
+            expected_smoke_cells={},
+            resume=resume,
+        )
+
+    checkpoint = open_checkpoint(resume=False)
+    checkpoint.bind_pre_smoke_seal("e" * 64, {"fixture": "synthetic"})
+    failed_outcome = TrialOutcome(
+        task_id=first_task_id,
+        category=first_task.category,
+        locale=first_task.locale,
+        arm=first_arm,
+        model_class=first_model_class,
+        model_id=first_model.model_id,
+        transport=first_transport,
+        repeat_index=first_repeat_index,
+        paired_order_position=planned_arm_order(
+            first_task_id,
+            first_repeat_index,
+            manifest.paired_order_seed,
+        ).index(first_arm),
+        paired_execution_sequence=sequences[(first_cell, first_task_id, first_repeat_index, first_arm)],
+        error="synthetic provider failure",
+    )
+    checkpoint.record_trial(failed_key, failed_outcome, status="failed")
+    resumed_checkpoint = open_checkpoint(resume=True)
+    assert resumed_checkpoint.reuse_terminal_trials is False
+    reused_failed = resumed_checkpoint.reusable_outcome_for(failed_key)
+    assert reused_failed == failed_outcome
+    assert resumed_checkpoint.status_for(failed_key) == "failed"
+    checkpoint.record_trial(failed_key, failed_outcome, status="incomplete")
+    incomplete_checkpoint = open_checkpoint(resume=True)
+    assert incomplete_checkpoint.status_for(failed_key) == "incomplete"
+    assert incomplete_checkpoint.reusable_outcome_for(failed_key) is None
+
+    reused: dict[str, dict[tuple[str, str, int], TrialOutcome]] = {"baseline": {}, "candidate": {}}
+    for identity, execution_sequence in sequences.items():
+        if identity in unfinished_identities:
+            continue
+        cell, task_id, repeat_index, arm = identity
+        if identity == (first_cell, first_task_id, first_repeat_index, first_arm):
+            outcome = reused_failed
+            assert outcome is not None
+        else:
+            model_class, transport = cell.split(":", 1)
+            task = task_by_id[task_id]
+            model = model_by_class[model_class]
+            outcome = TrialOutcome(
+                task_id=task_id,
+                category=task.category,
+                locale=task.locale,
+                arm=arm,
+                model_class=model_class,
+                model_id=model.model_id,
+                transport=transport,
+                repeat_index=repeat_index,
+                paired_order_position=planned_arm_order(
+                    task_id,
+                    repeat_index,
+                    manifest.paired_order_seed,
+                ).index(arm),
+                paired_execution_sequence=execution_sequence,
+            )
+        reused[arm][(cell, task_id, repeat_index)] = outcome
+
+    coordinator = PairedArmCoordinator(manifest, tasks, initial_events=initial_events)
+    await coordinator.register_arm("baseline", reused["baseline"])
+    await coordinator.register_arm("candidate", reused["candidate"])
+    assert sequences[(first_cell, first_task_id, first_repeat_index, first_arm)] in coordinator._terminal_event_sequences
+
+    for cell, task_id, repeat_index, arm in sorted(unfinished_identities):
+        async with coordinator.turn(
+            cell=cell,
+            task_id=task_id,
+            repeat_index=repeat_index,
+            arm=arm,
+        ) as turn:
+            model_class, transport = cell.split(":", 1)
+            task = task_by_id[task_id]
+            model = model_by_class[model_class]
+            outcome = TrialOutcome(
+                task_id=task_id,
+                category=task.category,
+                locale=task.locale,
+                arm=arm,
+                model_class=model_class,
+                model_id=model.model_id,
+                transport=transport,
+                repeat_index=repeat_index,
+                paired_order_position=turn.order_position,
+                paired_execution_sequence=turn.execution_sequence,
+            )
+            coordinator.mark_terminal_outcome(outcome)
+
+    evidence = coordinator.evidence()
+    identities = {
+        (event["cell"], event["task_id"], event["repeat_index"], event["arm"])
+        for event in evidence["events"]
+    }
+    retry_events = [event for event in evidence["events"] if event.get("attempt") == 2]
+    assert len(evidence["events"]) == 610
+    assert len(identities) == 608
+    assert len(retry_events) == 2
+    assert {event["retry_of_sequence"] for event in retry_events} == {
+        sequences[identity] for identity in unfinished_identities
+    }
+    assert {event["sequence"] for event in evidence["unfinished_starts"]} == {
+        sequences[identity] for identity in unfinished_identities
+    }
+    assert evidence["complete"] is True

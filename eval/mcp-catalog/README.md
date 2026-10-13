@@ -123,106 +123,26 @@ uv run --locked --project eval/mcp-catalog \
   --candidate-checkpoint /private/run/candidate.checkpoint.json
 ```
 
-Each arm has its own checkpoint. Resume with the same checkpoint paths and
-`--resume`. The pre-smoke seal must match before any prior trial or smoke
-evidence is reused. Only complete outcomes with provider usage, cost, selected
-route, and state evidence are reused. The coordinator enforces the registered
-arm order and adds both checkpoints' prior usage to the shared ledger.
+Each arm has its own checkpoint. For a full paired resume, copy both parent
+artifacts and checkpoints to a working directory, pass the copied artifact
+paths as `--baseline-output` and `--candidate-output`, pass the copied
+checkpoints, and add `--resume`. The runner validates both artifacts and
+checkpoints before opening either checkpoint for writing; after validation,
+those working copies become the child outputs. The parent artifact supplies
+the exact manifest when the default `--manifest` is used, while the current
+task corpus and tool coverage must still match it.
 
-AKB-361 has one source-bound continuation for the approved budget amendment.
-Its operator JSON names the immutable parent artifact and checkpoint paths and
-their SHA-256 digests, plus the authorized issue revision and content hash. The
-CLI accepts only the pinned AKB-361 source pair and derives the exact 13 missing
-identities from its 595-event prefix. It copies the 595 parent outcomes and
-four-cell smoke evidence to new child checkpoints, resumes their paired event
-sequence, and does not retry a recorded parent failure. Parent files must remain
-read-only; all three artifact outputs and both child checkpoints need distinct,
-new paths. `--resume` applies only to those child checkpoints after an
-interrupted continuation.
+Completed and failed terminal outcomes are reused without retry. Smoke cells
+are reused from their sealed checkpoint. The coordinator continues the
+original event sequence and links a retry attempt to any start that has no
+terminal outcome. The paired ledger is restored once from its shared parent
+receipt, and the child records parent artifact/checkpoint hashes plus any
+accounting residual separately from per-trial receipts. It does not assign an
+unattributed residual to a trial.
 
-The registered manifest remains at its $50 total cap. The continuation ledger
-restores the parent's $4.63290984 spend and applies a $46.763351 run ceiling,
-leaving $42.13044116 for new provider responses under the approved account
-budget. No request-count or wall-time ceiling is restored. The parent runtime
-seal and smoke records remain unchanged. A continuation records the fresh
-descriptor and readiness/source-version observations separately, then compares
-its semantic inputs with the parent. Only process PIDs, dependency
-container/network/volume identities, fixture namespaces, and stdio consumer-root
-paths may be reallocated; ports, source and artifact versions, catalogs,
-provider snapshot, credentials, reset contract, environment, oracle, and paired
-order must still match.
-
-The operator file is stored outside the repository and has this shape:
-
-```json
-{
-  "schema_version": 1,
-  "work_item": "AKB-361",
-  "authorization_revision": "<approved issue revision>",
-  "authorization_content_hash": "<approved issue content hash>",
-  "parents": {
-    "baseline": {
-      "artifact_path": "<parent baseline artifact>",
-      "artifact_sha256": "<pinned digest>",
-      "checkpoint_path": "<parent baseline checkpoint>",
-      "checkpoint_sha256": "<pinned digest>"
-    },
-    "candidate": {
-      "artifact_path": "<parent candidate artifact>",
-      "artifact_sha256": "<pinned digest>",
-      "checkpoint_path": "<parent candidate checkpoint>",
-      "checkpoint_sha256": "<pinned digest>"
-    }
-  }
-}
-```
-
-Pass it with `run-paired --amendment /private/run/akb-361-continuation.json`.
-Paths may be absolute or relative to the operator file.
-
-AKB-361's tool-guidance remeasurement is a separate selection-bound run. Supply
-AKB-361's currently authorized 14-identity `selection-v8.json` and a new summary
-path with `--selection` and `--selection-summary-output`. The selection pins six
-prior candidate tool failures, eight successful controls, two immutable parent
-artifact hashes, and issue revision `41ff509113638ffe9ec0af1f803b42439be87405`
-and content hash `b11b8f36d5c8fa36fe3eb6b453a56b612b15487f3d7b26b939d903c7b9f357a7`.
-The runner
-executes only those 14 identities in both arms (28 new model trials), retains
-the original repeat indices and `akb-358-v1` counterbalanced arm order, and runs
-the full four-cell smoke gate per arm. Parent rows remain read-only and are
-reported beside the new outcomes without being merged into the canonical run
-comparison. A selection sample can never produce an adoption verdict.
-
-The operator JSON contains `schema_version`, `authorization`, the two
-`previous_baseline` / `previous_candidate` parent `{path, sha256}` entries, the
-ordered `selected_trials` rows `{model_class, transport, task_id, repeat_index,
-role, parent_lineage}`, and the approved `budget`. The code fixes the approved
-14 identities, six failures, eight controls, authorization digest, parent
-hashes, and budget; it rejects duplicate, missing, extra, out-of-range, or
-relabeled identities and any obsolete 16-identity or four-parent plan. Parent
-trials are checked as raw JSON rows, preserving their recorded failure fields
-without requiring them to parse as new `TrialOutcome` objects.
-
-The checkpoint records a read-only preflight of the selection file hash, both
-parent hashes, 14 identities, the six/eight role counts, and the fixed budget.
-The new shared ledger starts at zero and stops at `$40.7195671558`, calculated
-from the `$50` session cap less the pinned `$9.2804328442` prior spend basis.
-The `$0.10` per-trial cap and 300-second request timeout remain in force. No
-total request-count or overall wall-time limit applies to this sample.
-
-```bash
-uv run --locked --project eval/mcp-catalog \
-  mcp-catalog-bench run-paired \
-  --baseline-descriptor /private/run/baseline-descriptor.json \
-  --candidate-descriptor /private/run/candidate-descriptor.json \
-  --baseline-output /private/run/baseline-recovery.json \
-  --candidate-output /private/run/candidate-recovery.json \
-  --comparison-output /private/run/recovery-comparison.json \
-  --baseline-checkpoint /private/run/baseline-recovery.checkpoint.json \
-  --candidate-checkpoint /private/run/candidate-recovery.checkpoint.json \
-  --selection /private/run/selection.json \
-  --selection-summary-output /private/run/selection-summary.json
-```
+`--amendment` and `--selection` are separate source-bound execution modes.
+They accept their own operator plans and do not use the full-resume input
+contract described above.
 
 Standalone `run --arm ...` is for diagnostics. Independently run arms do not
 have shared execution evidence and produce an `inconclusive` comparison.

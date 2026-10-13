@@ -1051,7 +1051,8 @@ class BenchmarkRunManifest(ContractModel):
             or supplied_by_operation != derived_by_operation
         ):
             raise ValueError("expanded public_operations do not match the derived execution contract")
-        object.__setattr__(self, "public_operations", derived_operations)
+        if not self.public_operations:
+            object.__setattr__(self, "public_operations", derived_operations)
         expected_transport_counts = {"http": {"baseline": 45, "candidate": 33}, "stdio": {"baseline": 51, "candidate": 39}}
         for arm in ("baseline", "candidate"):
             for transport in ("http", "stdio"):

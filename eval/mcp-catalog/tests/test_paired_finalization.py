@@ -184,6 +184,40 @@ def test_terminal_pair_clears_only_the_transient_peer_reservation_reason() -> No
     assert artifacts["candidate"]["incomplete_reasons"] == []
 
 
+def test_resume_source_residual_is_added_to_checkpoint_totals_once() -> None:
+    artifacts = {
+        "baseline": _arm_artifact("baseline"),
+        "candidate": _arm_artifact("candidate", stale_reservation=True),
+    }
+    source_residual = {
+        "model_requests": 13,
+        "provider_setup_requests": 0,
+        "input_tokens": 7,
+        "output_tokens": 3,
+        "conservative_cost_usd": "0.0015",
+        "model_work_seconds": 1.25,
+    }
+    source = {"source_accounting": {"residual": source_residual}}
+    for artifact in artifacts.values():
+        artifact["resume_source"] = source
+
+    budget = _paired_budget(artifacts)
+    for field in ("model_requests", "provider_setup_requests", "input_tokens", "output_tokens"):
+        budget[field] += source_residual[field]
+    budget["total_tokens"] = budget["input_tokens"] + budget["output_tokens"]
+    budget["cost_usd"] += float(source_residual["conservative_cost_usd"])
+    budget["model_work_seconds"] += source_residual["model_work_seconds"]
+
+    _reconcile_paired_artifact_reservations(
+        artifacts,
+        paired_budget_used=budget,
+        paired_run_terminal=True,
+    )
+
+    assert artifacts["baseline"]["status"] == "complete"
+    assert artifacts["candidate"]["status"] == "complete"
+
+
 @pytest.mark.parametrize(
     "change,final_reserved,mismatch_requests,terminal",
     [

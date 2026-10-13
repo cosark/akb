@@ -3086,7 +3086,7 @@ class TrialExecutor:
         ledger: BudgetLedger,
         input_schemas_by_profile: dict[str, dict[str, dict[str, Any]]] | None = None,
         server_instructions_by_profile: dict[str, str] | None = None,
-        outcome_sink: Callable[[TrialOutcome], None] | None = None,
+        outcome_sink: Callable[[TrialOutcome], Awaitable[None]] | None = None,
         timing_sink: Callable[[TimingCategory, float, float], None] | None = None,
     ) -> None:
         self.manifest = manifest
@@ -3106,6 +3106,12 @@ class TrialExecutor:
         self._outcome_counts: dict[str, int] = defaultdict(int)
         self.paired_order_position: int | None = None
         self.paired_execution_sequence: int | None = None
+        self.current_repeat_index: int | None = None
+
+    def set_repeat_index(self, repeat_index: int) -> None:
+        if repeat_index < 1:
+            raise ValueError("trial repeat index must be positive")
+        self.current_repeat_index = repeat_index
 
     def set_paired_turn(self, *, order_position: int, execution_sequence: int) -> None:
         self.paired_order_position = order_position
@@ -3114,8 +3120,11 @@ class TrialExecutor:
     def clear_paired_turn(self) -> None:
         self.paired_order_position = None
         self.paired_execution_sequence = None
+        self.current_repeat_index = None
 
     def _tag_paired_turn(self, outcome: TrialOutcome) -> TrialOutcome:
+        if self.current_repeat_index is not None:
+            outcome.repeat_index = self.current_repeat_index
         outcome.paired_order_position = self.paired_order_position
         outcome.paired_execution_sequence = self.paired_execution_sequence
         return outcome
@@ -3162,7 +3171,7 @@ class TrialExecutor:
                 failure_kind="budget",
             )
             self._tag_paired_turn(outcome)
-            self._record_outcome(outcome)
+            await self._record_outcome(outcome)
             return outcome
         try:
             partial_messages: list[ModelResponse] = []
@@ -3253,23 +3262,33 @@ class TrialExecutor:
                 or outcome.failure_kind == "request_timeout"
             ):
                 self.timing_sink("provider_wait", started, started + latency)
+            charge_task = asyncio.create_task(self.ledger.charge(outcome, guard=request_guard))
+            interrupted_during_settlement = False
             try:
-                await self.ledger.charge(outcome, guard=request_guard)
+                await asyncio.shield(charge_task)
+            except asyncio.CancelledError:
+                try:
+                    await charge_task
+                except BudgetExceeded as exc:
+                    outcome.error = f"benchmark incomplete: {exc}"
+                    outcome.failure_kind = "budget"
+                interrupted_during_settlement = True
             except BudgetExceeded as exc:
                 outcome.error = f"benchmark incomplete: {exc}"
                 outcome.failure_kind = "budget"
-                self._record_outcome(outcome)
-                return outcome
-            self._record_outcome(outcome)
+            await self._record_outcome(outcome)
+            if interrupted_during_settlement:
+                raise asyncio.CancelledError
             return outcome
         finally:
             await request_guard.release()
 
-    def _record_outcome(self, outcome: TrialOutcome) -> None:
+    async def _record_outcome(self, outcome: TrialOutcome) -> None:
         if self.outcome_sink is not None:
             self._outcome_counts[outcome.task_id] += 1
-            self.outcome_sink(
-                outcome.model_copy(update={"repeat_index": self._outcome_counts[outcome.task_id]})
+            repeat_index = self.current_repeat_index or self._outcome_counts[outcome.task_id]
+            await self.outcome_sink(
+                outcome.model_copy(update={"repeat_index": repeat_index})
             )
 
 

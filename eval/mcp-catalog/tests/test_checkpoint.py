@@ -397,15 +397,30 @@ def test_resume_fails_closed_for_header_mismatch_corruption_and_secret(tmp_path:
         _store(path, resume=True)
 
 
-def test_failed_checkpoint_trial_is_not_reused_but_spent_is_preserved(tmp_path: Path) -> None:
+def test_failed_checkpoint_trial_is_reused_and_spent_is_preserved(tmp_path: Path) -> None:
     path = tmp_path / "checkpoint.json"
     store, key = _store(path)
-    store.record_trial(key, _outcome(key, error="provider failed"), status="failed")
+    failed = _outcome(key, error="provider failed")
+    store.record_trial(key, failed, status="failed")
 
     resumed, _ = _store(path, resume=True)
     assert resumed.completed_outcome_for(key) is None
+    assert resumed.reusable_outcome_for(key) == failed
     assert resumed.status_for(key) == "failed"
     assert resumed.document.spent.model_requests == 1
+
+
+def test_replacing_settled_checkpoint_row_does_not_double_spent_usage(tmp_path: Path) -> None:
+    store, key = _store(tmp_path / "checkpoint.json")
+    failed = _outcome(key, error="provider failed")
+    completed = _outcome(key)
+
+    assert store.record_trial(key, failed, status="failed") is False
+    assert store.document.spent.model_requests == 1
+    assert store.record_trial(key, completed, status="completed") is True
+    assert store.document.spent.model_requests == 1
+    assert store.document.spent.input_tokens == completed.input_tokens
+    assert store.document.spent.output_tokens == completed.output_tokens
 
 
 def test_explicit_continuation_reuses_failed_parent_outcomes_without_retry(tmp_path: Path) -> None:

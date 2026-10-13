@@ -356,7 +356,6 @@ class CheckpointStore:
             if (
                 trial_record.status == "completed"
                 and not valid_completed_outcome(trial_record.outcome, self._task_for_outcome(trial_record.outcome))
-                and trial_record.outcome.failure_kind != "request_limit"
             ):
                 raise CheckpointError("continuation checkpoint contains an invalid completed trial")
         for cell_key, smoke_record in document.smoke_gate.items():
@@ -430,14 +429,21 @@ class CheckpointStore:
                 ):
                     raise CheckpointError("selection checkpoint contains an invalid completed trial")
                 return record.outcome
-            return self.completed_outcome_for(key)
+            record = self.document.records.get(checkpoint_key_digest(key))
+            if record is None or record.status == "incomplete":
+                return None
+            if record.status == "completed" and not valid_completed_outcome(
+                record.outcome,
+                self._task_for_key(key),
+            ):
+                raise CheckpointError("checkpoint contains an invalid completed trial")
+            return record.outcome
         record = self.document.records.get(checkpoint_key_digest(key))
         if record is None:
             return None
         if (
             record.status == "completed"
             and not valid_completed_outcome(record.outcome, self._task_for_key(key))
-            and record.outcome.failure_kind != "request_limit"
         ):
             raise CheckpointError("checkpoint contains an invalid completed trial")
         return record.outcome
@@ -487,7 +493,7 @@ class CheckpointStore:
             outcome=safe_outcome,
             record_hash=checkpoint_record_hash(resolved_status, key, safe_outcome),
         )
-        self.document.spent = self.document.spent.plus(safe_outcome)
+        self._recompute_spent()
         if elapsed_wall_seconds is not None:
             if elapsed_wall_seconds < 0:
                 raise CheckpointError("checkpoint elapsed wall time cannot be negative")
@@ -542,7 +548,7 @@ class CheckpointStore:
             outcome=safe_outcome,
             record_hash=smoke_record_hash(resolved_status, model_class, model_id, transport, safe_outcome),
         )
-        self.document.spent = self.document.spent.plus(safe_outcome)
+        self._recompute_spent()
         if elapsed_wall_seconds is not None:
             if elapsed_wall_seconds < 0:
                 raise CheckpointError("checkpoint elapsed wall time cannot be negative")
@@ -667,7 +673,6 @@ class CheckpointStore:
             if (
                 trial_record.status == "completed"
                 and not valid_completed_outcome(trial_record.outcome, self._task_for_key(trial_record.key))
-                and not (self.continuation is not None and trial_record.outcome.failure_kind == "request_limit")
             ):
                 raise CheckpointError("resume checkpoint contains an invalid completed trial")
         for cell_key, smoke_record in document.smoke_gate.items():
@@ -764,6 +769,28 @@ class CheckpointStore:
         self.document.spent.provider_setup_requests += count
         self.document.spent_hash = spent_hash(self.document.spent)
         self._write_atomic()
+
+    def _recompute_spent(self) -> None:
+        """Rebuild usage from current records so a settled-row rewrite is idempotent."""
+
+        previous = self.document.spent
+        outcomes = [
+            *(record.outcome for record in self.document.records.values()),
+            *(record.outcome for record in self.document.smoke_gate.values()),
+        ]
+        setup_requests = previous.provider_setup_requests
+        self.document.spent = CheckpointBudget(
+            model_requests=setup_requests + sum(outcome.model_requests for outcome in outcomes),
+            provider_setup_requests=setup_requests,
+            input_tokens=sum(outcome.input_tokens for outcome in outcomes),
+            output_tokens=sum(outcome.output_tokens for outcome in outcomes),
+            cost_usd=float(sum((Decimal(str(outcome.cost_usd)) for outcome in outcomes), Decimal("0"))),
+            wall_seconds=previous.wall_seconds,
+            model_work_seconds=float(
+                sum((Decimal(str(outcome.latency_seconds)) for outcome in outcomes), Decimal("0"))
+            ),
+        )
+        self.document.spent_hash = spent_hash(self.document.spent)
 
     def _ensure_writable(self) -> None:
         if self.document.lifecycle != "open":

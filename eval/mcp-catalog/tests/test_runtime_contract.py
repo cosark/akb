@@ -108,6 +108,25 @@ class _TimedResetClient:
         return None
 
 
+class _ResetResponseSequenceClient:
+    def __init__(self, descriptor: RuntimeDescriptor, responses: list[_Response]) -> None:
+        self.descriptor = descriptor
+        self.responses = responses
+        self.post_calls: list[tuple[str, dict]] = []
+        self.get_calls: list[str] = []
+
+    async def post(self, url: str, *, json: dict, **_kwargs: object) -> _Response:
+        self.post_calls.append((url, json))
+        return self.responses.pop(0)
+
+    async def get(self, url: str, **_kwargs: object) -> _Response:
+        self.get_calls.append(url)
+        return _Response(200, {"status": "ready", "scenario": self.descriptor.scenario})
+
+    async def aclose(self) -> None:
+        return None
+
+
 class _RevokeResponseClient:
     async def delete(self, _url: str, **_kwargs: object) -> _Response:
         return _Response(401, {})
@@ -262,6 +281,64 @@ async def test_unexpected_json_state_status_remains_an_available_observation(sta
         "detail": "Vault not found: catalog-bench-overlap",
     }
     assert observation.error is None
+    await fixture.close()
+
+
+@pytest.mark.asyncio
+async def test_fixture_reset_retries_one_postgres_deadlock_then_waits_for_readiness() -> None:
+    descriptor = RuntimeDescriptor.from_dict(descriptor_dict())
+    fixture = RuntimeFixture(descriptor)
+    fixture.client = _ResetResponseSequenceClient(
+        descriptor,
+        [
+            _Response(500, {"detail": "DeadlockDetectedError sqlstate=40P01"}),
+            _Response(200, {"status": "ready", "scenario": descriptor.scenario}),
+        ],
+    )  # type: ignore[assignment]
+
+    await fixture.reset()
+
+    assert len(fixture.client.post_calls) == 2
+    assert fixture.reset_count == 1
+    assert len(fixture.client.get_calls) == 2
+    await fixture.close()
+
+
+@pytest.mark.asyncio
+async def test_fixture_reset_does_not_retry_other_server_errors_or_permission_errors() -> None:
+    for response in (
+        _Response(500, {"detail": "SchemaMismatch sqlstate=42P01"}),
+        _Response(403, {"detail": "permission denied"}),
+    ):
+        descriptor = RuntimeDescriptor.from_dict(descriptor_dict())
+        fixture = RuntimeFixture(descriptor)
+        fixture.client = _ResetResponseSequenceClient(descriptor, [response])  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeContractError, match="fixture reset returned HTTP"):
+            await fixture.reset()
+
+        assert len(fixture.client.post_calls) == 1
+        assert fixture.client.get_calls == []
+        await fixture.close()
+
+
+@pytest.mark.asyncio
+async def test_fixture_reset_bounds_repeated_postgres_deadlocks() -> None:
+    descriptor = RuntimeDescriptor.from_dict(descriptor_dict())
+    fixture = RuntimeFixture(descriptor)
+    fixture.client = _ResetResponseSequenceClient(
+        descriptor,
+        [
+            _Response(500, {"detail": "DeadlockDetectedError sqlstate=40P01"})
+            for _ in range(3)
+        ],
+    )  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeContractError, match="DeadlockDetectedError sqlstate=40P01"):
+        await fixture.reset()
+
+    assert len(fixture.client.post_calls) == 3
+    assert fixture.client.get_calls == []
     await fixture.close()
 
 

@@ -22,6 +22,7 @@ ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 DEFAULT_HTTP_TIMEOUT_SECONDS = 30.0
 # Matches scripts/ci/e2e_runtime.py::DEFAULT_TIMEOUT_SECONDS for reset/recovery.
 RESET_TIMEOUT_SECONDS = 180.0
+RESET_DEADLOCK_MAX_ATTEMPTS = 3
 
 
 class RuntimeContractError(RuntimeError):
@@ -332,25 +333,40 @@ class RuntimeFixture:
         started = time.perf_counter()
         try:
             async with self._reset_lock:
-                try:
-                    response = await self.client.post(
-                        self.descriptor.reset_url,
-                        json=self.descriptor.reset_body,
-                        timeout=self.reset_timeout,
-                    )
-                except httpx.HTTPError as exc:
-                    message = "fixture reset request timed out" if isinstance(exc, httpx.TimeoutException) else "fixture reset request failed"
-                    raise RuntimeContractError(message, stage="fixture_reset") from exc
-                if response.status_code != 200:
+                for attempt in range(1, RESET_DEADLOCK_MAX_ATTEMPTS + 1):
+                    try:
+                        response = await self.client.post(
+                            self.descriptor.reset_url,
+                            json=self.descriptor.reset_body,
+                            timeout=self.reset_timeout,
+                        )
+                    except httpx.HTTPError as exc:
+                        message = "fixture reset request timed out" if isinstance(exc, httpx.TimeoutException) else "fixture reset request failed"
+                        raise RuntimeContractError(message, stage="fixture_reset") from exc
+                    if response.status_code == 200:
+                        break
                     detail = ""
                     try:
                         payload = response.json()
                         if isinstance(payload, dict) and isinstance(payload.get("detail"), str):
-                            detail = f": {payload['detail'][:1000]}"
+                            detail = payload["detail"][:1000]
                     except ValueError:
                         pass
+                    retryable_deadlock = (
+                        response.status_code == 500
+                        and re.search(r"\bDeadlockDetectedError\b", detail, re.IGNORECASE) is not None
+                        and re.search(r"\bsqlstate\s*=\s*40P01\b", detail, re.IGNORECASE) is not None
+                    )
+                    if retryable_deadlock and attempt < RESET_DEADLOCK_MAX_ATTEMPTS:
+                        continue
+                    suffix = (
+                        f" after {attempt} attempts"
+                        if retryable_deadlock and attempt == RESET_DEADLOCK_MAX_ATTEMPTS
+                        else ""
+                    )
+                    rendered_detail = f": {detail}" if detail else ""
                     raise RuntimeContractError(
-                        f"fixture reset returned HTTP {response.status_code}{detail}",
+                        f"fixture reset returned HTTP {response.status_code}{suffix}{rendered_detail}",
                         stage="fixture_reset",
                     )
                 try:
