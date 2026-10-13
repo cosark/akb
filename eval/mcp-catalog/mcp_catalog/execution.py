@@ -3475,6 +3475,7 @@ def build_model(spec: ModelSpec) -> OpenRouterChatModel:
             {
                 "openai_chat_supports_max_completion_tokens": False,
                 "openai_supports_strict_tool_definition": False,
+                "openai_chat_supports_multiple_system_messages": False,
             },
         ),
         settings=cast(Any, settings),

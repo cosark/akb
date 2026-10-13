@@ -4,8 +4,9 @@ import hashlib
 import json
 import runpy
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
+import httpx
 import pytest
 
 try:
@@ -27,12 +28,17 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from mcp_catalog.catalog import create_toolset
-from mcp_catalog.contracts import PROTOCOL_REVISION
+from mcp_catalog.contracts import OPENROUTER_BASE_URL, PROTOCOL_REVISION, load_run_manifest
 from mcp_catalog.execution import (
+    MODEL_INPUT_EVIDENCE,
+    ModelInputEvidence,
     ModelConfigurationError,
+    SERVER_INSTRUCTIONS as SERVER_INSTRUCTIONS_CONTEXT,
+    SYSTEM_PROMPT,
     ToolCallRecorder,
     TrialOutcome,
     _model_input_evidence_for,
+    build_model,
     has_server_instructions_evidence,
 )
 from mcp_catalog.contracts import TaskManifest
@@ -41,6 +47,177 @@ from mcp_catalog.evidence import canonical_json
 SERVER_INSTRUCTIONS = runpy.run_path(
     str(Path(__file__).resolve().parents[3] / "backend" / "mcp_server" / "instructions.py")
 )["INSTRUCTIONS"]
+
+
+def _contains_text(value: object, expected: str) -> bool:
+    if isinstance(value, str):
+        return expected in value
+    if isinstance(value, dict):
+        return any(_contains_text(item, expected) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_text(item, expected) for item in value)
+    return False
+
+
+@pytest.mark.parametrize("model_class", ["primary", "lightweight"])
+@pytest.mark.asyncio
+async def test_openrouter_wire_merges_system_and_actual_mcp_instructions_for_tool_round_trip(
+    monkeypatch: pytest.MonkeyPatch,
+    model_class: str,
+) -> None:
+    manifest = load_run_manifest(Path(__file__).resolve().parents[1] / "config" / "run.json")
+    spec = next(model for model in manifest.models if model.class_name == model_class)
+    monkeypatch.setenv(spec.base_url_env, OPENROUTER_BASE_URL)
+    monkeypatch.setenv(spec.provider_key_env, "fixture-provider-key")
+    model = build_model(spec)
+    original_http_client = model.client._client
+
+    requests: list[tuple[httpx.Request, dict[str, Any]]] = []
+    strict_backend_violations: list[str] = []
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        body: dict[str, Any] = json.loads(request.content)
+        requests.append((request, body))
+        messages = body["messages"]
+        system_positions = [index for index, message in enumerate(messages) if message["role"] == "system"]
+        if system_positions != [0]:
+            strict_backend_violations.append(
+                f"request {len(requests)} has system message positions {system_positions}"
+            )
+            return httpx.Response(
+                400,
+                json={"error": {"message": "System message must be at the beginning."}},
+            )
+
+        completion_index = len(requests)
+        message: dict[str, object]
+        finish_reason: str
+        if completion_index == 1:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-inspect-record",
+                        "type": "function",
+                        "function": {
+                            "name": "inspect_record",
+                            "arguments": '{"value":"record-42"}',
+                        },
+                    }
+                ],
+            }
+            finish_reason = "tool_calls"
+        else:
+            message = {"role": "assistant", "content": "The value is record-42."}
+            finish_reason = "stop"
+        return httpx.Response(
+            200,
+            json={
+                "id": f"wire-response-{completion_index}",
+                "object": "chat.completion",
+                "created": 1,
+                "model": spec.model_id,
+                "choices": [{"index": 0, "finish_reason": finish_reason, "message": message}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16},
+            },
+        )
+
+    mock_http_client = httpx.AsyncClient(transport=httpx.MockTransport(handle_request))
+    model.client._client = mock_http_client
+    server = FastMCP("wire-contract", instructions=SERVER_INSTRUCTIONS, version="1")
+
+    @server.tool
+    def inspect_record(value: str) -> dict[str, str]:
+        return {"value": value}
+
+    probe = Client(server, mode=PROTOCOL_REVISION, auto_initialize=False, cache=False)
+    evidence: list[ModelInputEvidence] = []
+    result = None
+    run_error: Exception | None = None
+    instructions_token = SERVER_INSTRUCTIONS_CONTEXT.set(SERVER_INSTRUCTIONS)
+    evidence_token = MODEL_INPUT_EVIDENCE.set(evidence)
+    try:
+        async with probe:
+            raw_discovery = await probe.session.send_discover(PROTOCOL_REVISION)
+        discovery = DiscoverResult.model_validate(raw_discovery)
+        assert discovery.instructions == SERVER_INSTRUCTIONS
+
+        client = Client(server, mode=PROTOCOL_REVISION, prior_discover=discovery, cache=False)
+        toolset = create_toolset(client)
+        async with toolset:
+            agent = Agent(model=model, system_prompt=SYSTEM_PROMPT, retries=0)
+            try:
+                result = await agent.run(
+                    "Inspect record 42 and report its value.",
+                    toolsets=[toolset],
+                    model_settings=model.settings,
+                    infer_name=False,
+                )
+            except Exception as exc:
+                run_error = exc
+    finally:
+        MODEL_INPUT_EVIDENCE.reset(evidence_token)
+        SERVER_INSTRUCTIONS_CONTEXT.reset(instructions_token)
+        await mock_http_client.aclose()
+        await original_http_client.aclose()
+
+    assert not strict_backend_violations, (
+        f"strict backend rejected the wire messages: {strict_backend_violations}; {run_error!r}"
+    )
+    assert run_error is None
+    assert result is not None
+    assert result.output == "The value is record-42."
+    assert len(requests) == 2
+    assert model.client.max_retries == 0
+
+    spec_routing = spec.routing.request_body(
+        input_price=spec.input_cost_per_million_usd,
+        output_price=spec.output_cost_per_million_usd,
+    )["provider"]
+    expected_system_content = f"{SYSTEM_PROMPT}\n\n{SERVER_INSTRUCTIONS}"
+    for request, body in requests:
+        assert request.url.host == "openrouter.ai"
+        assert request.headers["X-OpenRouter-Metadata"] == "enabled"
+        assert body["model"] == spec.model_id
+        assert body["provider"] == spec_routing
+        assert body["max_tokens"] == spec.settings["max_tokens"]
+        assert body["temperature"] == spec.settings["temperature"]
+        assert [message["role"] for message in body["messages"]].count("system") == 1
+        assert body["messages"][0] == {"role": "system", "content": expected_system_content}
+        assert len(body["tools"]) == 1
+        function = body["tools"][0]["function"]
+        assert function["name"] == "inspect_record"
+        assert function["parameters"]["type"] == "object"
+        assert function["parameters"]["properties"] == {"value": {"type": "string"}}
+        assert function["parameters"]["required"] == ["value"]
+
+    first_messages = requests[0][1]["messages"]
+    second_messages = requests[1][1]["messages"]
+    assert [message["role"] for message in first_messages] == ["system", "user"]
+    assert first_messages[1]["content"] == "Inspect record 42 and report its value."
+    assert [message["role"] for message in second_messages] == ["system", "user", "assistant", "tool"]
+    assert second_messages[1] == first_messages[1]
+    assert second_messages[2]["tool_calls"][0]["function"] == {
+        "name": "inspect_record",
+        "arguments": '{"value":"record-42"}',
+    }
+    assert second_messages[3]["tool_call_id"] == "call-inspect-record"
+    assert json.loads(second_messages[3]["content"]) == {"value": "record-42"}
+
+    instructions_sha256 = hashlib.sha256(SERVER_INSTRUCTIONS.encode("utf-8")).hexdigest()
+    assert len(evidence) == 2
+    for request_index, item in enumerate(evidence, start=1):
+        evidence_row = item.model_dump(mode="json")
+        canonical_input = evidence_row["model_input_canonical_json"]
+        assert evidence_row["request_index"] == request_index
+        assert evidence_row["server_instructions_text"] == SERVER_INSTRUCTIONS
+        assert evidence_row["server_instructions_sha256"] == instructions_sha256
+        assert evidence_row["server_instructions_present"] is True
+        assert evidence_row["model_input_sha256"] == hashlib.sha256(canonical_input.encode("utf-8")).hexdigest()
+        assert SYSTEM_PROMPT in canonical_input
+        canonical_messages = json.loads(canonical_input)
+        assert _contains_text(canonical_messages, SERVER_INSTRUCTIONS.rstrip("\r\n"))
 
 
 @pytest.mark.asyncio
