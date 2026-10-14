@@ -12,7 +12,7 @@ from app.services import auth_service as auth
 class Connection:
     def __init__(self):
         self.fetchrow = AsyncMock(return_value={
-            "password_hash": "stored-hash", "auth_provider": "local",
+            "password_hash": "stored-hash", "auth_provider": "local",  # pragma: allowlist secret — synthetic unit fixture
             "account_status": "active", "account_kind": "human",
         })
         self.execute = AsyncMock()

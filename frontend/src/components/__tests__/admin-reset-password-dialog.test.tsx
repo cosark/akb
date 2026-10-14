@@ -18,13 +18,13 @@ describe("AdminResetPasswordDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /generate/i }));
     expect(busy).toHaveBeenLastCalledWith(true);
     rerender(<AdminResetPasswordDialog userId="b" username="bob" open onOpenChange={vi.fn()} onBusyChange={busy} />);
-    await act(async () => resolve({ temporary_password: "private-A-password", username: "alice" }));
+    await act(async () => resolve({ temporary_password: "private-A-password", username: "alice" })); // pragma: allowlist secret — synthetic receipt fixture
     expect(screen.queryByTestId("temp-password")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /generate/i })).toBeEnabled();
     expect(busy).toHaveBeenLastCalledWith(false);
   });
   it("clears a one-time receipt when its session no longer owns it", async () => {
-    vi.mocked(api.adminResetPassword).mockResolvedValue({ temporary_password: "private-password", username: "alice" });
+    vi.mocked(api.adminResetPassword).mockResolvedValue({ temporary_password: "private-password", username: "alice" }); // pragma: allowlist secret — synthetic receipt fixture
     render(<AdminResetPasswordDialog userId="a" username="alice" open onOpenChange={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /generate/i }));
     await screen.findByTestId("temp-password");
@@ -78,7 +78,7 @@ describe("AdminResetPasswordDialog", () => {
 
   it.each(["unavailable", "denied"])("F27: keeps a selectable secret and honest recovery when clipboard is %s", async state => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: state === "unavailable" ? undefined : { writeText: vi.fn().mockRejectedValue(new DOMException("Blocked", "NotAllowedError")) } });
-    vi.mocked(api.adminResetPassword).mockResolvedValue({ temporary_password: "private-example", username: "reader" });
+    vi.mocked(api.adminResetPassword).mockResolvedValue({ temporary_password: "private-example", username: "reader" }); // pragma: allowlist secret — synthetic receipt fixture
     render(<AdminResetPasswordDialog userId="reader" username="reader" open onOpenChange={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
     const value = await screen.findByTestId("temp-password");
