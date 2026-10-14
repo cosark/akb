@@ -40,6 +40,12 @@ type TooltipTextProps = Omit<React.HTMLAttributes<HTMLElement>, "title"> & {
    */
   onOverflowChange?: (overflow: boolean) => void;
   /**
+   * Which overflow means the text is cut. "x" (the default) measures only the
+   * width, as single-line truncation needs. "both" also measures the height,
+   * for text wrapped onto lines and clamped to a number of them.
+   */
+  overflowAxis?: "x" | "both";
+  /**
    * Render the tooltip on document.body instead of beside the trigger. Use it
    * when the text sits inside another control (e.g. a table cell button):
    * inline tooltip content would otherwise land inside that control and join
@@ -55,6 +61,7 @@ export function TooltipText({
   asChild = false,
   side = "top",
   onOverflowChange,
+  overflowAxis = "x",
   portal = false,
   className,
   children,
@@ -66,12 +73,16 @@ export function TooltipText({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const measure = () => setOverflow(el.scrollWidth - el.clientWidth > 1);
+    const measure = () =>
+      setOverflow(
+        el.scrollWidth - el.clientWidth > 1 ||
+          (overflowAxis === "both" && el.scrollHeight - el.clientHeight > 1),
+      );
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [children, tip]);
+  }, [children, tip, overflowAxis]);
 
   useEffect(() => {
     onOverflowChange?.(overflow);

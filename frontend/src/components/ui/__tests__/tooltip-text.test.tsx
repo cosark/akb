@@ -3,21 +3,30 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TooltipText } from "@/components/ui/tooltip-text";
 
-const originals = ["scrollWidth", "clientWidth"].map(
+const originals = ["scrollWidth", "clientWidth", "scrollHeight", "clientHeight"].map(
   (name) => [name, Object.getOwnPropertyDescriptor(HTMLElement.prototype, name)] as const,
 );
 
-/** jsdom has no layout: report the element whose text is `text` as clipped. */
-function stubOverflowingText(text: string) {
-  const widths = { scrollWidth: 320, clientWidth: 120 };
-  for (const [name, width] of Object.entries(widths)) {
+/** jsdom has no layout: report the element whose text is `text` with these sizes. */
+function stubMeasuredText(text: string, sizes: Record<string, number>) {
+  for (const [name, size] of Object.entries(sizes)) {
     Object.defineProperty(HTMLElement.prototype, name, {
       configurable: true,
       get(this: HTMLElement) {
-        return this.textContent === text ? width : 0;
+        return this.textContent === text ? size : 0;
       },
     });
   }
+}
+
+/** Wider than its box, as a truncated single line. */
+function stubOverflowingText(text: string) {
+  stubMeasuredText(text, { scrollWidth: 320, clientWidth: 120 });
+}
+
+/** Taller than its box, as text clamped to a number of lines. */
+function stubClampedText(text: string) {
+  stubMeasuredText(text, { scrollHeight: 120, clientHeight: 40 });
 }
 
 afterEach(() => {
@@ -69,5 +78,65 @@ describe("TooltipText overflow reporting", () => {
     expect(onOverflowChange).toHaveBeenLastCalledWith(false);
     expect(onOverflowChange).not.toHaveBeenCalledWith(true);
     expect(screen.getByText("Fits").getAttributeNames().sort()).toEqual(["class", "data-state"]);
+  });
+});
+
+describe("TooltipText overflow axis", () => {
+  const clamped = "A note clamped to six lines";
+
+  it("ignores vertical overflow by default", () => {
+    stubClampedText(clamped);
+    const onOverflowChange = vi.fn();
+    render(
+      <TooltipText className="line-clamp-6" onOverflowChange={onOverflowChange}>
+        {clamped}
+      </TooltipText>,
+    );
+    expect(onOverflowChange).toHaveBeenLastCalledWith(false);
+    expect(onOverflowChange).not.toHaveBeenCalledWith(true);
+  });
+
+  it('reports vertical overflow with overflowAxis="both" and shows the tooltip', async () => {
+    stubClampedText(clamped);
+    const user = userEvent.setup();
+    const onOverflowChange = vi.fn();
+    render(
+      <TooltipText overflowAxis="both" className="line-clamp-6" onOverflowChange={onOverflowChange}>
+        {clamped}
+      </TooltipText>,
+    );
+    await waitFor(() => expect(onOverflowChange).toHaveBeenLastCalledWith(true));
+    await user.hover(screen.getByText(clamped));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(clamped);
+  });
+
+  it('still reports horizontal overflow with overflowAxis="both"', async () => {
+    stubOverflowingText(clamped);
+    const onOverflowChange = vi.fn();
+    render(
+      <TooltipText overflowAxis="both" onOverflowChange={onOverflowChange}>
+        {clamped}
+      </TooltipText>,
+    );
+    await waitFor(() => expect(onOverflowChange).toHaveBeenLastCalledWith(true));
+  });
+
+  it("measures again when the axis changes, even if the size does not", async () => {
+    stubClampedText(clamped);
+    const onOverflowChange = vi.fn();
+    const { rerender } = render(
+      <TooltipText onOverflowChange={onOverflowChange}>{clamped}</TooltipText>,
+    );
+    expect(onOverflowChange).toHaveBeenLastCalledWith(false);
+
+    rerender(
+      <TooltipText overflowAxis="both" onOverflowChange={onOverflowChange}>
+        {clamped}
+      </TooltipText>,
+    );
+    await waitFor(() => expect(onOverflowChange).toHaveBeenLastCalledWith(true));
+
+    rerender(<TooltipText onOverflowChange={onOverflowChange}>{clamped}</TooltipText>);
+    await waitFor(() => expect(onOverflowChange).toHaveBeenLastCalledWith(false));
   });
 });
