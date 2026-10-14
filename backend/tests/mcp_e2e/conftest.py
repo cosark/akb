@@ -57,10 +57,12 @@ def _request_json(
     stage: str,
     body: Mapping[str, Any] | None = None,
     authorization: str | None = None,
+    timeout: float | None = None,
 ) -> dict[str, Any]:
     headers = {"Authorization": authorization} if authorization else None
     try:
-        response = client.request(method, url, json=body, headers=headers)
+        kwargs = {"timeout": timeout} if timeout is not None else {}
+        response = client.request(method, url, json=body, headers=headers, **kwargs)
     except httpx.HTTPError:
         raise RuntimeSetupError(f"{stage} request failed") from None
     if response.status_code != 200:
@@ -118,7 +120,7 @@ def _prepare_runtime(descriptor: RuntimeDescriptor, client: httpx.Client) -> Run
     discovery = _request_json(client, "GET", descriptor.discovery_url, stage="fixture discovery")
     mint = mint_path(discovery)
     reset = _request_json(
-        client, "POST", descriptor.reset_url, stage="fixture reset", body=descriptor.reset_body
+        client, "POST", descriptor.reset_url, stage="fixture reset", body=descriptor.reset_body, timeout=210.0
     )
     if reset.get("status") != "ready" or reset.get("scenario") != descriptor.scenario:
         raise RuntimeSetupError("fixture reset did not return the selected ready scenario")

@@ -380,10 +380,8 @@ jobs:
             tests/test_pgvector_scope_routing_postgres.py
             tests/test_native_search_source_scope_postgres.py
             tests/test_bm25_revert_range_postgres.py
-            tests/test_bm25_runtime_reset_postgres.py
             # Force a real reset/writer deadlock; mocks cannot prove rollback
             # releases the locks needed for the same reset request to recover.
-            tests/test_e2e_runtime_reset_postgres.py
             # Needs both servers: the decision turns on whether the server
             # provides vchord_bm25.
             tests/test_sparse_shape_decision_postgres.py

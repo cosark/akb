@@ -71,23 +71,6 @@ DEFAULT_COMPOSE_PROJECT = "akb-e2e"
 DEFAULT_TIMEOUT_SECONDS = 180.0
 DEFAULT_PROFILE = "tool-only"
 SOURCE_REVISION_ENV = "AKB_E2E_SOURCE_REVISION"
-POSTGRES_RESET_MAX_ATTEMPTS = 3
-POSTGRES_RESET_BACKOFF_SECONDS = (0.05, 0.1)
-MINIO_RESET_MAX_ATTEMPTS = 3
-MINIO_RESET_BACKOFF_SECONDS = (0.05, 0.1)
-MINIO_DELETE_BATCH_SIZE = 1000
-MINIO_RETRYABLE_ERROR_CODES = frozenset(
-    {
-        "InternalError",
-        "InternalFailure",
-        "OperationAborted",
-        "RequestTimeout",
-        "ServiceUnavailable",
-        "SlowDown",
-        "Throttling",
-        "ThrottlingException",
-    }
-)
 
 
 def _canonical_fixture_json(value: object) -> bytes:
@@ -376,33 +359,6 @@ class ProvisioningFailure(RuntimeError):
     """A dependency, process, or fixture precondition failed."""
 
 
-class MinioResetFailure(ProvisioningFailure):
-    """A bounded MinIO reset failed with sanitized operation evidence."""
-
-    def __init__(self, detail: str, evidence: dict[str, object]) -> None:
-        super().__init__(detail)
-        self.evidence = evidence
-
-
-class _MinioResetOperationError(RuntimeError):
-    """An S3 reset operation failed, with an explicit retry classification."""
-
-    def __init__(
-        self,
-        operation: str,
-        code: str,
-        message: str,
-        *,
-        retryable: bool,
-        exception_type: str = "S3ResponseError",
-    ) -> None:
-        super().__init__(message)
-        self.operation = operation
-        self.code = code
-        self.retryable = retryable
-        self.exception_type = exception_type
-
-
 class BlockedRuntimeConfig(ProvisioningFailure):
     """A requested capability cannot be provided by this runtime."""
 
@@ -458,6 +414,7 @@ class RuntimeConfig:
     profile: str = DEFAULT_PROFILE
     capabilities: tuple[str, ...] = ()
     frontend_enabled: bool = False
+    storage_generation: int = 0
 
     @property
     def capability_profile(self) -> CapabilityProfile:
@@ -501,11 +458,15 @@ class RuntimeConfig:
 
     @property
     def vault_dir(self) -> Path:
-        return self.state_dir / "vaults"
+        name = "vaults" if self.storage_generation == 0 else f"vaults-{self.storage_generation}"
+        return self.state_dir / name
 
     @property
     def config_dir(self) -> Path:
-        return self.runtime_root / "config"
+        root = self.runtime_root if self.storage_generation == 0 else (
+            self.runtime_root / f"generation-{self.storage_generation}"
+        )
+        return root / "config"
 
     @property
     def logs_dir(self) -> Path:
@@ -597,38 +558,75 @@ def _tcp_ready(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
+def _live_process_groups(root_pid: int, owned_groups: set[int]) -> set[int]:
+    """Discover descendant sessions as well as children in the original group.
+
+    External Git deliberately creates a new session. Remember its group before
+    the backend exits and reparents it; killing only the backend PGID misses it.
+    Zombies cannot write and are left to their parent to reap.
+    """
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,ppid=,pgid=,stat="],
+        capture_output=True, text=True, check=True, timeout=2,
+    )
+    rows = []
+    for line in result.stdout.splitlines():
+        pid, parent, group, state = line.split(maxsplit=3)
+        rows.append((int(pid), int(parent), int(group), state))
+    descendants = {root_pid}
+    while True:
+        found = {pid for pid, parent, _group, _state in rows if parent in descendants}
+        if found <= descendants:
+            break
+        descendants.update(found)
+    owned_groups.update(group for pid, _parent, group, _state in rows if pid in descendants)
+    if os.getpgrp() in owned_groups:
+        raise ProvisioningFailure("refusing to stop the supervisor process group")
+    return {group for _pid, _parent, group, state in rows
+            if group in owned_groups and not state.startswith("Z")}
+
+
 async def terminate_process(
     process: asyncio.subprocess.Process,
     *,
     process_group: bool = True,
     grace_seconds: float = 10.0,
 ) -> None:
-    """Terminate a child and its process group, escalating after a grace period."""
-
-    if process.returncode is not None:
-        return
-    try:
-        if process_group:
-            os.killpg(process.pid, signal.SIGTERM)
-        else:
+    """Stop and verify owned processes, retaining ownership if shutdown fails."""
+    if not process_group:
+        if process.returncode is None:
             process.terminate()
-    except ProcessLookupError:
-        return
-
-    try:
-        await asyncio.wait_for(process.wait(), timeout=grace_seconds)
-        return
-    except asyncio.TimeoutError:
-        pass
-
-    try:
-        if process_group:
-            os.killpg(process.pid, signal.SIGKILL)
-        else:
+        try:
+            await asyncio.wait_for(process.wait(), timeout=grace_seconds)
+        except asyncio.TimeoutError:
             process.kill()
-    except ProcessLookupError:
+            await asyncio.wait_for(process.wait(), timeout=5)
         return
-    await process.wait()
+
+    groups = {process.pid}
+    signalled: set[int] = set()
+    deadline = time.monotonic() + grace_seconds
+    while True:
+        live = await asyncio.to_thread(_live_process_groups, process.pid, groups)
+        for group in live - signalled:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(group, signal.SIGTERM)
+            signalled.add(group)
+        if not live:
+            await asyncio.wait_for(process.wait(), timeout=5)
+            return
+        if time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(0.1)
+    for group in live:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(group, signal.SIGKILL)
+    deadline = time.monotonic() + 5
+    while await asyncio.to_thread(_live_process_groups, process.pid, groups):
+        if time.monotonic() >= deadline:
+            raise ProvisioningFailure("owned process group did not terminate")
+        await asyncio.sleep(0.1)
+    await asyncio.wait_for(process.wait(), timeout=5)
 
 
 class E2ERuntime:
@@ -636,7 +634,9 @@ class E2ERuntime:
         self.config = config
         self.profile = config.capability_profile
         self._children: dict[str, ManagedProcess] = {}
-        self._active_command: asyncio.subprocess.Process | None = None
+        self._stopping_children: set[str] = set()
+        self._active_commands: set[asyncio.subprocess.Process] = set()
+        self._reset_task: asyncio.Task[Any] | None = None
         self._fixture_server: Any | None = None
         self._fixture_task: asyncio.Task[Any] | None = None
         self._suite_process: ManagedProcess | None = None
@@ -646,6 +646,8 @@ class E2ERuntime:
         self._lifecycle_generation = 0
         self._cleaned = False
         self._prepared = False
+        self._lifecycle_state = "starting"
+        self._proxy_executable: Path | None = None
         self._fixture_catalog: dict[str, object] = {
             "status": "starting",
             "scenario": self.config.scenario,
@@ -664,16 +666,8 @@ class E2ERuntime:
         self._dependency_reset_count = 0
         self._dependency_reset_wall_seconds = 0.0
         self._dependency_reset_evidence: dict[str, object] = {
-            "strategy": "in_place",
-            "preserves": [
-                "postgres_container",
-                "minio_container",
-                "compose_network",
-                "compose_volumes",
-                "backend_process",
-                "embedding_process",
-                "stdio_process",
-            ],
+            "strategy": "recreate",
+            "preserves": ["fixture_origin", "app_origin"],
             "count": 0,
             "wall_seconds": 0.0,
         }
@@ -855,9 +849,12 @@ class E2ERuntime:
 
     def fixture_health(self) -> dict[str, object]:
         frontend_ready = self.frontend_ready
-        ready = self.app_ready and (not self.config.frontend_enabled or frontend_ready)
+        ready = (self._prepared and self._lifecycle_state == "ready" and self.app_ready
+                 and (not self.config.frontend_enabled or frontend_ready))
         health: dict[str, object] = {
-            "status": "ready" if ready else "starting",
+            "status": "ready" if ready else (
+                self._lifecycle_state if self._lifecycle_state != "ready" else "starting"
+            ),
             "scenario": self.config.scenario,
             "app_ready": self.app_ready,
         }
@@ -897,6 +894,9 @@ class E2ERuntime:
                 ):
                     value = value.replace(private, "[redacted]")
             return value
+
+        if not self._prepared or self._lifecycle_state != "ready":
+            return {"status": self._lifecycle_state, "scenario": self.config.scenario}
 
         catalog = scrub(json.loads(json.dumps(self._fixture_catalog)))
         if not isinstance(catalog, dict):
@@ -1097,6 +1097,23 @@ class E2ERuntime:
         raise ValueError("unsupported fault target")
 
     async def fixture_control(
+        self,
+        action: str,
+        target: str | None,
+        enabled: bool,
+        kind: str | None = None,
+    ) -> dict[str, object]:
+        # A queued control belongs to the generation in which it was received.
+        # It must never mutate a replacement fixture after waiting for reset.
+        generation = self._lifecycle_generation
+        admitted = self._prepared and self._lifecycle_state == "ready"
+        async with self._reset_lock:
+            if not admitted or generation != self._lifecycle_generation or not self._prepared:
+                return {"status": "rejected", "scenario": self.scenario,
+                        "action": action, "reason": "runtime_not_ready"}
+            return await self._apply_fixture_control(action, target, enabled, kind)
+
+    async def _apply_fixture_control(
         self,
         action: str,
         target: str | None,
@@ -1719,6 +1736,7 @@ class E2ERuntime:
                 if (
                     requested_generation != self._lifecycle_generation
                     or self._resetting
+                    or not self._prepared
                 ):
                     return
                 await self._stop_named_process("backend")
@@ -1880,6 +1898,8 @@ class E2ERuntime:
         import yaml
         from app.services.local_session_keys import generate_local_session_keyset
 
+        self.config.config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.config.vault_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         local_key_dir = self.config.config_dir / "local-session"
         generate_local_session_keyset(local_key_dir)
 
@@ -1997,15 +2017,23 @@ class E2ERuntime:
                 stderr=handle,
                 start_new_session=True,
             )
-            self._active_command = process
+            self._active_commands.add(process)
+            released = False
             try:
                 if stdin_data is not None and process.stdin is not None:
                     process.stdin.write(stdin_data)
                     await process.stdin.drain()
                     process.stdin.close()
                 returncode = await process.wait()
+                released = True
+            except BaseException:
+                # Cancellation must not leave Compose/npm running after a failed reset.
+                await terminate_process(process)
+                released = True
+                raise
             finally:
-                self._active_command = None
+                if released:
+                    self._active_commands.discard(process)
         if check and returncode != 0:
             raise ProvisioningFailure(
                 f"command failed with exit code {returncode}; see {log_path}"
@@ -2065,7 +2093,7 @@ class E2ERuntime:
             os.chmod(log_path, 0o600)
             process = await asyncio.create_subprocess_exec(
                 *command,
-                cwd=str(self.config.runtime_root),
+                cwd=str(self.config.config_dir.parent if name == "backend" else self.config.runtime_root),
                 env=self._child_environment(environment),
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=handle,
@@ -2107,14 +2135,19 @@ class E2ERuntime:
         return managed
 
     async def _stop_named_process(self, name: str) -> None:
-        managed = self._children.pop(name, None)
+        managed = self._children.get(name)
         if managed is None:
             return
-        if managed.stdin is not None:
-            managed.stdin.close()
-            with contextlib.suppress(Exception):
-                await managed.stdin.wait_closed()
-        await terminate_process(managed.process, process_group=managed.process_group)
+        self._stopping_children.add(name)
+        try:
+            if managed.stdin is not None:
+                managed.stdin.close()
+                with contextlib.suppress(Exception):
+                    await managed.stdin.wait_closed()
+            await terminate_process(managed.process, process_group=managed.process_group)
+            self._children.pop(name, None)
+        finally:
+            self._stopping_children.discard(name)
 
     async def _start_dependencies(self) -> None:
         # --build: PostgreSQL is built from deploy/postgres, and a project name
@@ -2131,7 +2164,7 @@ class E2ERuntime:
         self._dependency_identity = await asyncio.to_thread(self._dependency_identity_snapshot)
 
     def _dependency_identity_snapshot(self) -> dict[str, object]:
-        """Capture identities that an in-place fixture reset must preserve."""
+        """Capture container, network, and volume identities for reset evidence."""
 
         docker = os.environ.get("AKB_DOCKER_BIN", "docker")
         services: dict[str, object] = {}
@@ -2190,292 +2223,8 @@ class E2ERuntime:
             }
         return {"services": services}
 
-    async def _reset_postgres_in_place(self) -> None:
-        """Atomically clear fixture rows, retrying rolled-back deadlock victims."""
-
-        attempt = 0
-
-        try:
-            import asyncpg
-
-            connection = await asyncpg.connect(
-                host="127.0.0.1",
-                port=self.config.postgres_port,
-                user="akb",
-                password="akb",
-                database="akb",
-            )
-            try:
-                username, _password = self.config.credentials.values()
-                for attempt in range(1, POSTGRES_RESET_MAX_ATTEMPTS + 1):
-                    try:
-                        # The live backend can still hold write locks. Roll back
-                        # ALL cleanup before retrying, including tokens/users;
-                        # a successful TRUNCATE alone is not a completed reset.
-                        async with connection.transaction():
-                            await connection.execute(
-                                """
-                                DO $cleanup$
-                                DECLARE table_list text;
-                                BEGIN
-                                    SELECT string_agg(format('%I.%I', schemaname, tablename), ', ')
-                                      INTO table_list
-                                      FROM pg_tables
-                                     WHERE schemaname NOT LIKE 'pg_%'
-                                       AND schemaname <> 'information_schema'
-                                       AND tablename NOT IN (
-                                           'schema_migrations',
-                                           'users',
-                                           'tokens',
-                                           'auth_runtime_epoch_upgrade',
-                                           'auth_runtime_state',
-                                           'bm25_stats',
-                                           'bm25_vocab_epoch',
-                                           'document_revision_bootstrap_claims',
-                                           'document_revision_authority_pending',
-                                           'document_revision_authority_marker',
-                                           'native_revision_existing_authority_fence',
-                                           'native_revision_existing_authority',
-                                           'native_revision_legacy_write_fence'
-                                       );
-                                    IF table_list IS NOT NULL THEN
-                                        EXECUTE format('TRUNCATE TABLE %s RESTART IDENTITY CASCADE', table_list);
-                                    END IF;
-                                    -- Fixture-only recovery for a prior reset that cleared
-                                    -- the singleton. Preserve every existing epoch value;
-                                    -- production readers still reject a missing row.
-                                    IF to_regclass('public.bm25_vocab_epoch') IS NOT NULL THEN
-                                        INSERT INTO public.bm25_vocab_epoch (id) VALUES (1)
-                                        ON CONFLICT (id) DO NOTHING;
-                                    END IF;
-                                END
-                                $cleanup$
-                                """
-                            )
-                            await connection.execute(
-                                """
-                                DELETE FROM tokens
-                                 WHERE user_id NOT IN (
-                                     SELECT id FROM users WHERE username = $1
-                                 )
-                                """,
-                                username,
-                            )
-                            await connection.execute(
-                                "DELETE FROM users WHERE username <> $1",
-                                username,
-                            )
-                        break
-                    except Exception as exc:
-                        if (
-                            getattr(exc, "sqlstate", None) != "40P01"
-                            or attempt == POSTGRES_RESET_MAX_ATTEMPTS
-                        ):
-                            raise
-                        # The transaction context has released all locks before
-                        # the delay. Do not log server details on retry: they can
-                        # contain fixture secrets. Final diagnostics are redacted.
-                        LOGGER.warning(
-                            "PostgreSQL fixture reset deadlocked (sqlstate=40P01, "
-                            "attempt=%d/%d); retrying after rollback",
-                            attempt, POSTGRES_RESET_MAX_ATTEMPTS,
-                        )
-                        await asyncio.sleep(POSTGRES_RESET_BACKOFF_SECONDS[attempt - 1])
-            finally:
-                await connection.close()
-        except Exception as exc:
-            sqlstate = getattr(exc, "sqlstate", None)
-            detail = f"{type(exc).__name__} attempts={attempt}"
-            if sqlstate:
-                detail += f" sqlstate={sqlstate}"
-            message = str(exc)
-            for private in self._fixture_private_values:
-                if private:
-                    message = message.replace(private, "[REDACTED]")
-            if message:
-                detail += f": {message[:1000]}"
-            LOGGER.error("PostgreSQL in-place fixture reset failed: %s", detail)
-            raise ProvisioningFailure(
-                f"PostgreSQL in-place fixture reset failed: {detail}"
-            ) from None
-
-    def _minio_exception_code(self, error: BaseException) -> tuple[str, int | None]:
-        response = getattr(error, "response", None)
-        if isinstance(response, dict):
-            error_payload = response.get("Error")
-            code = error_payload.get("Code") if isinstance(error_payload, dict) else None
-            metadata = response.get("ResponseMetadata")
-            status = metadata.get("HTTPStatusCode") if isinstance(metadata, dict) else None
-            return (
-                str(code) if code is not None else type(error).__name__,
-                status if isinstance(status, int) else None,
-            )
-        return type(error).__name__, None
-
-    def _minio_retryable_exception(self, error: BaseException) -> bool:
-        try:
-            from botocore.exceptions import (
-                ConnectTimeoutError,
-                ConnectionClosedError,
-                EndpointConnectionError,
-                ProxyConnectionError,
-                ReadTimeoutError,
-            )
-
-            if isinstance(
-                error,
-                (
-                    ConnectTimeoutError,
-                    ConnectionClosedError,
-                    EndpointConnectionError,
-                    ProxyConnectionError,
-                    ReadTimeoutError,
-                ),
-            ):
-                return True
-        except ImportError:
-            pass
-        code, status = self._minio_exception_code(error)
-        return code in MINIO_RETRYABLE_ERROR_CODES or (status is not None and status >= 500)
-
-    def _redact_minio_message(self, message: str) -> str:
-        redacted = message
-        for private in self._fixture_private_values:
-            if private:
-                redacted = redacted.replace(private, "[REDACTED]")
-        return redacted[:500]
-
-    def _minio_operation_error(self, operation: str, error: BaseException) -> _MinioResetOperationError:
-        code, status = self._minio_exception_code(error)
-        if status is not None:
-            code = f"{code} http={status}"
-        return _MinioResetOperationError(
-            operation,
-            code,
-            self._redact_minio_message(str(error)),
-            retryable=self._minio_retryable_exception(error),
-            exception_type=type(error).__name__,
-        )
-
-    def _minio_list_keys(self, client) -> list[str]:
-        try:
-            paginator = client.get_paginator("list_objects_v2")
-            keys: list[str] = []
-            for page in paginator.paginate(Bucket="akb-files"):
-                contents = page.get("Contents", [])
-                if not isinstance(contents, list):
-                    raise ValueError("Contents is not a list")
-                for item in contents:
-                    if not isinstance(item, dict) or not isinstance(item.get("Key"), str):
-                        raise ValueError("object listing contains an invalid key")
-                    keys.append(item["Key"])
-            return keys
-        except _MinioResetOperationError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - classify and redact below
-            raise self._minio_operation_error("list", exc) from None
-
-    def _minio_reset_pass(self, client) -> None:
-        keys = self._minio_list_keys(client)
-        for offset in range(0, len(keys), MINIO_DELETE_BATCH_SIZE):
-            batch = keys[offset : offset + MINIO_DELETE_BATCH_SIZE]
-            try:
-                response = client.delete_objects(
-                    Bucket="akb-files",
-                    Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True},
-                )
-            except Exception as exc:  # noqa: BLE001 - classify and redact below
-                raise self._minio_operation_error("delete", exc) from None
-            errors = response.get("Errors", []) if isinstance(response, dict) else None
-            if not isinstance(errors, list):
-                raise _MinioResetOperationError(
-                    "delete", "InvalidResponse", "delete response Errors is not a list", retryable=False
-                )
-            if errors:
-                first = errors[0] if isinstance(errors[0], dict) else {}
-                code = str(first.get("Code", "UnknownError"))
-                message = self._redact_minio_message(str(first.get("Message", "delete response returned an error")))
-                status = first.get("HTTPStatusCode")
-                retryable = code in MINIO_RETRYABLE_ERROR_CODES or (
-                    isinstance(status, int) and status >= 500
-                )
-                raise _MinioResetOperationError(
-                    "delete", code, message, retryable=retryable, exception_type="S3ResponseError"
-                )
-        remaining = self._minio_list_keys(client)
-        if remaining:
-            raise _MinioResetOperationError(
-                "verify",
-                "BucketNotEmpty",
-                f"bucket still contains {len(remaining)} object(s)",
-                retryable=True,
-            )
-
-    def _clear_minio_objects(self) -> dict[str, object]:
-        """Delete scenario objects, preserving the bucket and volume identities."""
-
-        started = time.perf_counter()
-        evidence: dict[str, object] = {
-            "status": "failed",
-            "attempts": 0,
-            "retry_count": 0,
-            "wall_seconds": 0.0,
-        }
-        try:
-            import boto3
-
-            client = boto3.client(
-                "s3",
-                endpoint_url=self.config.minio_origin,
-                aws_access_key_id="akb-ci",
-                aws_secret_access_key="akb-ci-secret",
-            )
-        except Exception as exc:  # noqa: BLE001 - classify and redact below
-            operation_error = self._minio_operation_error("list", exc)
-            evidence.update({"attempts": 1, "last_failure": str(operation_error)})
-            evidence["wall_seconds"] = time.perf_counter() - started
-            raise MinioResetFailure(
-                f"MinIO in-place fixture reset failed: operation=list attempt=1/{MINIO_RESET_MAX_ATTEMPTS} "
-                f"exception={type(exc).__name__} s3_code={operation_error.code}: {operation_error}",
-                evidence,
-            ) from None
-
-        for attempt in range(1, MINIO_RESET_MAX_ATTEMPTS + 1):
-            evidence["attempts"] = attempt
-            try:
-                self._minio_reset_pass(client)
-                evidence["status"] = "recovered" if attempt > 1 else "success"
-                evidence["retry_count"] = attempt - 1
-                evidence["wall_seconds"] = time.perf_counter() - started
-                return evidence
-            except _MinioResetOperationError as exc:
-                detail = (
-                    f"MinIO in-place fixture reset failed: operation={exc.operation} "
-                    f"attempt={attempt}/{MINIO_RESET_MAX_ATTEMPTS} exception={exc.exception_type} "
-                    f"s3_code={exc.code}: {exc}"
-                )
-                evidence["last_failure"] = detail
-                if not exc.retryable or attempt >= MINIO_RESET_MAX_ATTEMPTS:
-                    evidence["retry_count"] = attempt - 1
-                    evidence["wall_seconds"] = time.perf_counter() - started
-                    raise MinioResetFailure(detail, evidence) from None
-                evidence["retry_count"] = attempt
-                time.sleep(MINIO_RESET_BACKOFF_SECONDS[min(attempt - 1, len(MINIO_RESET_BACKOFF_SECONDS) - 1)])
-            except Exception as exc:  # noqa: BLE001 - bounded diagnostic fallback
-                operation_error = self._minio_operation_error("list", exc)
-                detail = (
-                    f"MinIO in-place fixture reset failed: operation=list "
-                    f"attempt={attempt}/{MINIO_RESET_MAX_ATTEMPTS} exception={type(exc).__name__} "
-                    f"s3_code={operation_error.code}: {operation_error}"
-                )
-                evidence["last_failure"] = detail
-                evidence["retry_count"] = attempt - 1
-                evidence["wall_seconds"] = time.perf_counter() - started
-                raise MinioResetFailure(detail, evidence) from None
-        raise AssertionError("MinIO reset retry loop did not terminate")
-
     def _process_identity_snapshot(self) -> dict[str, object]:
-        """Capture managed process identities that a fixture reset must preserve."""
+        """Capture managed process identities for reset evidence."""
 
         return {
             name: {
@@ -2662,7 +2411,9 @@ class E2ERuntime:
     async def _start_stdio_proxy(self) -> None:
         if not self._pat_value:
             raise BlockedRuntimeConfig("stdio capability requires a runtime PAT")
-        executable = await self._install_stdio_proxy()
+        if self._proxy_executable is None:
+            self._proxy_executable = await self._install_stdio_proxy()
+        executable = self._proxy_executable
         node = shutil.which("node")
         if node is None:
             raise BlockedRuntimeConfig("stdio capability requires node")
@@ -4606,98 +4357,92 @@ class E2ERuntime:
         if self.config.frontend_enabled:
             await self._start_frontend()
         self._prepared = True
+        self._lifecycle_state = "ready"
 
     async def reset_scenario(self) -> None:
+        """Replace application processes and storage before admitting another test.
+
+        Old remote I/O may complete after cancellation. Discarding the old
+        PostgreSQL/MinIO volumes and using a fresh Git path isolates those writes
+        without pretending that task cancellation is a storage barrier.
+        """
         async with self._reset_lock:
-            if not self._prepared:
+            if not self._prepared or self._lifecycle_state != "ready":
                 raise ProvisioningFailure("fixture reset requested before runtime readiness")
             started = time.perf_counter()
-            identity_before: dict[str, object] | None = None
-            identity_after: dict[str, object] | None = None
-            process_before: dict[str, object] = {}
-            process_after: dict[str, object] = {}
-            minio_reset_evidence: dict[str, object] = {
-                "status": "not_run",
-                "attempts": 0,
-                "retry_count": 0,
-                "wall_seconds": 0.0,
-            }
-            preserved = False
             self._lifecycle_generation += 1
+            self._reset_task = asyncio.current_task()
             self._resetting = True
+            self._prepared = False
+            self._lifecycle_state = "resetting"
+            self._fixture_catalog = {"status": "resetting", "scenario": self.scenario}
+            identity_before = self._dependency_identity
+            process_before = self._process_identity_snapshot()
+            phases: dict[str, float] = {}
+            phase = "stop_processes"
+            phase_started = time.perf_counter()
+            succeeded = False
             try:
-                identity_before = await asyncio.to_thread(self._dependency_identity_snapshot)
-                process_before = self._process_identity_snapshot()
-                if self.config.scenario == "app-installation-lifecycle":
-                    if not await self._restore_fault(
-                        {}, "member_installation_unavailable"
-                    ):
-                        raise ProvisioningFailure(
-                            "member installation fault could not be restored before reset"
-                        )
-                self._fixture_controls.clear()
-                self._stdio_initialize_observed = False
-                self._stdio_tools_list_observed = False
-                self._stdio_read_call_observed = False
-                self._stdio_next_id = 2
-                await self._reset_postgres_in_place()
-                try:
-                    minio_reset_evidence = await asyncio.to_thread(self._clear_minio_objects)
-                except MinioResetFailure as exc:
-                    minio_reset_evidence = dict(exc.evidence)
-                    raise
-                if self.config.vault_dir.exists():
-                    shutil.rmtree(self.config.vault_dir)
-                self.config.vault_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-                os.chmod(self.config.vault_dir, 0o700)
-                for directory in (
-                    self.config.vault_dir / "_worktrees",
-                    self.config.vault_dir / ".akb-write-locks",
-                    self.config.vault_dir / ".akb-create-locks",
-                ):
-                    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-                    os.chmod(directory, 0o700)
-                await self._wait_tcp("PostgreSQL", "127.0.0.1", self.config.postgres_port)
-                await self._wait_http(
-                    "MinIO",
-                    f"{self.config.minio_origin}/minio/health/live",
-                    lambda status, _body: status == 200,
-                )
-                await asyncio.to_thread(self._ensure_minio_bucket)
-                await self._seed_external_credential()
-                await self._mint_runtime_pat()
-                identity_after = await asyncio.to_thread(self._dependency_identity_snapshot)
-                process_after = self._process_identity_snapshot()
-                if identity_before != identity_after or process_before != process_after:
-                    raise ProvisioningFailure("in-place fixture reset changed a runtime identity")
-                self._dependency_identity = identity_after
-                preserved = True
+                async with asyncio.timeout(self.config.timeout_seconds):
+                    for name in ("stdio", "backend", "embed"):
+                        await self._stop_named_process(name)
+                    phases[phase] = time.perf_counter() - phase_started
+                    phase, phase_started = "discard_storage", time.perf_counter()
+                    await self._compose("down", "--volumes", "--remove-orphans")
+                    phases[phase] = time.perf_counter() - phase_started
+                    phase, phase_started = "start_dependencies", time.perf_counter()
+                    self.config = dataclasses.replace(
+                        self.config, storage_generation=self.config.storage_generation + 1
+                    )
+                    self._write_config()
+                    self._fixture_controls.clear()
+                    self._pat_value = ""
+                    self._stdio_initialize_observed = False
+                    self._stdio_tools_list_observed = False
+                    self._stdio_read_call_observed = False
+                    self._stdio_next_id = 2
+                    await self._start_dependencies()
+                    phases[phase] = time.perf_counter() - phase_started
+                    phase, phase_started = "bootstrap_and_seed", time.perf_counter()
+                    self._lifecycle_state = "starting"
+                    await self._start_embed_stub()
+                    await self._bootstrap_backend_and_seed()
+                    phases[phase] = time.perf_counter() - phase_started
+                    phase, phase_started = "start_stdio", time.perf_counter()
+                    if self.profile.needs_stdio:
+                        await self._start_stdio_proxy()
+                    phases[phase] = time.perf_counter() - phase_started
+                    self._prepared = True
+                    self._lifecycle_state = "ready"
+                    succeeded = True
+            except BaseException:
+                phases[phase] = time.perf_counter() - phase_started
+                self._lifecycle_state = "failed"
+                self._fixture_catalog = {"status": "failed", "scenario": self.scenario}
+                # Ownership is retained for cleanup; a partial reset is never
+                # reused. A fresh runtime invocation is required after failure.
+                raise
             finally:
+                self._reset_task = None
                 self._resetting = False
                 self._dependency_reset_count += 1
                 elapsed = time.perf_counter() - started
                 self._dependency_reset_wall_seconds += elapsed
                 self._dependency_reset_evidence = {
-                    "strategy": "in_place",
-                    "preserves": [
-                        "postgres_container",
-                        "minio_container",
-                        "compose_network",
-                        "compose_volumes",
-                        "backend_process",
-                        "embedding_process",
-                        "stdio_process",
-                    ],
+                    "strategy": "recreate",
+                    "preserves": ["fixture_origin", "app_origin"],
+                    "generation": self.config.storage_generation,
                     "count": self._dependency_reset_count,
                     "wall_seconds": self._dependency_reset_wall_seconds,
-                    "last_preserved": preserved,
-                    "minio_reset": minio_reset_evidence,
+                    "last_wall_seconds": elapsed,
+                    "last_succeeded": succeeded,
+                    "phase_seconds": phases,
+                    "failed_phase": None if succeeded else phase,
+                    "identity_before": identity_before,
+                    "identity_after": self._dependency_identity if succeeded else None,
                     "process_identity_before": process_before,
-                    "process_identity_after": process_after,
+                    "process_identity_after": self._process_identity_snapshot(),
                 }
-                if preserved and identity_before is not None and identity_after is not None:
-                    self._dependency_reset_evidence["identity_before"] = identity_before
-                    self._dependency_reset_evidence["identity_after"] = identity_after
 
     async def _serve_foreground(self) -> int:
         stop_task = asyncio.create_task(self._stop_event.wait(), name="serve-stop")
@@ -4723,9 +4468,11 @@ class E2ERuntime:
                         return 0
                     current_child_exited = any(
                         task in done and self._children.get(name) is child
+                        and name not in self._stopping_children
                         for name, (child, task) in child_tasks.items()
                     )
                     if not current_child_exited or self._resetting:
+                        await asyncio.sleep(0.1)
                         continue
                     LOGGER.error(
                         "E2E runtime child exited unexpectedly; see %s",
@@ -4941,19 +4688,39 @@ class E2ERuntime:
         if self._cleaned:
             return
         self._cleaned = True
-        if self._active_command is not None:
-            await terminate_process(self._active_command)
-            self._active_command = None
+        self._prepared = False
+        self._lifecycle_state = "failed"
+        reset_task = self._reset_task
+        if reset_task is not None and reset_task is not asyncio.current_task():
+            reset_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await reset_task
+        failures: list[str] = []
+
+        async def attempt(label: str, operation) -> bool:
+            try:
+                await operation
+                return True
+            except Exception:
+                # A stuck child must not prevent disposal of its database/S3
+                # storage. Keep failed ownership so cleanup can be retried.
+                LOGGER.error("runtime cleanup failed for %s", label)
+                failures.append(label)
+                return False
+
+        for process in tuple(self._active_commands):
+            if await attempt("command", terminate_process(process)):
+                self._active_commands.discard(process)
         if self._suite_process is not None:
-            await terminate_process(self._suite_process.process)
-            self._suite_process = None
-        await self._stop_fixture_control()
-        await self._stop_named_process("stdio")
-        await self._stop_named_process("frontend")
-        await self._stop_named_process("backend")
-        await self._stop_named_process("embed")
-        with contextlib.suppress(Exception):
-            await self._compose("down", "--volumes", "--remove-orphans", check=False)
+            if await attempt("suite", terminate_process(self._suite_process.process)):
+                self._suite_process = None
+        await attempt("fixture", self._stop_fixture_control())
+        for name in ("stdio", "frontend", "backend", "embed"):
+            await attempt(name, self._stop_named_process(name))
+        await attempt("dependencies", self._compose("down", "--volumes", "--remove-orphans"))
+        if failures:
+            self._cleaned = False
+            raise ProvisioningFailure("runtime cleanup incomplete: " + ", ".join(failures))
 
     def request_stop(self) -> None:
         self._stop_event.set()

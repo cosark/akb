@@ -20,8 +20,8 @@ from .contracts import StateProbe
 
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 DEFAULT_HTTP_TIMEOUT_SECONDS = 30.0
-# Matches scripts/ci/e2e_runtime.py::DEFAULT_TIMEOUT_SECONDS for reset/recovery.
-RESET_TIMEOUT_SECONDS = 180.0
+# Leave transport margin beyond the runtime's 180-second total reset deadline.
+RESET_TIMEOUT_SECONDS = 210.0
 
 
 class RuntimeContractError(RuntimeError):

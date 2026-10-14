@@ -63,6 +63,15 @@ jobs:
           uv run --locked --project backend python -c \
             'import sys; assert sys.version_info[:2] == (3, 14), sys.version'
 
+      - name: Verify reset storage isolation under an active writer
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/akb-e2e-python
+          UV_CACHE_DIR: ${{ runner.temp }}/akb-e2e-uv-cache
+          AKB_TEST_RESET_ISOLATION: "1"
+        run: |
+          uv run --locked --project backend python -m pytest \
+            backend/tests/test_e2e_runtime_reset_isolation.py -v --tb=short
+
       - name: Run repository-owned pytest and shell E2E runtime
         env:
           UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/akb-e2e-python

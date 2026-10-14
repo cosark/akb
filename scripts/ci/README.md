@@ -121,7 +121,7 @@ The topology is deliberately small:
 | embedding stub | Ubuntu host process | `127.0.0.1:8888` | deterministic `/v1/embeddings` responses |
 | backend | Ubuntu host process | `127.0.0.1:8000` | AKB application under test |
 | frontend (`--with-frontend`) | Ubuntu host process | `127.0.0.1:3000` by default | existing Vite SPA and per-run backend proxy |
-| fixture control | supervisor-owned in-process app | `127.0.0.1:8889` | health, discovery, and in-place scenario reset |
+| fixture control | supervisor-owned in-process app | `127.0.0.1:8889` | health, discovery, and isolated scenario reset |
 | MCP pytest behavior suite | Ubuntu host process | no public listener | authenticated MCP product scenarios through the official Python SDK |
 | curated suite runner | Ubuntu host process | no public listener | curated shell gate and count semantics |
 
@@ -148,22 +148,53 @@ The supervisor has two modes:
   the existing frontend package's `pnpm run dev` contract on `--frontend-port`
   (default `3000`), with its `/api` and `/mcp` proxy pointed at this run's
   backend origin. The fixture's
-  `POST /reset` performs an in-place scenario reset: it preserves the
-  PostgreSQL/MinIO containers, Compose network/volumes, and managed backend,
-  embedding, and stdio process identities while clearing application rows,
-  objects, and Git fixture data, then waits for backend readiness again; the
-  frontend process remains owned by the same serve lifecycle. Transient
-  MinIO list/delete/empty-verification failures receive a bounded idempotent
-  retry; reset discovery records the attempt count, retry count, elapsed time,
-  and redacted operation diagnostic.
+  `POST /reset` replaces the scenario's application processes and storage.
+  It closes fixture-control admission, stops stdio/backend/embedding processes,
+  destroys the dedicated PostgreSQL/MinIO containers and volumes, and bootstraps
+  fresh dependencies. Fixture data is seeded while the backend is stopped;
+  backend readiness, a fresh PAT, and stdio initialization must succeed before
+  the fixture becomes ready. The frontend and fixture origins remain stable.
 
-  PostgreSQL row cleanup (TRUNCATE, token cleanup, and user cleanup) commits
-  as one transaction. If a live writer makes that transaction a deadlock
-  victim (`40P01`), it rolls back before retrying, with at most three attempts
-  and 50/100 ms backoff. Other errors fail immediately; exhausted retries
-  preserve the redacted server diagnostic and attempt count. This recovers
-  reset-side deadlocks without restarting the backend; it does not pause
-  workers or make PostgreSQL, MinIO, and Git cleanup one atomic operation.
+  Every reset uses a new Git directory and backend configuration directory.
+  Earlier directories remain under the private runtime root for inspection;
+  the caller removes that root after collecting logs. Delayed writes into an
+  old Git path cannot contaminate the next scenario. Container image layers and
+  the installed Node consumer are reused, but live storage and application
+  process state are not. Reset never truncates tables under live workers.
+
+  Reset has one total `--timeout-seconds` budget (default 180 seconds). The MCP
+  pytest and catalog clients allow 210 seconds for the default reset response.
+  A larger runtime budget requires a correspondingly larger client budget.
+  Failure or cancellation leaves the fixture `failed`, hides stale discovery,
+  and rejects further mutations/resets; start a fresh runtime to recover.
+  Queued controls from an earlier generation are rejected. Discovery evidence
+  records `strategy: recreate`, generation, container/process identities,
+  cumulative and last-reset wall time, per-phase times, and failure phase.
+  These are isolation guarantees, not a distributed storage transaction.
+
+A local timing reference for #686 used `transport-proxy`, `empty`, no frontend,
+three sequential idle resets, and warm prebuilt PostgreSQL plus the pinned
+MinIO image. Initial preparation and final cleanup were excluded. On macOS
+arm64 with Docker Engine 29.1.2, the prior retry-based reset (commit
+`eeff7a9f`) took 1.063 / 1.021 / 1.031 seconds; generation replacement took
+14.538 / 14.246 / 14.071 seconds. Mean overhead increased from 1.038 to 14.285
+seconds (+13.247 seconds/reset). Mean phases were process stop 0.667s, storage
+removal 0.549s, dependency startup 6.221s, bootstrap/seed 6.810s, and stdio
+startup 0.037s. This is a small local latency sample, not a full-suite benchmark
+or monetary cost estimate; the measurement Compose used an already-built PG
+image rather than invoking a build. Runtime evidence provides phase times for
+measurements on other hosts.
+
+The E2E workflow also runs the Docker-backed reset regression explicitly:
+
+```bash
+AKB_TEST_RESET_ISOLATION=1 uv run --locked --project backend python -m pytest \
+  backend/tests/test_e2e_runtime_reset_isolation.py -v --tb=short
+```
+
+It holds a database write transaction across reset, verifies PostgreSQL/MinIO
+sentinels are gone and credentials/processes rotate, and creates a document
+through the real API to verify the backend writes to the new Git generation.
 
 The native catalog benchmark launcher is separate from this generic runtime;
 its interface and descriptor composition are documented in
@@ -412,8 +443,8 @@ When changing this area, preserve all of the following:
 - the optional frontend process uses an explicit `--with-frontend` flag, an
   isolated `--frontend-port`, and the run's backend origin for Vite proxying;
 - descriptor stdout stays parseable as one schema v2 JSON line; and
-- fixture reset keeps PostgreSQL/MinIO dependency identities stable and
-  publishes the reset count, duration, and preservation evidence; and
+- fixture reset replaces PostgreSQL/MinIO storage and backend/stdio processes,
+  publishes generation and phase timing evidence, and fails closed; and
 - the catalog benchmark's four cell runtimes remain isolated, with parallel
   cells and serial mutable-state trials inside each cell; and
 - runtime state stays private and outside the checkout.
