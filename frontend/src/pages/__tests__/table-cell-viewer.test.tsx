@@ -275,6 +275,22 @@ describe("table cell viewer", () => {
     expect(await screen.findByRole("dialog", { name: "notes" })).toBeInTheDocument();
   });
 
+  it("returns focus to the cell when the viewer is closed with the mouse", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    // A click opens any cell, including one that is not a tab stop.
+    const cell = await screen.findByRole("button", { name: "API outage" });
+    expect(cell).toHaveAttribute("tabindex", "-1");
+
+    await user.click(cell);
+    const dialog = screen.getByRole("dialog", { name: "title" });
+    expect(fullValue(dialog)).toHaveFocus();
+
+    await user.click(within(dialog).getByRole("button", { name: "Close dialog" }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await waitFor(() => expect(cell).toHaveFocus());
+  });
+
   it("makes a cell a tab stop when its text overflows the column", async () => {
     const restore = stubOverflowingText("API outage");
     try {
@@ -323,6 +339,24 @@ describe("table cell viewer", () => {
     expect(within(body).getByText("Empty string")).toHaveClass("italic");
   });
 
+  it("copies an empty string as the empty value, not as its label", async () => {
+    listRowsMock.mockResolvedValue(rowsResponse({ title: "" }));
+    const user = userEvent.setup();
+    // After setup(): user-event installs its own clipboard stub there.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    renderTable();
+
+    await user.click(await screen.findByRole("button", { name: "Empty" }));
+    const dialog = screen.getByRole("dialog", { name: "title" });
+    expect(within(fullValue(dialog)).getByText("Empty string")).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Copy value" }));
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledWith("");
+    expect(await within(dialog).findByRole("button", { name: "Copy value: copied" })).toBeInTheDocument();
+  });
+
   it("does not open the viewer from the row number column", async () => {
     vaultInfoMock.mockResolvedValue(writer);
     const user = userEvent.setup();
@@ -342,10 +376,48 @@ describe("table wrap text", () => {
     return screen.getByRole("button", { name: "Wrap text" });
   }
 
+  // The classes that produce each mode, beyond the data-wrap marker: wrapped
+  // values keep their line breaks and stop at six top-aligned lines; single
+  // lines are truncated and vertically centered.
+  const WRAPPED = { value: ["whitespace-pre-wrap", "line-clamp-6"], button: ["items-start"] };
+  const SINGLE_LINE = { value: ["truncate", "whitespace-nowrap"], button: ["items-center"] };
+
+  function expectCellWrapped(cell: HTMLElement, wrapped: boolean) {
+    expect(cell).toHaveAttribute("data-wrap", String(wrapped));
+    const button = within(cell).getByRole("button");
+    // The value span comes first; the sr-only labels follow it.
+    const value = button.firstElementChild;
+    const [mode, other] = wrapped ? [WRAPPED, SINGLE_LINE] : [SINGLE_LINE, WRAPPED];
+    expect(value).toHaveClass(...mode.value);
+    expect(button).toHaveClass(...mode.button);
+    for (const name of other.value) expect(value).not.toHaveClass(name);
+    for (const name of other.button) expect(button).not.toHaveClass(name);
+  }
+
   function expectCellsWrapped(wrapped: boolean) {
     const cells = dataCells();
     expect(cells).toHaveLength(7);
-    for (const cell of cells) expect(cell).toHaveAttribute("data-wrap", String(wrapped));
+    for (const cell of cells) expectCellWrapped(cell, wrapped);
+  }
+
+  /**
+   * The header row, the row number and the row actions stay in place while
+   * the grid scrolls, in either mode. Wrapped rows grow, so the row number
+   * and the actions move to the top of the row.
+   */
+  function expectStickyFrame(wrapped: boolean) {
+    const headers = screen.getAllByRole("columnheader");
+    // #, the seven columns, and the row actions.
+    expect(headers).toHaveLength(9);
+    for (const header of headers) expect(header).toHaveClass("sticky", "top-0");
+    const [rowNumber] = within(screen.getAllByRole("row")[1]).getAllByRole("cell");
+    const rowActions = screen.getByRole("button", { name: "Actions for row 1" }).closest("td");
+    expect(rowNumber).toHaveClass("sticky", "left-0");
+    expect(rowActions).toHaveClass("sticky", "right-0");
+    for (const cell of [rowNumber, rowActions]) {
+      if (wrapped) expect(cell).toHaveClass("align-top");
+      else expect(cell).not.toHaveClass("align-top");
+    }
   }
 
   it("is off by default, so cells keep a single line", async () => {
@@ -373,6 +445,20 @@ describe("table wrap text", () => {
     expect(localStorage.getItem(WRAP_TEXT_KEY)).toBe("false");
     expect(screen.getByRole("button", { name: /^Root cause:.*\(view full value\)$/ }))
       .toHaveTextContent(`${notes.slice(0, 120)}…`);
+  });
+
+  it("keeps the header, row number and row actions sticky in both modes", async () => {
+    vaultInfoMock.mockResolvedValue(writer);
+    const user = userEvent.setup();
+    renderTable();
+    await screen.findByRole("button", { name: "Actions for row 1" });
+    expectStickyFrame(false);
+
+    await user.click(wrapToggle());
+    expectStickyFrame(true);
+
+    await user.click(wrapToggle());
+    expectStickyFrame(false);
   });
 
   it("restores the saved choice when the page mounts again", async () => {
@@ -419,7 +505,7 @@ describe("table wrap text", () => {
     await user.click(await screen.findByRole("button", { name: "Wrap text" }));
 
     const cell = screen.getByRole("button", { name: /^Root cause:.*\(view full value\)$/ });
-    expect(cell.closest("td")).toHaveAttribute("data-wrap", "true");
+    expectCellWrapped(cell.closest("td")!, true);
     await user.click(cell);
 
     expect(fullValue(screen.getByRole("dialog", { name: "notes" })).textContent).toBe(longNotes);

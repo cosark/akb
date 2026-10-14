@@ -74,6 +74,7 @@ function TableCellViewerContent({ cell }: { cell: ViewedTableCell }) {
         <CellValueBody value={value} />
       </div>
       <div className="flex shrink-0 items-center justify-end border-t border-border bg-surface-2 px-2 py-1.5">
+        {/* The "Empty string" label is not copied: an empty string copies as "". */}
         <CopyButton
           value={value.text}
           label="Copy value"
