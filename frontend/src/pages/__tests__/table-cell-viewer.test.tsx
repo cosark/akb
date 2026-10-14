@@ -48,10 +48,32 @@ const rowId = "6ab163e8-6ea4-4d20-8765-bf912716384c";
 const notes =
   "Root cause: the gateway retried every failed request until the connection pool was exhausted, " +
   "so new sessions queued behind stale ones and the health check timed out before failover began.";
+// Longer than the 600-character display limit of wrapped cells.
+const longNotes = [notes, notes, notes, notes].join(" ");
 const steps = "Drain the gateway\nRotate the pool\n\nConfirm recovery";
 const metadata = { service: "gateway", regions: ["ap-northeast-2", "us-east-1"] };
 const reader = { role: "reader", is_archived: false, is_external_git: false };
 const writer = { role: "writer", is_archived: false, is_external_git: false };
+const WRAP_TEXT_KEY = "akb.tableWrapText";
+
+function rowsResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    kind: "table_query",
+    columns: ["id", "title", "notes", "steps", "metadata", "owner", "created_at"],
+    items: [{
+      id: rowId,
+      title: "API outage",
+      notes,
+      steps,
+      metadata,
+      owner: null,
+      created_at: "2026-08-31T04:45:00Z",
+      updated_at: "2026-09-01T04:45:00Z",
+      ...overrides,
+    }],
+    total: 1,
+  };
+}
 
 function renderTable() {
   const queryClient = new QueryClient({
@@ -78,20 +100,24 @@ function fullValue(dialog: HTMLElement) {
   return within(dialog).getByRole("region", { name: "Full value" });
 }
 
+/** The grid's data cells; the row number and row actions cells have no data-wrap. */
+function dataCells() {
+  return screen.getAllByRole("cell").filter((cell) => cell.hasAttribute("data-wrap"));
+}
+
 /**
  * jsdom has no layout, so every element measures 0×0. Report the element
- * whose text is `text` as wider than its box; everything else keeps 0.
+ * whose text is `text` with the given sizes; everything else keeps 0.
  */
-function stubOverflowingText(text: string) {
-  const originals = ["scrollWidth", "clientWidth"].map(
+function stubMeasuredText(text: string, sizes: Record<string, number>) {
+  const originals = Object.keys(sizes).map(
     (name) => [name, Object.getOwnPropertyDescriptor(HTMLElement.prototype, name)] as const,
   );
-  const widths = { scrollWidth: 320, clientWidth: 120 };
-  for (const [name, width] of Object.entries(widths)) {
+  for (const [name, size] of Object.entries(sizes)) {
     Object.defineProperty(HTMLElement.prototype, name, {
       configurable: true,
       get(this: HTMLElement) {
-        return this.textContent === text ? width : 0;
+        return this.textContent === text ? size : 0;
       },
     });
   }
@@ -103,9 +129,20 @@ function stubOverflowingText(text: string) {
   };
 }
 
+/** Text wider than its box, as a single truncated line leaves it. */
+function stubOverflowingText(text: string) {
+  return stubMeasuredText(text, { scrollWidth: 320, clientWidth: 120 });
+}
+
+/** Text taller than its box, as a line clamp leaves it. */
+function stubClampedText(text: string) {
+  return stubMeasuredText(text, { scrollHeight: 120, clientHeight: 40 });
+}
+
 const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 
 beforeEach(() => {
+  localStorage.removeItem(WRAP_TEXT_KEY);
   vaultInfoMock.mockReset();
   listTablesMock.mockReset();
   listRowsMock.mockReset();
@@ -125,21 +162,7 @@ beforeEach(() => {
       ],
     }],
   });
-  listRowsMock.mockResolvedValue({
-    kind: "table_query",
-    columns: ["id", "title", "notes", "steps", "metadata", "owner", "created_at"],
-    items: [{
-      id: rowId,
-      title: "API outage",
-      notes,
-      steps,
-      metadata,
-      owner: null,
-      created_at: "2026-08-31T04:45:00Z",
-      updated_at: "2026-09-01T04:45:00Z",
-    }],
-    total: 1,
-  });
+  listRowsMock.mockResolvedValue(rowsResponse());
 });
 
 afterEach(() => {
@@ -311,5 +334,120 @@ describe("table cell viewer", () => {
 
     await user.click(rowNumber);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("table wrap text", () => {
+  function wrapToggle() {
+    return screen.getByRole("button", { name: "Wrap text" });
+  }
+
+  function expectCellsWrapped(wrapped: boolean) {
+    const cells = dataCells();
+    expect(cells).toHaveLength(7);
+    for (const cell of cells) expect(cell).toHaveAttribute("data-wrap", String(wrapped));
+  }
+
+  it("is off by default, so cells keep a single line", async () => {
+    renderTable();
+    await screen.findByRole("button", { name: "API outage" });
+    expect(wrapToggle()).toHaveAttribute("aria-pressed", "false");
+    expectCellsWrapped(false);
+  });
+
+  it("wraps the cells when turned on, saves the choice, and restores single lines when off", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    await screen.findByRole("button", { name: "API outage" });
+
+    await user.click(wrapToggle());
+    expect(wrapToggle()).toHaveAttribute("aria-pressed", "true");
+    expectCellsWrapped(true);
+    expect(localStorage.getItem(WRAP_TEXT_KEY)).toBe("true");
+    // The 600-character limit applies now, so the whole note is in the cell.
+    expect(screen.getByRole("button", { name: notes })).toHaveTextContent(notes);
+
+    await user.click(wrapToggle());
+    expect(wrapToggle()).toHaveAttribute("aria-pressed", "false");
+    expectCellsWrapped(false);
+    expect(localStorage.getItem(WRAP_TEXT_KEY)).toBe("false");
+    expect(screen.getByRole("button", { name: /^Root cause:.*\(view full value\)$/ }))
+      .toHaveTextContent(`${notes.slice(0, 120)}…`);
+  });
+
+  it("restores the saved choice when the page mounts again", async () => {
+    const user = userEvent.setup();
+    const first = renderTable();
+    await user.click(await screen.findByRole("button", { name: "Wrap text" }));
+    first.unmount();
+
+    renderTable();
+    expect(await screen.findByRole("button", { name: "Wrap text" })).toHaveAttribute("aria-pressed", "true");
+    expectCellsWrapped(true);
+  });
+
+  it("falls back to single lines without crashing when storage is unavailable", async () => {
+    const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("Blocked");
+    });
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("Blocked");
+    });
+    try {
+      const user = userEvent.setup();
+      renderTable();
+      const toggle = await screen.findByRole("button", { name: "Wrap text" });
+      expect(getItem).toHaveBeenCalledWith(WRAP_TEXT_KEY);
+      expect(toggle).toHaveAttribute("aria-pressed", "false");
+      expectCellsWrapped(false);
+
+      // Saving fails quietly; the choice still applies to the open page.
+      await user.click(toggle);
+      expect(setItem).toHaveBeenCalledWith(WRAP_TEXT_KEY, "true");
+      expect(toggle).toHaveAttribute("aria-pressed", "true");
+      expectCellsWrapped(true);
+    } finally {
+      getItem.mockRestore();
+      setItem.mockRestore();
+    }
+  });
+
+  it("opens the viewer from a wrapped cell with the full value", async () => {
+    listRowsMock.mockResolvedValue(rowsResponse({ notes: longNotes }));
+    const user = userEvent.setup();
+    renderTable();
+    await user.click(await screen.findByRole("button", { name: "Wrap text" }));
+
+    const cell = screen.getByRole("button", { name: /^Root cause:.*\(view full value\)$/ });
+    expect(cell.closest("td")).toHaveAttribute("data-wrap", "true");
+    await user.click(cell);
+
+    expect(fullValue(screen.getByRole("dialog", { name: "notes" })).textContent).toBe(longNotes);
+  });
+
+  it("makes a wrapped cell a tab stop only while part of its value is hidden", async () => {
+    listRowsMock.mockResolvedValue(rowsResponse({ notes: longNotes }));
+    const restore = stubClampedText("API outage");
+    try {
+      const user = userEvent.setup();
+      renderTable();
+      // A single line measures only the width, so the title still fits there.
+      expect(await screen.findByRole("button", { name: "API outage" })).toHaveAttribute("tabindex", "-1");
+
+      await user.click(wrapToggle());
+      // Cut by the 600-character limit.
+      const capped = screen.getByRole("button", { name: /^Root cause:.*\(view full value\)$/ });
+      expect(capped).toHaveAttribute("tabindex", "0");
+      expect(capped).toHaveTextContent(`${longNotes.slice(0, 600)}…`);
+      // Taller than its six-line clamp.
+      expect(await screen.findByRole("button", { name: "API outage (view full value)" }))
+        .toHaveAttribute("tabindex", "0");
+      // Short values show in full, line breaks included.
+      expect(screen.getByRole("button", { name: /^Drain the gateway\s+Rotate the pool\s+Confirm recovery$/ }))
+        .toHaveAttribute("tabindex", "-1");
+      expect(screen.getByRole("button", { name: "null" })).toHaveAttribute("tabindex", "-1");
+    } finally {
+      restore();
+    }
   });
 });

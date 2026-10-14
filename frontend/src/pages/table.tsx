@@ -116,6 +116,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
   const [rowToDelete, setRowToDelete] = useState<Record<string, unknown> | null>(null);
   const [rowNotice, setRowNotice] = useState("");
   const [viewedCell, setViewedCell] = useState<ViewedTableCell | null>(null);
+  const [wrapText, setWrapText] = useState(readWrapTextPreference);
   const viewedCellTriggerRef = useRef<HTMLElement | null>(null);
   const schemaToggleRef = useRef<HTMLButtonElement | null>(null);
   const schemaCloseRef = useRef<HTMLButtonElement | null>(null);
@@ -285,6 +286,11 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
     setQueryState({ ...queryState, pageIndex: 0, sort: next });
   }
 
+  function updateWrapText(next: boolean) {
+    setWrapText(next);
+    writeWrapTextPreference(next);
+  }
+
   return (
     <ResourceWorkspace label="Table workspace" variant="reading">
       <h1 className="sr-only">{info?.name || "Table"}</h1>
@@ -400,6 +406,8 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                 onClear={() => setQueryState({ ...queryState, pageIndex: 0, filters: [] })}
                 onRefresh={() => void refreshTableData()}
                 refreshing={rowsQuery.isFetching}
+                wrapText={wrapText}
+                onWrapTextChange={updateWrapText}
               />
               {queryError && rowsQuery.data && (
                 <div className="shrink-0 border-b border-border p-3">
@@ -537,7 +545,15 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                             key={typeof row.id === "string" ? row.id : rowIndex}
                             className="group transition-colors hover:bg-surface-hover"
                           >
-                            <td className="sticky left-0 z-[var(--z-raised)] border-b border-r border-border bg-surface px-3 py-2 text-xs text-foreground-muted tabular-nums group-hover:bg-surface-hover">
+                            {/* Wrapped rows grow, so the row number and the actions move
+                                to the top and center on the values' first line, a 20px
+                                line box 8px down: leading-5 gives the number that box. */}
+                            <td
+                              className={cn(
+                                "sticky left-0 z-[var(--z-raised)] border-b border-r border-border bg-surface px-3 py-2 text-xs text-foreground-muted tabular-nums group-hover:bg-surface-hover",
+                                wrapText && "align-top leading-5",
+                              )}
+                            >
                               {rowNumber}
                             </td>
                             {cols.map((columnName) => {
@@ -548,6 +564,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                                   key={columnName}
                                   value={value}
                                   numeric={typeof value === "number" || isNumericColumnType(columnType)}
+                                  wrap={wrapText}
                                   onOpen={(trigger) => {
                                     viewedCellTriggerRef.current = trigger;
                                     setViewedCell({ columnName, columnType, rowNumber, value });
@@ -556,7 +573,14 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                               );
                             })}
                             {canManageRows && (
-                              <td className="sticky right-0 z-[var(--z-raised)] border-b border-l border-border bg-surface px-1 py-1 text-center group-hover:bg-surface-hover">
+                              <td
+                                className={cn(
+                                  "sticky right-0 z-[var(--z-raised)] border-b border-l border-border bg-surface px-1 text-center group-hover:bg-surface-hover",
+                                  // The 32px menu button centers on that line; the cell
+                                  // keeps its single-line height.
+                                  wrapText ? "pb-1.5 pt-0.5 align-top" : "py-1",
+                                )}
+                              >
                                 <RowActionsMenu
                                   rowNumber={rowNumber}
                                   onEdit={() => {
@@ -1029,49 +1053,95 @@ function TablePageLoading() {
   );
 }
 
+const WRAP_TEXT_STORAGE_KEY = "akb.tableWrapText";
+
+/** The saved Wrap text choice for this browser; off when storage is unavailable. */
+function readWrapTextPreference(): boolean {
+  try {
+    return localStorage.getItem(WRAP_TEXT_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeWrapTextPreference(next: boolean) {
+  try {
+    localStorage.setItem(WRAP_TEXT_STORAGE_KEY, String(next));
+  } catch {
+    /* Storage is optional: the choice then lasts until the page unmounts. */
+  }
+}
+
 const CELL_DISPLAY_LIMIT = 120;
+/**
+ * Wrapped cells show up to six lines. The cap sits above what six lines of the
+ * widest column hold for ordinary text, so the line clamp, not the cap,
+ * decides what shows.
+ */
+const CELL_WRAP_DISPLAY_LIMIT = 600;
 const LINE_BREAK = /[\r\n]/;
 
 /**
  * One data cell. The whole cell is a button that opens the cell viewer, but it
- * is a tab stop only while part of the value is hidden — cut by the display
- * limit or by the column width — so a large grid does not become one tab stop
- * per cell. A single line also collapses line breaks, so a multi-line string
- * never shows in full there. The overflow flag comes from TooltipText's own
- * measurement; its tooltip is portaled so it never becomes part of the button.
+ * is a tab stop only while part of the value is hidden, so a large grid does
+ * not become one tab stop per cell. Hidden means cut by the display limit, or
+ * by the column as TooltipText measures it: its width on a single line, and
+ * also the six-line clamp when wrapped. A single line also collapses line
+ * breaks, so a multi-line string never shows in full there. The tooltip is
+ * portaled so it never becomes part of the button.
  */
 function TableDataCell({
   value,
   numeric,
+  wrap,
   onOpen,
 }: {
   value: unknown;
   numeric: boolean;
+  /** Wrap the value onto up to six lines instead of truncating one line. */
+  wrap: boolean;
   onOpen: (trigger: HTMLButtonElement) => void;
 }) {
   const [overflow, setOverflow] = useState(false);
   const full = formatCellFull(value);
-  const capped = full.length > CELL_DISPLAY_LIMIT;
-  const display = capped ? `${full.slice(0, CELL_DISPLAY_LIMIT)}…` : full;
-  const collapsedLines = typeof value === "string" && LINE_BREAK.test(value);
+  const limit = wrap ? CELL_WRAP_DISPLAY_LIMIT : CELL_DISPLAY_LIMIT;
+  const capped = full.length > limit;
+  const display = capped ? `${full.slice(0, limit)}…` : full;
+  const collapsedLines = !wrap && typeof value === "string" && LINE_BREAK.test(value);
   const truncated = capped || overflow || collapsedLines;
   return (
     // h-px gives the cell a specified height, so the h-full button can fill a
     // row made taller by another cell; without it the button keeps its own height.
-    <td className="h-px max-w-md border-b border-r border-border p-0 last:border-r-0">
+    <td
+      data-wrap={wrap ? "true" : "false"}
+      className="h-px max-w-md border-b border-r border-border p-0 last:border-r-0"
+    >
       <button
         type="button"
         tabIndex={truncated ? 0 : -1}
         aria-haspopup="dialog"
         onClick={(event) => onOpen(event.currentTarget)}
-        className="flex h-full w-full cursor-pointer items-center text-start focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className={cn(
+          "flex h-full w-full cursor-pointer text-start focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          // Wrapped: top-aligned, and the vertical padding moves to the button
+          // so the clamped text box ends at its last shown line; padding inside
+          // it would expose the top of the next, hidden line.
+          wrap ? "items-start py-2" : "items-center",
+        )}
       >
         <TooltipText
           tip={full}
           onOverflowChange={setOverflow}
+          overflowAxis={wrap ? "both" : "x"}
           portal
           className={cn(
-            "block min-w-0 flex-1 truncate whitespace-nowrap px-3 py-2 text-foreground",
+            "min-w-0 flex-1 px-3 text-foreground",
+            // Wrapped: w-max still sizes the column from the value's single-line
+            // width, as truncation does, and max-w-full wraps it inside that
+            // column. Wrapping alone would let every column shrink to its minimum.
+            wrap
+              ? "w-max max-w-full line-clamp-6 whitespace-pre-wrap [overflow-wrap:anywhere]"
+              : "block truncate whitespace-nowrap py-2",
             numeric && "text-right tabular-nums",
             value !== null && typeof value === "object" && "font-mono text-xs",
             value === null && "italic text-foreground-muted",
