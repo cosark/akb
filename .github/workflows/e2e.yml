@@ -63,7 +63,7 @@ jobs:
           uv run --locked --project backend python -c \
             'import sys; assert sys.version_info[:2] == (3, 14), sys.version'
 
-      - name: Verify reset storage isolation under an active writer
+      - name: Verify reusable reset waits for an active writer
         env:
           UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/akb-e2e-python
           UV_CACHE_DIR: ${{ runner.temp }}/akb-e2e-uv-cache

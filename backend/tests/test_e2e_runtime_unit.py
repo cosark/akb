@@ -263,6 +263,7 @@ def test_runtime_assets_live_in_repository_common_layer():
 
     for name in (
         "e2e_runtime.py",
+        "e2e_backend.py",
         "e2e_suite_runner.py",
         "fixture_control.py",
         "oidc_fixture.py",
@@ -1568,7 +1569,11 @@ async def test_control_plane_reset_discovery_serializes_success_installation_com
 
 
 class _LifecycleProcess:
+    _next_pid = 900_000
+
     def __init__(self) -> None:
+        self.pid = type(self)._next_pid
+        type(self)._next_pid += 1
         self.release = asyncio.Event()
         self.returncode: int | None = None
 
@@ -1996,11 +2001,15 @@ def _ready_runtime(tmp_path):
     return runtime
 
 
-def _stub_recreation(monkeypatch, runtime, *, fail_at=None, block_at=None):
-    """Replace external operations, retaining reset's admission/state machinery."""
+def _stub_reuse_reset(monkeypatch, runtime, *, fail_at=None, block_at=None):
+    """Replace external I/O while exercising admission, ordering and failure state."""
     calls = []
     entered = asyncio.Event()
     release = asyncio.Event()
+    identity = {"services": {"postgres": "same-postgres", "minio": "same-minio"}}
+    runtime._dependency_identity = identity
+    embed = ManagedProcess(_LifecycleProcess())
+    runtime._children["embed"] = embed
 
     async def operation(name):
         calls.append(name)
@@ -2014,83 +2023,116 @@ def _stub_recreation(monkeypatch, runtime, *, fail_at=None, block_at=None):
             raise ProvisioningFailure(f"injected failure: {name}")
 
     async def stop(name):
+        assert name == "stdio", "reset must preserve the embedding process"
         await operation(f"stop:{name}")
         runtime._children.pop(name, None)
 
-    async def compose(*args, **kwargs):
-        assert args == ("down", "--volumes", "--remove-orphans")
-        await operation("down")
-        return 0
+    async def drain():
+        await operation("drain")
+        runtime._children.pop("backend", None)
 
-    async def boot():
-        await operation("bootstrap")
-        runtime._children["backend"] = ManagedProcess(_LifecycleProcess())
+    async def reset_postgres():
+        assert "backend" not in runtime._children
+        await operation("postgres")
+
+    async def seed():
+        assert "backend" not in runtime._children
+        await operation("seed")
         runtime._fixture_catalog = {"status": "ready", "fixture_generation": runtime.config.storage_generation}
 
+    async def start_backend():
+        await operation("backend")
+        runtime._children["backend"] = ManagedProcess(_LifecycleProcess())
+
+    async def mint_pat():
+        await operation("pat")
+        runtime._pat_value = f"new-token-{runtime.config.storage_generation}"
+
+    def ensure_bucket():
+        calls.append("bucket")
+        if fail_at == "bucket":
+            raise ProvisioningFailure("injected failure: bucket")
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("reset must reuse running dependencies instead of rebuilding them")
+
     monkeypatch.setattr(runtime, "_stop_named_process", stop)
-    monkeypatch.setattr(runtime, "_compose", compose)
+    monkeypatch.setattr(runtime, "_drain_backend", drain)
+    monkeypatch.setattr(runtime, "_reset_postgres_offline", reset_postgres)
     monkeypatch.setattr(runtime, "_write_config", lambda: calls.append("config"))
-    monkeypatch.setattr(runtime, "_start_dependencies", lambda: operation("dependencies"))
-    monkeypatch.setattr(runtime, "_start_embed_stub", lambda: operation("embed"))
-    monkeypatch.setattr(runtime, "_bootstrap_backend_and_seed", boot)
+    monkeypatch.setattr(runtime, "_ensure_minio_bucket", ensure_bucket)
+    monkeypatch.setattr(runtime, "_seed_external_credential", seed)
+    monkeypatch.setattr(runtime, "_start_backend", start_backend)
+    monkeypatch.setattr(runtime, "_mint_runtime_pat", mint_pat)
     monkeypatch.setattr(runtime, "_start_stdio_proxy", lambda: operation("stdio"))
-    monkeypatch.setattr(runtime, "_dependency_identity_snapshot", lambda: {"generation": runtime.config.storage_generation})
+    monkeypatch.setattr(runtime, "_compose", forbidden)
+    monkeypatch.setattr(runtime, "_start_dependencies", forbidden)
+    monkeypatch.setattr(runtime, "_start_embed_stub", forbidden)
+    monkeypatch.setattr(runtime, "_bootstrap_backend_and_seed", forbidden)
+    monkeypatch.setattr(runtime, "_dependency_identity_snapshot", lambda: identity)
     monkeypatch.setattr(runtime, "_process_identity_snapshot", lambda: {})
-    return calls, entered, release
+    return calls, entered, release, embed
 
 
 @pytest.mark.asyncio
-async def test_reset_recreates_storage_after_stopping_writers_and_publishes_new_generation(tmp_path, monkeypatch):
+async def test_reset_reuses_dependencies_only_after_drain_and_publishes_new_generation(tmp_path, monkeypatch):
     runtime = _ready_runtime(tmp_path)
     old_git_path = runtime.config.vault_dir
+    old_bucket = runtime.config.s3_bucket
     old_git_path.mkdir(parents=True)
     runtime._fixture_controls["fault"] = {"kind": "member_installation_unavailable"}
     runtime._pat_value = "old-token"
-    calls, _, _ = _stub_recreation(monkeypatch, runtime)
+    calls, _, _, embed = _stub_reuse_reset(monkeypatch, runtime)
 
     await runtime.reset_scenario()
 
-    assert calls[:4] == ["stop:stdio", "stop:backend", "stop:embed", "down"]
-    assert calls.index("config") < calls.index("dependencies") < calls.index("bootstrap")
-    assert calls.index("embed") < calls.index("bootstrap")
+    assert calls[:3] == ["stop:stdio", "drain", "postgres"]
+    assert calls.index("postgres") < calls.index("config") < calls.index("bucket") < calls.index("seed")
+    assert calls.index("seed") < calls.index("backend") < calls.index("pat")
+    assert runtime._children["embed"] is embed
     assert runtime.config.storage_generation == 1
     assert runtime.config.vault_dir != old_git_path
-    # Even a late write to an old path cannot enter the new generation.
+    assert runtime.config.s3_bucket != old_bucket
+    # A delayed write keeps addressing the retired generation's storage.
     old_git_path.mkdir(parents=True, exist_ok=True)
     (old_git_path / "late-old-write").write_text("old data")
     assert not (runtime.config.vault_dir / "late-old-write").exists()
     assert runtime._fixture_controls == {}
+    assert runtime._pat_value == "new-token-1"
     assert runtime._prepared
     assert runtime.fixture_health()["status"] == "ready"
     assert runtime.fixture_discovery()["fixture_generation"] == 1
     evidence = runtime._dependency_reset_evidence
-    assert evidence["strategy"] == "recreate"
+    assert evidence["strategy"] == "reuse_after_drain"
+    assert evidence["identity_before"] == evidence["identity_after"]
     assert evidence["last_succeeded"] is True
-    assert evidence["phase_seconds"]
+    assert set(evidence["phase_seconds"]) == {
+        "drain_backend", "reset_postgres", "prepare_fixture", "start_backend", "start_stdio",
+    }
 
 
 @pytest.mark.asyncio
 async def test_concurrent_resets_are_serialized(tmp_path, monkeypatch):
     runtime = _ready_runtime(tmp_path)
-    calls, entered, release = _stub_recreation(monkeypatch, runtime, block_at="bootstrap")
+    calls, entered, release, _ = _stub_reuse_reset(monkeypatch, runtime, block_at="seed")
     first = asyncio.create_task(runtime.reset_scenario())
     await entered.wait()
     second = asyncio.create_task(runtime.reset_scenario())
     await asyncio.sleep(0)
-    assert calls.count("down") == 1
+    assert calls.count("postgres") == 1
     release.set()
     await asyncio.gather(first, second)
-    assert calls.count("down") == 2
+    assert calls.count("postgres") == 2
     assert runtime.config.storage_generation == 2
     assert runtime._dependency_reset_evidence["count"] == 2
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fail_at", ["stop:backend", "down", "dependencies", "embed", "bootstrap", "stdio"])
+@pytest.mark.parametrize("fail_at", ["drain", "postgres", "bucket", "seed", "backend", "pat", "stdio"])
 async def test_reset_failure_never_republishes_ready_or_allows_another_reset(tmp_path, monkeypatch, fail_at):
     runtime = _ready_runtime(tmp_path)
     runtime.profile = dataclasses.replace(runtime.profile, capabilities=runtime.profile.capabilities | {"stdio"})
-    _stub_recreation(monkeypatch, runtime, fail_at=fail_at)
+    calls, _, _, _ = _stub_reuse_reset(monkeypatch, runtime, fail_at=fail_at)
     with pytest.raises(ProvisioningFailure, match="injected failure"):
         await runtime.reset_scenario()
     assert runtime._lifecycle_state == "failed"
@@ -2098,6 +2140,9 @@ async def test_reset_failure_never_republishes_ready_or_allows_another_reset(tmp
     assert runtime.fixture_health()["status"] == "failed"
     assert runtime.fixture_discovery()["status"] != "ready"
     assert runtime._dependency_reset_evidence["last_succeeded"] is False
+    if fail_at == "drain":
+        assert "postgres" not in calls, "uncertified shutdown must prevent data deletion"
+        assert "config" not in calls
     with pytest.raises(ProvisioningFailure):
         await runtime.reset_scenario()
     result = await runtime.fixture_control("restart", None, True)
@@ -2105,9 +2150,30 @@ async def test_reset_failure_never_republishes_ready_or_allows_another_reset(tmp
 
 
 @pytest.mark.asyncio
+async def test_dependency_replacement_during_reset_cannot_publish_ready(tmp_path, monkeypatch):
+    runtime = _ready_runtime(tmp_path)
+    _stub_reuse_reset(monkeypatch, runtime)
+    seed = runtime._seed_external_credential
+
+    async def seed_after_dependency_changed():
+        await seed()
+        monkeypatch.setattr(runtime, "_dependency_identity_snapshot", lambda: {
+            "services": {"postgres": "unexpected-postgres", "minio": "same-minio"},
+        })
+
+    monkeypatch.setattr(runtime, "_seed_external_credential", seed_after_dependency_changed)
+    with pytest.raises(ProvisioningFailure):
+        await runtime.reset_scenario()
+    assert runtime._lifecycle_state == "failed"
+    assert not runtime._prepared
+    assert runtime.fixture_health()["status"] == "failed"
+    assert runtime.fixture_discovery()["status"] != "ready"
+
+
+@pytest.mark.asyncio
 async def test_cancelled_reset_stays_failed(tmp_path, monkeypatch):
     runtime = _ready_runtime(tmp_path)
-    _, entered, _ = _stub_recreation(monkeypatch, runtime, block_at="bootstrap")
+    _, entered, _, _ = _stub_reuse_reset(monkeypatch, runtime, block_at="seed")
     task = asyncio.create_task(runtime.reset_scenario())
     await entered.wait()
     task.cancel()
@@ -2146,10 +2212,201 @@ async def test_failed_process_stop_retains_process_for_cleanup(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("certificate", [
+    "valid", "missing", "malformed", "stale_launch", "wrong_pid",
+    "incomplete", "truthy_acknowledgement", "unclean_exit", "already_exited",
+])
+async def test_backend_drain_requires_matching_clean_shutdown_certificate(tmp_path, monkeypatch, certificate):
+    runtime = _ready_runtime(tmp_path)
+
+    class GracefulProcess:
+        pid = 654321
+        returncode = 0 if certificate == "already_exited" else None
+
+        def send_signal(self, signum):
+            assert signum == e2e_runtime.signal.SIGTERM
+            self.returncode = 1 if certificate == "unclean_exit" else 0
+
+        async def wait(self):
+            return self.returncode
+
+    managed = ManagedProcess(GracefulProcess())
+    runtime._children["backend"] = managed
+    runtime._backend_launch_id = "current-launch"
+    runtime._backend_drain_report = tmp_path / "drain.json"
+    report = {
+        "launch_id": "current-launch", "pid": GracefulProcess.pid,
+        "shutdown_complete": True,
+        "launcher_failed": False, "lifespan_failed": False, "forced_exit": False,
+        "pending_tasks": 0, "http_tasks": 0, "connections": 0,
+        "worker_loop_tasks": 0, "worker_inflight": 0, "worker_abandoned": 0,
+        "runner_snapshot_failed": False,
+    }
+    if certificate == "stale_launch":
+        report["launch_id"] = "previous-launch"
+    elif certificate == "wrong_pid":
+        report["pid"] += 1
+    elif certificate == "incomplete":
+        report["shutdown_complete"] = False
+    elif certificate == "truthy_acknowledgement":
+        report["shutdown_complete"] = "yes"
+    if certificate == "malformed":
+        runtime._backend_drain_report.write_text("not-json")
+    elif certificate != "missing":
+        runtime._backend_drain_report.write_text(json.dumps(report))
+    monkeypatch.setattr(e2e_runtime, "_live_process_groups", lambda *args: set())
+
+    if certificate == "valid":
+        await runtime._drain_backend()
+        assert "backend" not in runtime._children
+    else:
+        with pytest.raises(ProvisioningFailure):
+            await runtime._drain_backend()
+        assert runtime._children["backend"] is managed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "missing_schema_table", "cleanup_error", "cleanup_close_error"])
+async def test_offline_postgres_reset_fences_from_maintenance_database_and_rolls_back_failures(
+    tmp_path, monkeypatch, outcome,
+):
+    import asyncpg
+
+    runtime = E2ERuntime(make_config(tmp_path))
+    monkeypatch.setenv("TEST_USERNAME_ENV", "fixture-user")
+    monkeypatch.setenv("TEST_PASSWORD_ENV", "fixture-password")
+    runtime._schema_tables = {
+        ("public", name) for name in (
+            "schema_migrations", "users", "tokens", "chunks", "bm25_stats", "bm25_vocab_epoch",
+        )
+    }
+    current = runtime._schema_tables | {("public", "scenario_table")}
+    if outcome == "missing_schema_table":
+        current.remove(("public", "chunks"))
+    events = []
+    allowed = True
+    pending_writes = []
+    committed_writes = []
+    in_transaction = False
+    waiting_clients = iter((True, False))
+
+    class Transaction:
+        async def __aenter__(self):
+            nonlocal in_transaction
+            assert not allowed
+            in_transaction = True
+            events.append(("transaction", "begin"))
+
+        async def __aexit__(self, exc_type, _exc, _traceback):
+            nonlocal in_transaction
+            in_transaction = False
+            if exc_type is None:
+                events.append(("transaction", "commit"))
+                committed_writes.extend(pending_writes)
+            else:
+                events.append(("transaction", "rollback"))
+            pending_writes.clear()
+            return False
+
+    class CleanupConnection:
+        closed = False
+
+        def transaction(self):
+            return Transaction()
+
+        async def fetchval(self, query):
+            assert not allowed
+            assert "pg_stat_activity" in query and "client backend" in query
+            events.append(("cleanup", "wait_clients"))
+            return next(waiting_clients)
+
+        async def fetch(self, query):
+            assert in_transaction
+            assert "pg_tables" in query
+            return [{"schemaname": schema, "tablename": table} for schema, table in current]
+
+        async def execute(self, query, *_args):
+            normalized = " ".join(query.split())
+            assert not normalized.startswith("ALTER DATABASE"), "admission DDL must use maintenance DB"
+            assert in_transaction, "all destructive cleanup must be atomic"
+            events.append(("cleanup", normalized))
+            if outcome == "cleanup_error" and normalized.startswith("DELETE FROM users"):
+                raise asyncpg.UndefinedTableError("sensitive-query-marker")
+            pending_writes.append(normalized)
+
+        async def close(self, *, timeout):
+            assert timeout == 5
+            self.closed = True
+            events.append(("cleanup", "close"))
+            if outcome == "cleanup_close_error":
+                raise OSError("cleanup close failed")
+
+    class MaintenanceConnection:
+        closed = False
+
+        async def execute(self, query):
+            nonlocal allowed
+            assert query in {
+                "ALTER DATABASE akb ALLOW_CONNECTIONS false",
+                "ALTER DATABASE akb ALLOW_CONNECTIONS true",
+            }
+            allowed = query.endswith("true")
+            events.append(("maintenance", query))
+
+        async def close(self, *, timeout):
+            assert timeout == 5
+            self.closed = True
+            events.append(("maintenance", "close"))
+
+    cleanup, maintenance = CleanupConnection(), MaintenanceConnection()
+
+    async def connect(**kwargs):
+        if kwargs["database"] == "akb":
+            return cleanup
+        assert kwargs["database"] == "postgres"
+        return maintenance
+
+    monkeypatch.setattr(asyncpg, "connect", connect)
+    if outcome in {"success", "cleanup_close_error"}:
+        if outcome == "cleanup_close_error":
+            with pytest.raises(OSError, match="cleanup close failed"):
+                await runtime._reset_postgres_offline()
+        else:
+            await runtime._reset_postgres_offline()
+        assert allowed
+        assert committed_writes
+        assert events.index(("transaction", "commit")) < events.index(
+            ("maintenance", "ALTER DATABASE akb ALLOW_CONNECTIONS true")
+        )
+        truncate = next(query for query in committed_writes if query.startswith("TRUNCATE TABLE"))
+        assert '"public"."tokens"' in truncate
+        assert '"public"."users"' not in truncate
+        assert '"public"."schema_migrations"' not in truncate
+    else:
+        with pytest.raises(ProvisioningFailure) as raised:
+            await runtime._reset_postgres_offline()
+        assert "sensitive-query-marker" not in str(raised.value)
+        assert not allowed, "a failed reset must retain its admission fence"
+        assert not committed_writes
+        assert ("transaction", "rollback") in events
+        assert ("maintenance", "ALTER DATABASE akb ALLOW_CONNECTIONS true") not in events
+        attempted = [query for connection, query in events if connection == "cleanup"]
+        if outcome == "missing_schema_table":
+            assert not any(query.startswith(("DROP TABLE", "TRUNCATE TABLE", "DELETE")) for query in attempted)
+        else:
+            assert any(query.startswith("DROP TABLE") for query in attempted)
+            assert any(query.startswith("TRUNCATE TABLE") for query in attempted)
+    assert cleanup.closed and maintenance.closed
+    assert events.index(("maintenance", "ALTER DATABASE akb ALLOW_CONNECTIONS false")) < events.index(
+        ("transaction", "begin")
+    )
+
+
+@pytest.mark.asyncio
 async def test_reset_deadline_is_total_and_leaves_runtime_failed(tmp_path, monkeypatch):
     runtime = _ready_runtime(tmp_path)
     runtime.config = dataclasses.replace(runtime.config, timeout_seconds=0.02)
-    _, entered, _ = _stub_recreation(monkeypatch, runtime, block_at="bootstrap")
+    _, entered, _, _ = _stub_reuse_reset(monkeypatch, runtime, block_at="seed")
     with pytest.raises((TimeoutError, ProvisioningFailure)):
         await asyncio.wait_for(runtime.reset_scenario(), timeout=1)
     assert entered.is_set()
@@ -2200,6 +2457,71 @@ async def test_process_termination_reaps_children_even_after_leader_exit_or_new_
         ).stdout.strip()
         assert not status or status.startswith("Z")
         assert process.returncode is not None
+    finally:
+        for pid in (child_pid, process.pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        await process.wait()
+
+
+@pytest.mark.asyncio
+async def test_failed_drain_retains_detached_child_ownership_for_cleanup(tmp_path, monkeypatch):
+    import os
+    import signal
+
+    runtime = E2ERuntime(dataclasses.replace(make_config(tmp_path), timeout_seconds=0.3))
+    child_code = (
+        "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "print('ready',flush=True); time.sleep(60)"
+    )
+    leader_code = (
+        "import signal,subprocess,sys,time\n"
+        "signal.signal(signal.SIGTERM, lambda *_args: sys.exit(0))\n"
+        f"child=subprocess.Popen([sys.executable,'-c',{child_code!r}], "
+        "start_new_session=True,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)\n"
+        "assert child.stdout.readline().strip()==b'ready'\n"
+        "child.stdout.close()\n"
+        "print(child.pid,flush=True)\n"
+        "while True: time.sleep(0.1)\n"
+    )
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", leader_code,
+        stdout=asyncio.subprocess.PIPE, start_new_session=True,
+    )
+    child_pid = int(await asyncio.wait_for(process.stdout.readline(), timeout=5))
+    managed = ManagedProcess(process)
+    runtime._children["backend"] = managed
+    original_terminate = e2e_runtime.terminate_process
+
+    async def terminate_with_short_grace(child, **kwargs):
+        assert child is process
+        assert kwargs["owned_groups"] is managed.owned_groups
+        await original_terminate(child, grace_seconds=0.2, **kwargs)
+
+    monkeypatch.setattr(e2e_runtime, "terminate_process", terminate_with_short_grace)
+    try:
+        with pytest.raises(TimeoutError):
+            await runtime._drain_backend()
+        assert process.returncode == 0
+        assert runtime._children["backend"] is managed
+        assert child_pid in managed.owned_groups
+        parent = subprocess.run(
+            ["ps", "-p", str(child_pid), "-o", "ppid="],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        assert parent and int(parent) != process.pid
+
+        # The leader is gone and the child is reparented. A fresh descendant
+        # search misses it; cleanup must use the ownership remembered by drain.
+        await asyncio.wait_for(runtime._stop_named_process("backend"), timeout=5)
+        status = subprocess.run(
+            ["ps", "-p", str(child_pid), "-o", "stat="],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        assert not status or status.startswith("Z")
+        assert "backend" not in runtime._children
     finally:
         for pid in (child_pid, process.pid):
             try:
@@ -2263,8 +2585,9 @@ async def test_cancelled_logged_command_retains_ownership_if_termination_fails(t
         spawned.set()
         return process
 
-    async def fail_stop(child):
+    async def fail_stop(child, *, owned_groups):
         assert child is process
+        assert owned_groups == {process.pid}
         if leader_exited:
             process.returncode = 0  # A surviving descendant still requires ownership.
         raise ProvisioningFailure("cannot stop child")

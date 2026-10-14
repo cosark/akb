@@ -462,6 +462,10 @@ class RuntimeConfig:
         return self.state_dir / name
 
     @property
+    def s3_bucket(self) -> str:
+        return "akb-files" if self.storage_generation == 0 else f"akb-files-g{self.storage_generation}"
+
+    @property
     def config_dir(self) -> Path:
         root = self.runtime_root if self.storage_generation == 0 else (
             self.runtime_root / f"generation-{self.storage_generation}"
@@ -487,6 +491,7 @@ class ManagedProcess:
     process_group: bool = True
     stdin: asyncio.StreamWriter | None = None
     stdout: asyncio.StreamReader | None = None
+    owned_groups: set[int] = dataclasses.field(default_factory=set)
 
 
 def prepare_private_runtime_root(root: Path) -> tuple[Path, Path, Path, Path]:
@@ -591,6 +596,7 @@ async def terminate_process(
     *,
     process_group: bool = True,
     grace_seconds: float = 10.0,
+    owned_groups: set[int] | None = None,
 ) -> None:
     """Stop and verify owned processes, retaining ownership if shutdown fails."""
     if not process_group:
@@ -603,7 +609,8 @@ async def terminate_process(
             await asyncio.wait_for(process.wait(), timeout=5)
         return
 
-    groups = {process.pid}
+    groups = owned_groups if owned_groups is not None else set()
+    groups.add(process.pid)
     signalled: set[int] = set()
     deadline = time.monotonic() + grace_seconds
     while True:
@@ -636,6 +643,7 @@ class E2ERuntime:
         self._children: dict[str, ManagedProcess] = {}
         self._stopping_children: set[str] = set()
         self._active_commands: set[asyncio.subprocess.Process] = set()
+        self._active_command_groups: dict[asyncio.subprocess.Process, set[int]] = {}
         self._reset_task: asyncio.Task[Any] | None = None
         self._fixture_server: Any | None = None
         self._fixture_task: asyncio.Task[Any] | None = None
@@ -648,6 +656,10 @@ class E2ERuntime:
         self._prepared = False
         self._lifecycle_state = "starting"
         self._proxy_executable: Path | None = None
+        self._backend_launch_id = ""
+        self._backend_drain_report: Path | None = None
+        self._backend_drain_evidence: dict[str, object] = {}
+        self._schema_tables: set[tuple[str, str]] | None = None
         self._fixture_catalog: dict[str, object] = {
             "status": "starting",
             "scenario": self.config.scenario,
@@ -666,8 +678,9 @@ class E2ERuntime:
         self._dependency_reset_count = 0
         self._dependency_reset_wall_seconds = 0.0
         self._dependency_reset_evidence: dict[str, object] = {
-            "strategy": "recreate",
-            "preserves": ["fixture_origin", "app_origin"],
+            "strategy": "reuse_after_drain",
+            "preserves": ["postgres_container", "minio_container", "compose_network",
+                          "compose_volumes", "embedding_process", "fixture_origin", "app_origin"],
             "count": 0,
             "wall_seconds": 0.0,
         }
@@ -1851,6 +1864,7 @@ class E2ERuntime:
             self.config.backend_dir / "uv.lock",
             self.config.backend_dir / "pyproject.toml",
             self.config.runtime_scripts_dir / "embed_stub.py",
+            self.config.runtime_scripts_dir / "e2e_backend.py",
             self.config.runtime_scripts_dir / "e2e_suite_runner.py",
         )
         if self.profile.needs_stdio:
@@ -1925,7 +1939,7 @@ class E2ERuntime:
             "rerank_enabled": False,
             "s3_endpoint_url": self.config.minio_origin,
             "s3_public_url": self.config.minio_origin,
-            "s3_bucket": "akb-files",
+            "s3_bucket": self.config.s3_bucket,
         }
         if self.oidc_fixture is not None:
             app_config.update(
@@ -2018,6 +2032,7 @@ class E2ERuntime:
                 start_new_session=True,
             )
             self._active_commands.add(process)
+            self._active_command_groups[process] = {process.pid}
             released = False
             try:
                 if stdin_data is not None and process.stdin is not None:
@@ -2028,12 +2043,13 @@ class E2ERuntime:
                 released = True
             except BaseException:
                 # Cancellation must not leave Compose/npm running after a failed reset.
-                await terminate_process(process)
+                await terminate_process(process, owned_groups=self._active_command_groups[process])
                 released = True
                 raise
             finally:
                 if released:
                     self._active_commands.discard(process)
+                    self._active_command_groups.pop(process, None)
         if check and returncode != 0:
             raise ProvisioningFailure(
                 f"command failed with exit code {returncode}; see {log_path}"
@@ -2144,7 +2160,9 @@ class E2ERuntime:
                 managed.stdin.close()
                 with contextlib.suppress(Exception):
                     await managed.stdin.wait_closed()
-            await terminate_process(managed.process, process_group=managed.process_group)
+            await terminate_process(
+                managed.process, process_group=managed.process_group, owned_groups=managed.owned_groups,
+            )
             self._children.pop(name, None)
         finally:
             self._stopping_children.discard(name)
@@ -2247,7 +2265,7 @@ class E2ERuntime:
                 aws_secret_access_key="akb-ci-secret",
             )
             try:
-                client.create_bucket(Bucket="akb-files")
+                client.create_bucket(Bucket=self.config.s3_bucket)
             except botocore.exceptions.ClientError as exc:
                 code = exc.response.get("Error", {}).get("Code")
                 if code not in {"BucketAlreadyOwnedByYou", "BucketAlreadyExists"}:
@@ -2279,27 +2297,168 @@ class E2ERuntime:
         )
 
     async def _start_backend(self) -> None:
+        self._backend_launch_id = uuid.uuid4().hex
+        self._backend_drain_report = self.config.config_dir / f"drain-{self._backend_launch_id}.json"
         await self._spawn_host_process(
             "backend",
             [
                 sys.executable,
-                "-m",
-                "uvicorn",
-                "app.main:app",
-                "--app-dir",
-                str(self.config.backend_dir),
-                "--host",
-                self.config.app_host,
-                "--port",
-                str(self.config.app_port),
+                str(self.config.runtime_scripts_dir / "e2e_backend.py"),
+                "--app-dir", str(self.config.backend_dir),
+                "--host", self.config.app_host,
+                "--port", str(self.config.app_port),
+                "--drain-report", str(self._backend_drain_report),
+                "--launch-id", self._backend_launch_id,
             ],
             "backend.log",
         )
         await self._wait_http(
-            "backend",
-            f"{self.config.app_origin}/readyz",
-            self._ready_response,
+            "backend", f"{self.config.app_origin}/readyz", self._ready_response,
         )
+
+    async def _drain_backend(self) -> None:
+        """Close serving admission and require acknowledged graceful completion.
+
+        Signal only the leader. Its in-flight Git children must finish naturally,
+        rather than receiving the supervisor's cleanup termination signal.
+        Forced termination never authorizes reuse of the database.
+        """
+        managed = self._children.get("backend")
+        if managed is None or managed.process.returncode is not None:
+            raise ProvisioningFailure("backend is unavailable for graceful drain")
+        process = managed.process
+        groups = managed.owned_groups
+        groups.add(process.pid)
+        self._stopping_children.add("backend")
+        try:
+            await asyncio.to_thread(_live_process_groups, process.pid, groups)
+            process.send_signal(signal.SIGTERM)
+            async with asyncio.timeout(self.config.timeout_seconds):
+                while True:
+                    live = await asyncio.to_thread(_live_process_groups, process.pid, groups)
+                    if process.returncode is not None and not live:
+                        break
+                    await asyncio.sleep(0.05)
+                await process.wait()
+            try:
+                if self._backend_drain_report is None:
+                    raise ValueError
+                report = json.loads(self._backend_drain_report.read_text())
+                if (not isinstance(report, dict)
+                        or report.get("launch_id") != self._backend_launch_id
+                        or report.get("pid") != process.pid
+                        or report.get("shutdown_complete") is not True
+                        or process.returncode != 0):
+                    raise ValueError
+            except (OSError, ValueError, TypeError):
+                raise ProvisioningFailure("backend graceful drain was not acknowledged") from None
+            self._backend_drain_evidence = report
+            self._children.pop("backend", None)
+        finally:
+            self._stopping_children.discard("backend")
+
+    async def _capture_schema_baseline(self) -> None:
+        import asyncpg
+
+        connection = await asyncpg.connect(
+            host="127.0.0.1", port=self.config.postgres_port,
+            user="akb", password="akb", database="akb",  # pragma: allowlist secret
+        )
+        try:
+            rows = await connection.fetch("""
+                SELECT schemaname, tablename FROM pg_tables
+                 WHERE schemaname NOT LIKE 'pg_%' AND schemaname <> 'information_schema'
+            """)
+            self._schema_tables = {(row["schemaname"], row["tablename"]) for row in rows}
+        finally:
+            await connection.close(timeout=5)
+
+    async def _reset_postgres_offline(self) -> None:
+        """Fence database admission, wait for old sessions, and clear rows atomically."""
+        if self._schema_tables is None:
+            raise ProvisioningFailure("fixture schema baseline is unavailable")
+        import asyncpg
+
+        connection = await asyncpg.connect(
+            host="127.0.0.1", port=self.config.postgres_port,
+            user="akb", password="akb", database="akb",  # pragma: allowlist secret
+            timeout=5,
+        )
+        control = None
+        # These installation/schema singletons are not scenario data. In
+        # particular migration history and authority fences must remain valid.
+        preserved = {
+            "schema_migrations", "users", "auth_runtime_epoch_upgrade", "auth_runtime_state",
+            "bm25_stats", "bm25_vocab_epoch", "document_revision_bootstrap_claims",
+            "document_revision_authority_pending", "document_revision_authority_marker",
+            "native_revision_existing_authority_fence", "native_revision_existing_authority",
+            "native_revision_legacy_write_fence",
+        }
+
+        def qualified(table: tuple[str, str]) -> str:
+            return '.'.join('"' + item.replace('"', '""') + '"' for item in table)
+
+        try:
+            async with asyncio.timeout(self.config.timeout_seconds):
+                # Existing clients can finish/close, but no new client can enter
+                # the database while reset owns it. A failed reset leaves this
+                # fence closed until supervisor cleanup disposes the runtime.
+                # PostgreSQL refuses disabling connections from inside the
+                # target database. Keep its cleanup connection open, but issue
+                # the admission DDL through the maintenance database.
+                control = await asyncpg.connect(
+                    host="127.0.0.1", port=self.config.postgres_port,
+                    user="akb", password="akb", database="postgres",  # pragma: allowlist secret
+                    timeout=5,
+                )
+                await control.execute("ALTER DATABASE akb ALLOW_CONNECTIONS false")
+                while await connection.fetchval("""
+                    SELECT EXISTS (SELECT FROM pg_stat_activity
+                     WHERE datname = current_database() AND pid <> pg_backend_pid()
+                       AND backend_type = 'client backend')
+                """):
+                    await asyncio.sleep(0.05)
+                async with connection.transaction():
+                    rows = await connection.fetch("""
+                        SELECT schemaname, tablename FROM pg_tables
+                         WHERE schemaname NOT LIKE 'pg_%' AND schemaname <> 'information_schema'
+                    """)
+                    current = {(row["schemaname"], row["tablename"]) for row in rows}
+                    if self._schema_tables - current:
+                        raise ProvisioningFailure("fixture schema baseline is missing a required table")
+                    added = current - self._schema_tables
+                    if added:
+                        await connection.execute(
+                            "DROP TABLE " + ', '.join(qualified(table) for table in sorted(added)) + " CASCADE"
+                        )
+                    tables = sorted(table for table in current & self._schema_tables if table[1] not in preserved)
+                    if tables:
+                        await connection.execute(
+                            "TRUNCATE TABLE " + ', '.join(qualified(table) for table in tables)
+                            + " RESTART IDENTITY CASCADE"
+                        )
+                    username, _password = self.config.credentials.values()
+                    await connection.execute("DELETE FROM users WHERE username <> $1", username)
+                    await connection.execute("""
+                        INSERT INTO bm25_vocab_epoch(id, epoch) VALUES(1, 0)
+                        ON CONFLICT(id) DO UPDATE SET epoch=0
+                    """)
+                    await connection.execute("INSERT INTO bm25_stats(id) VALUES(1) ON CONFLICT(id) DO NOTHING")
+                    await connection.execute("""
+                        UPDATE bm25_stats SET total_docs=0, avgdl=0,
+                            source_revision=0, source_chunk_count=0, updated_at=NOW()
+                    """)
+                await control.execute("ALTER DATABASE akb ALLOW_CONNECTIONS true")
+        except TimeoutError:
+            raise ProvisioningFailure("offline PostgreSQL reset exceeded its session/cleanup deadline") from None
+        except asyncpg.PostgresError as exc:
+            raise ProvisioningFailure(f"offline PostgreSQL fixture cleanup failed (sqlstate={exc.sqlstate})") from None
+        finally:
+            try:
+                await connection.close(timeout=5)
+            finally:
+                if control is not None:
+                    await control.close(timeout=5)
 
     async def _start_frontend(self) -> None:
         pnpm = shutil.which("pnpm")
@@ -4311,7 +4470,8 @@ class E2ERuntime:
         # before the direct fixture insert makes reset deterministic and keeps
         # the externally supplied credential out of backend logs/argv.
         await self._start_backend()
-        await self._stop_named_process("backend")
+        await self._drain_backend()
+        await self._capture_schema_baseline()
         await self._seed_external_credential()
         await self._start_backend()
         await self._mint_runtime_pat()
@@ -4360,12 +4520,7 @@ class E2ERuntime:
         self._lifecycle_state = "ready"
 
     async def reset_scenario(self) -> None:
-        """Replace application processes and storage before admitting another test.
-
-        Old remote I/O may complete after cancellation. Discarding the old
-        PostgreSQL/MinIO volumes and using a fresh Git path isolates those writes
-        without pretending that task cancellation is a storage barrier.
-        """
+        """Reuse dependencies only after the previous backend has fully drained."""
         async with self._reset_lock:
             if not self._prepared or self._lifecycle_state != "ready":
                 raise ProvisioningFailure("fixture reset requested before runtime readiness")
@@ -4375,24 +4530,26 @@ class E2ERuntime:
             self._resetting = True
             self._prepared = False
             self._lifecycle_state = "resetting"
-            self._fixture_catalog = {"status": "resetting", "scenario": self.scenario}
             identity_before = self._dependency_identity
             process_before = self._process_identity_snapshot()
             phases: dict[str, float] = {}
-            phase = "stop_processes"
-            phase_started = time.perf_counter()
+            self._backend_drain_evidence = {}
+            phase, phase_started = "drain_backend", time.perf_counter()
             succeeded = False
             try:
                 async with asyncio.timeout(self.config.timeout_seconds):
-                    for name in ("stdio", "backend", "embed"):
-                        await self._stop_named_process(name)
+                    await self._stop_named_process("stdio")
+                    await self._drain_backend()
                     phases[phase] = time.perf_counter() - phase_started
-                    phase, phase_started = "discard_storage", time.perf_counter()
-                    await self._compose("down", "--volumes", "--remove-orphans")
+                    phase, phase_started = "reset_postgres", time.perf_counter()
+                    if self.config.scenario == "app-installation-lifecycle":
+                        if not await self._restore_fault({}, "member_installation_unavailable"):
+                            raise ProvisioningFailure("fixture schema fault could not be restored")
+                    await self._reset_postgres_offline()
                     phases[phase] = time.perf_counter() - phase_started
-                    phase, phase_started = "start_dependencies", time.perf_counter()
+                    phase, phase_started = "prepare_fixture", time.perf_counter()
                     self.config = dataclasses.replace(
-                        self.config, storage_generation=self.config.storage_generation + 1
+                        self.config, storage_generation=self.config.storage_generation + 1,
                     )
                     self._write_config()
                     self._fixture_controls.clear()
@@ -4401,17 +4558,24 @@ class E2ERuntime:
                     self._stdio_tools_list_observed = False
                     self._stdio_read_call_observed = False
                     self._stdio_next_id = 2
-                    await self._start_dependencies()
+                    # Buckets and Git paths are generation-scoped on reused
+                    # storage. Ambiguous late remote PUTs cannot reach new data.
+                    await asyncio.to_thread(self._ensure_minio_bucket)
+                    await self._seed_external_credential()
                     phases[phase] = time.perf_counter() - phase_started
-                    phase, phase_started = "bootstrap_and_seed", time.perf_counter()
+                    phase, phase_started = "start_backend", time.perf_counter()
                     self._lifecycle_state = "starting"
-                    await self._start_embed_stub()
-                    await self._bootstrap_backend_and_seed()
+                    await self._start_backend()
+                    await self._mint_runtime_pat()
                     phases[phase] = time.perf_counter() - phase_started
                     phase, phase_started = "start_stdio", time.perf_counter()
                     if self.profile.needs_stdio:
                         await self._start_stdio_proxy()
                     phases[phase] = time.perf_counter() - phase_started
+                    identity_after = await asyncio.to_thread(self._dependency_identity_snapshot)
+                    if identity_before != identity_after:
+                        raise ProvisioningFailure("reuse fixture reset changed a dependency identity")
+                    self._dependency_identity = identity_after
                     self._prepared = True
                     self._lifecycle_state = "ready"
                     succeeded = True
@@ -4419,8 +4583,6 @@ class E2ERuntime:
                 phases[phase] = time.perf_counter() - phase_started
                 self._lifecycle_state = "failed"
                 self._fixture_catalog = {"status": "failed", "scenario": self.scenario}
-                # Ownership is retained for cleanup; a partial reset is never
-                # reused. A fresh runtime invocation is required after failure.
                 raise
             finally:
                 self._reset_task = None
@@ -4429,8 +4591,9 @@ class E2ERuntime:
                 elapsed = time.perf_counter() - started
                 self._dependency_reset_wall_seconds += elapsed
                 self._dependency_reset_evidence = {
-                    "strategy": "recreate",
-                    "preserves": ["fixture_origin", "app_origin"],
+                    "strategy": "reuse_after_drain",
+                    "preserves": ["postgres_container", "minio_container", "compose_network",
+                                  "compose_volumes", "embedding_process", "fixture_origin", "app_origin"],
                     "generation": self.config.storage_generation,
                     "count": self._dependency_reset_count,
                     "wall_seconds": self._dependency_reset_wall_seconds,
@@ -4438,6 +4601,7 @@ class E2ERuntime:
                     "last_succeeded": succeeded,
                     "phase_seconds": phases,
                     "failed_phase": None if succeeded else phase,
+                    "drain": self._backend_drain_evidence,
                     "identity_before": identity_before,
                     "identity_after": self._dependency_identity if succeeded else None,
                     "process_identity_before": process_before,
@@ -4632,7 +4796,7 @@ class E2ERuntime:
                             "child": "suite_runner",
                         },
                     )
-                    await terminate_process(process)
+                    await terminate_process(process, owned_groups=self._suite_process.owned_groups)
                 raw_returncode = process.returncode
                 if raw_returncode is None:
                     raw_returncode = await wait_task
@@ -4709,10 +4873,14 @@ class E2ERuntime:
                 return False
 
         for process in tuple(self._active_commands):
-            if await attempt("command", terminate_process(process)):
+            groups = self._active_command_groups.setdefault(process, {process.pid})
+            if await attempt("command", terminate_process(process, owned_groups=groups)):
                 self._active_commands.discard(process)
+                self._active_command_groups.pop(process, None)
         if self._suite_process is not None:
-            if await attempt("suite", terminate_process(self._suite_process.process)):
+            if await attempt("suite", terminate_process(
+                self._suite_process.process, owned_groups=self._suite_process.owned_groups,
+            )):
                 self._suite_process = None
         await attempt("fixture", self._stop_fixture_control())
         for name in ("stdio", "frontend", "backend", "embed"):
