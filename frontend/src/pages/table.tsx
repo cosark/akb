@@ -1,6 +1,15 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowDown,
@@ -41,6 +50,12 @@ import { ResourceActionsMenu } from "@/components/resource-actions-menu";
 import { ResourceDeleteDialog } from "@/components/resource-delete-dialog";
 import { PublicationSuccessBanner } from "@/components/publication-success-banner";
 import { TableCellExpanded } from "@/components/table-cell-expanded";
+import {
+  TableColumnResize,
+  TableColumnResizeGuide,
+  TableColumnResizeHandle,
+  TableColumnResizeSeparator,
+} from "@/components/table-column-resize";
 import { TablePublishDialog } from "@/components/table-publish-dialog";
 import { TableRowDialog } from "@/components/table-row-dialog";
 import {
@@ -51,6 +66,7 @@ import {
 import { useVaultRefresh } from "@/contexts/vault-refresh-context";
 import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
 import { usePublishResourceLocation } from "@/contexts/resource-location-context";
+import { useTableColumnWidths } from "@/hooks/use-table-column-widths";
 import {
   ApiError,
   deleteVaultTable,
@@ -116,6 +132,12 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
   const [rowToDelete, setRowToDelete] = useState<Record<string, unknown> | null>(null);
   const [rowNotice, setRowNotice] = useState("");
   const [wrapText, setWrapText] = useState(readWrapTextPreference);
+  // A view preference, like Wrap text: readers resize columns too.
+  const {
+    widths: columnWidths,
+    setWidth: setColumnWidth,
+    resetWidth: resetColumnWidth,
+  } = useTableColumnWidths(vault, table);
   const schemaToggleRef = useRef<HTMLButtonElement | null>(null);
   const schemaCloseRef = useRef<HTMLButtonElement | null>(null);
   const recordsRef = useRef<HTMLDivElement | null>(null);
@@ -479,13 +501,14 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                   ) : null}
                 </div>
               ) : (
+                <TableColumnResize onResize={setColumnWidth} onReset={resetColumnWidth}>
                 <div
                   ref={recordsRef}
                   role="region"
                   aria-label={`Records for ${table}`}
                   aria-busy={rowsQuery.isFetching || undefined}
                   tabIndex={0}
-                  className="min-h-0 flex-1 overflow-auto focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  className="relative min-h-0 flex-1 overflow-auto focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 >
                   <table className="min-w-full border-separate border-spacing-0 text-sm">
                     <thead>
@@ -496,13 +519,14 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                         >
                           #
                         </th>
-                        {cols.map((columnName) => {
+                        {cols.map((columnName, columnIndex) => {
                           const sorted = activeSort.column === columnName;
                           const SortIcon = sorted
                             ? activeSort.direction === "asc"
                               ? ArrowUp
                               : ArrowDown
                             : ArrowUpDown;
+                          const width = columnWidths.get(columnName);
                           return (
                             <th
                               key={columnName}
@@ -514,6 +538,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                                     : "descending"
                                   : "none"
                               }
+                              style={columnWidthStyle(width)}
                               className="sticky top-0 z-[var(--z-raised)] min-w-36 border-b border-r border-border bg-surface-2 p-0 text-left last:border-r-0"
                             >
                               <button
@@ -524,12 +549,13 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                                   sorted ? activeSort.direction : "not currently sorted"
                                 }`}
                               >
+                                {/* A narrowed column truncates the name and the type; the sort icon stays. */}
                                 <span className="min-w-0">
                                   <span className="block truncate whitespace-nowrap font-mono text-xs font-medium text-foreground">
                                     {columnName}
                                   </span>
                                   {columnByName.get(columnName)?.type && (
-                                    <span className="mt-0.5 block whitespace-nowrap text-xs font-normal text-foreground-muted">
+                                    <span className="mt-0.5 block truncate whitespace-nowrap text-xs font-normal text-foreground-muted">
                                       {columnByName.get(columnName)?.type}
                                     </span>
                                   )}
@@ -542,6 +568,15 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                                   aria-hidden
                                 />
                               </button>
+                              {/* Siblings of the sort button, so a press on a border never sorts. */}
+                              <TableColumnResizeSeparator
+                                column={columnName}
+                                width={width}
+                                rowEnd={columnIndex === cols.length - 1 && !canManageRows}
+                              />
+                              {columnIndex > 0 && (
+                                <TableColumnResizeHandle column={cols[columnIndex - 1]} edge="start" />
+                              )}
                             </th>
                           );
                         })}
@@ -580,7 +615,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                             >
                               {rowNumber}
                             </td>
-                            {cols.map((columnName) => {
+                            {cols.map((columnName, columnIndex) => {
                               const value = row[columnName];
                               const columnType = columnByName.get(columnName)?.type;
                               const cellKey = tableCellKey(rowKey, columnName);
@@ -591,6 +626,14 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                                   columnName={columnName}
                                   rowNumber={rowNumber}
                                   numeric={typeof value === "number" || isNumericColumnType(columnType)}
+                                  width={columnWidths.get(columnName)}
+                                  resizeHandle={
+                                    <TableColumnResizeHandle
+                                      column={columnName}
+                                      edge="end"
+                                      rowEnd={columnIndex === cols.length - 1 && !canManageRows}
+                                    />
+                                  }
                                   wrap={wrapText}
                                   alignTop={alignTop}
                                   expanded={expandedCells.has(cellKey)}
@@ -632,7 +675,9 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                       })}
                     </tbody>
                   </table>
+                  <TableColumnResizeGuide />
                 </div>
+                </TableColumnResize>
               )}
               {rowsQuery.data && total > 0 && (
                 <TablePagination
@@ -1128,13 +1173,16 @@ const LINE_BREAK = /[\r\n]/;
  * display limit, or by the column as TooltipText measures it: its width on a
  * single line, and also the six-line clamp when wrapped. A single line also
  * collapses line breaks, so a multi-line string never shows in full there.
- * The tooltip is portaled so it never becomes part of the button.
+ * The tooltip is portaled so it never becomes part of the button. Every
+ * variant positions the column's resize handle on the cell's right border.
  */
 function TableDataCell({
   value,
   columnName,
   rowNumber,
   numeric,
+  width,
+  resizeHandle,
   wrap,
   alignTop,
   expanded,
@@ -1147,6 +1195,10 @@ function TableDataCell({
   /** 1-based row number as shown in the grid's `#` column. */
   rowNumber: number;
   numeric: boolean;
+  /** The width chosen for the column; undefined keeps the automatic width. */
+  width: number | undefined;
+  /** The column's resize handle. It comes last, after the cell's content box. */
+  resizeHandle: ReactNode;
   /** Wrap the value onto up to six lines instead of truncating one line. */
   wrap: boolean;
   /** The row grows (wrapped, or it holds an expanded cell): align to the top. */
@@ -1192,7 +1244,8 @@ function TableDataCell({
     return (
       <td
         data-wrap={wrap ? "true" : "false"}
-        className="h-px max-w-md border-b border-r border-border p-0 align-top last:border-r-0"
+        style={columnWidthStyle(width)}
+        className="relative h-px max-w-md border-b border-r border-border p-0 align-top last:border-r-0"
       >
         <TableCellExpanded
           ref={valueRef}
@@ -1217,6 +1270,7 @@ function TableDataCell({
         >
           {display}
         </div>
+        {resizeHandle}
       </td>
     );
   }
@@ -1255,7 +1309,8 @@ function TableDataCell({
     // row made taller by another cell; without it the box keeps its own height.
     <td
       data-wrap={wrap ? "true" : "false"}
-      className="h-px max-w-md border-b border-r border-border p-0 last:border-r-0"
+      style={columnWidthStyle(width)}
+      className="relative h-px max-w-md border-b border-r border-border p-0 last:border-r-0"
     >
       {truncated ? (
         <button
@@ -1279,8 +1334,18 @@ function TableDataCell({
       ) : (
         <div className={box}>{content}</div>
       )}
+      {resizeHandle}
     </td>
   );
+}
+
+/**
+ * A chosen width fixes the column at exactly that size: the inline styles
+ * override the automatic sizing classes (the header's min-w-36, the cells'
+ * max-w-md), and narrower content still truncates or wraps inside it.
+ */
+function columnWidthStyle(width: number | undefined): CSSProperties | undefined {
+  return width === undefined ? undefined : { width, minWidth: width, maxWidth: width };
 }
 
 function formatCellFull(value: unknown): string {

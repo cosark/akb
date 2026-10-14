@@ -320,8 +320,9 @@ describe("table cell expansion", () => {
     const capped = await screen.findByRole("button", { name: CAPPED_NOTES });
     expect(capped).toHaveAttribute("tabindex", "0");
 
-    // From the last column header, Tab skips the fully visible id and title cells.
-    screen.getByRole("button", { name: /^Sort by created_at/ }).focus();
+    // From the last column header's last control, its resize separator, Tab
+    // skips the fully visible id and title cells.
+    screen.getByRole("separator", { name: "Resize created_at column" }).focus();
     await user.tab();
     expect(capped).toHaveFocus();
 
