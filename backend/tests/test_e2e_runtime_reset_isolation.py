@@ -38,10 +38,20 @@ async def test_reset_waits_for_writers_and_reuses_dependencies_with_isolated_sto
         old_db = await asyncpg.connect(
             host="127.0.0.1", port=postgres, user="akb", password="akb", database="akb",  # pragma: allowlist secret
         )
+        username, _password = runtime.config.credentials.values()
+        baseline_user = await old_db.fetchrow(
+            "SELECT id, password_hash FROM users WHERE username=$1", username,
+        )
         await old_db.execute("CREATE TABLE reset_sentinel(value text)")
         await old_db.execute("BEGIN")
         await old_db.execute("INSERT INTO reset_sentinel VALUES ('previous-generation')")
         await old_db.execute("LOCK TABLE chunks IN ROW EXCLUSIVE MODE")
+        # Reusing a computed hash must still repair mutable account state.
+        await old_db.execute("""
+            UPDATE users SET password_hash=$2, is_admin=FALSE,
+                             credential_change_required=TRUE
+             WHERE username=$1
+        """, username, "test-modified-hash")
         old_git = runtime.config.vault_dir
         (old_git / "reset-sentinel").write_text("previous-generation")
         old_pat = runtime._pat_value
@@ -98,6 +108,16 @@ async def test_reset_waits_for_writers_and_reuses_dependencies_with_isolated_sto
             assert await new_db.fetchval("SELECT to_regclass('public.reset_sentinel') IS NULL")
             assert await new_db.fetchval("SELECT count(*) FROM bm25_vocab_epoch") == 1
             assert await new_db.fetchval("SELECT epoch FROM bm25_vocab_epoch") == 0
+            restored = await new_db.fetchrow("""
+                SELECT id, password_hash, is_admin, account_status, credential_change_required
+                  FROM users WHERE username=$1
+            """, username)
+            assert restored["id"] == baseline_user["id"]
+            hash_reused = restored["password_hash"] == baseline_user["password_hash"]
+            assert hash_reused
+            assert restored["is_admin"] is True
+            assert restored["account_status"] == "active"
+            assert restored["credential_change_required"] is False
         finally:
             await new_db.close()
         assert runtime._dependency_identity == old_identity

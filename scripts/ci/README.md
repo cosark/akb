@@ -201,6 +201,20 @@ PG image rather than invoking a build. Retired namespace storage was not include
 in the time measurement; it remains until runtime disposal. Runtime phase evidence
 allows measurements on other hosts.
 
+The fixture password hash is computed once per runtime and reused while the
+injected password is unchanged. Reset still restores account permissions/status
+and scenario data; fresh tokens and storage generations are unchanged. The cache
+has one private in-memory entry, is replaced on password rotation, and is only
+populated after successful hashing. It is not emitted in discovery or logs.
+
+A subsequent five-reset comparison against `d9a5082f` used the same idle profile
+and images. Fixture preparation mean fell from 0.496s to 0.191s (61.4%); median
+fell from 0.456s to 0.158s. Total reset mean was 3.790s before and 3.372s after
+(11.0%). Backend startup mean was nearly unchanged at 2.240s/2.250s. Across initial
+preparation plus five resets, supervisor bcrypt calls fell from six to one.
+These before/after samples are the relevant comparison for the cache change;
+startup latency differs from the earlier three-sample run above.
+
 The E2E workflow also runs the Docker-backed reset regression explicitly:
 
 ```bash

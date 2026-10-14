@@ -660,6 +660,7 @@ class E2ERuntime:
         self._backend_drain_report: Path | None = None
         self._backend_drain_evidence: dict[str, object] = {}
         self._schema_tables: set[tuple[str, str]] | None = None
+        self._fixture_password_cache: tuple[bytes, str] | None = None
         self._fixture_catalog: dict[str, object] = {
             "status": "starting",
             "scenario": self.config.scenario,
@@ -4369,11 +4370,18 @@ class E2ERuntime:
             import asyncpg
             import bcrypt
 
-            password_hash = await asyncio.to_thread(
-                lambda: bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode(
-                    "ascii"
+            # Credentials are stable across ordinary resets. Reuse the costly
+            # hash, but always restore mutable database state below. Keep only
+            # one in-memory entry, invalidated when the injected password changes.
+            password_key = hashlib.sha256(password.encode("utf-8")).digest()
+            cached = self._fixture_password_cache
+            if cached is None or cached[0] != password_key:
+                password_hash = await asyncio.to_thread(
+                    lambda: bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
                 )
-            )
+                cached = (password_key, password_hash)
+                self._fixture_password_cache = cached
+            password_hash = cached[1]
             self._fixture_private_marker = f"runtime-private-{uuid.uuid4().hex}"
             self._fixture_private_values = (username, password, self._fixture_private_marker)
             connection = await asyncpg.connect(

@@ -2402,6 +2402,218 @@ async def test_offline_postgres_reset_fences_from_maintenance_database_and_rolls
     )
 
 
+def _fixture_seed_database(monkeypatch):
+    """Retain the fixture user across seeds while exposing actual INSERT/UPDATE calls."""
+    import asyncpg
+
+    user = {"id": None}
+    queries = []
+    connections = []
+
+    class Connection:
+        closed = False
+
+        async def fetchval(self, query, username):
+            assert "SELECT id FROM users WHERE username = $1" in query
+            if user["id"] is not None:
+                assert user["username"] == username
+            return user["id"]
+
+        async def execute(self, query, *args):
+            normalized = " ".join(query.split())
+            queries.append((normalized, args))
+            if normalized.startswith("INSERT INTO users"):
+                actor_id, username, _email, password_hash = args
+                assert user["id"] is None
+                user.update(
+                    id=actor_id, username=username, password_hash=password_hash,
+                    is_admin=True, account_status="active", credential_change_required=False,
+                )
+            else:
+                assert normalized.startswith("UPDATE users")
+                assert all(field in normalized for field in (
+                    "password_hash = $2", "is_admin = TRUE", "account_status = 'active'",
+                    "credential_change_required = FALSE", "updated_at = NOW()",
+                ))
+                actor_id, password_hash = args
+                assert actor_id == user["id"]
+                user.update(
+                    password_hash=password_hash, is_admin=True,
+                    account_status="active", credential_change_required=False,
+                )
+
+        async def close(self):
+            self.closed = True
+
+    async def connect(**kwargs):
+        assert kwargs["database"] == "akb"
+        connection = Connection()
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(asyncpg, "connect", connect)
+    return user, queries, connections
+
+
+def _fixture_hash_spy(monkeypatch):
+    import bcrypt
+
+    calls = []
+
+    def hashpw(value, salt):
+        assert salt == b"test-salt"
+        calls.append(value)
+        return f"test-hash-{len(calls)}".encode("ascii")
+
+    monkeypatch.setattr(bcrypt, "gensalt", lambda: b"test-salt")
+    monkeypatch.setattr(bcrypt, "hashpw", hashpw)
+    return calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario,expected_helpers", [
+    ("empty", []),
+    ("app-installation-lifecycle", ["_seed_app_installation_lifecycle"]),
+    ("app-release-rollout", ["_seed_app_release_rollout"]),
+    ("app-control-plane", [
+        "_seed_app_release_rollout", "_seed_control_plane_installation_lifecycle",
+        "_seed_control_plane_legacy_adoption",
+    ]),
+])
+async def test_fixture_reuses_hash_but_restores_user_and_scenario_actors_on_every_seed(
+    tmp_path, monkeypatch, scenario, expected_helpers,
+):
+    runtime = E2ERuntime(dataclasses.replace(make_config(tmp_path), scenario=scenario))
+    monkeypatch.setenv("TEST_USERNAME_ENV", "fixture-user")
+    monkeypatch.setenv("TEST_PASSWORD_ENV", "first test value")
+    user, queries, connections = _fixture_seed_database(monkeypatch)
+    hashes = _fixture_hash_spy(monkeypatch)
+    helper_calls = []
+
+    def seed_helper(name):
+        async def seed(connection, *, password_hash, system_admin_id):
+            assert connection in connections
+            helper_calls.append((name, password_hash, system_admin_id))
+        return seed
+
+    for name in expected_helpers:
+        monkeypatch.setattr(runtime, name, seed_helper(name))
+    await runtime._seed_external_credential()
+    actor_id = user["id"]
+    initial_hash = user["password_hash"]
+    user.update(
+        password_hash="mutated test value", is_admin=False,  # pragma: allowlist secret
+        account_status="suspended", credential_change_required=True,
+    )
+    await runtime._seed_external_credential()
+
+    assert hashes == [b"first test value"]
+    assert user == {
+        "id": actor_id, "username": "fixture-user", "password_hash": initial_hash,
+        "is_admin": True, "account_status": "active", "credential_change_required": False,
+    }
+    assert len(queries) == 2
+    assert queries[0][0].startswith("INSERT INTO users")
+    assert queries[1][0].startswith("UPDATE users")
+    assert helper_calls == [
+        (name, initial_hash, actor_id) for name in expected_helpers + expected_helpers
+    ]
+    assert all(connection.closed for connection in connections)
+    assert runtime._fixture_password_cache[1] == initial_hash
+    assert isinstance(runtime._fixture_password_cache[0], bytes)
+    assert len(runtime._fixture_password_cache[0]) == 32
+    assert runtime._fixture_password_cache[0] != b"first test value"
+
+
+@pytest.mark.asyncio
+async def test_fixture_hash_cache_is_one_entry_and_owned_by_each_runtime(tmp_path, monkeypatch):
+    runtime = E2ERuntime(make_config(tmp_path))
+    monkeypatch.setenv("TEST_USERNAME_ENV", "fixture-user")
+    monkeypatch.setenv("TEST_PASSWORD_ENV", "first test value")
+    _fixture_seed_database(monkeypatch)
+    hashes = _fixture_hash_spy(monkeypatch)
+    await runtime._seed_external_credential()
+    first_fingerprint = runtime._fixture_password_cache[0]
+    monkeypatch.setenv("TEST_PASSWORD_ENV", "second test value")
+    await runtime._seed_external_credential()
+    assert runtime._fixture_password_cache[0] != first_fingerprint
+    monkeypatch.setenv("TEST_PASSWORD_ENV", "first test value")
+    await runtime._seed_external_credential()
+    assert hashes == [b"first test value", b"second test value", b"first test value"]
+
+    independent = E2ERuntime(make_config(tmp_path))
+    assert independent._fixture_password_cache is None
+    await independent._seed_external_credential()
+    assert hashes == [
+        b"first test value", b"second test value", b"first test value", b"first test value",
+    ]
+    assert independent._fixture_password_cache[1] != runtime._fixture_password_cache[1]
+
+
+@pytest.mark.asyncio
+async def test_failed_fixture_hash_is_not_cached(tmp_path, monkeypatch):
+    import bcrypt
+
+    runtime = E2ERuntime(make_config(tmp_path))
+    monkeypatch.setenv("TEST_USERNAME_ENV", "fixture-user")
+    monkeypatch.setenv("TEST_PASSWORD_ENV", "first test value")
+    _fixture_seed_database(monkeypatch)
+    hashes = _fixture_hash_spy(monkeypatch)
+    normal_hash = bcrypt.hashpw
+
+    def broken_hash(*_args):
+        raise ValueError("sensitive hash failure")
+
+    monkeypatch.setattr(bcrypt, "hashpw", broken_hash)
+    with pytest.raises(ProvisioningFailure) as raised:
+        await runtime._seed_external_credential()
+    assert "sensitive hash failure" not in str(raised.value)
+    assert runtime._fixture_password_cache is None
+    monkeypatch.setattr(bcrypt, "hashpw", normal_hash)
+    await runtime._seed_external_credential()
+    assert hashes == [b"first test value"]
+    assert runtime._fixture_password_cache is not None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_fixture_hash_thread_cannot_populate_cache(tmp_path, monkeypatch):
+    import bcrypt
+    import threading
+
+    runtime = E2ERuntime(make_config(tmp_path))
+    monkeypatch.setenv("TEST_USERNAME_ENV", "fixture-user")
+    monkeypatch.setenv("TEST_PASSWORD_ENV", "first test value")
+    _fixture_seed_database(monkeypatch)
+    hashes = _fixture_hash_spy(monkeypatch)
+    normal_hash = bcrypt.hashpw
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def delayed_hash(value, salt):
+        entered.set()
+        try:
+            assert release.wait(timeout=5)
+            return normal_hash(value, salt)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(bcrypt, "hashpw", delayed_hash)
+    seed = asyncio.create_task(runtime._seed_external_credential())
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        seed.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await seed
+        assert runtime._fixture_password_cache is None
+    finally:
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 5)
+    assert runtime._fixture_password_cache is None
+    monkeypatch.setattr(bcrypt, "hashpw", normal_hash)
+    await runtime._seed_external_credential()
+    assert hashes == [b"first test value", b"first test value"]
+    assert runtime._fixture_password_cache is not None
+
+
 @pytest.mark.asyncio
 async def test_reset_deadline_is_total_and_leaves_runtime_failed(tmp_path, monkeypatch):
     runtime = _ready_runtime(tmp_path)
