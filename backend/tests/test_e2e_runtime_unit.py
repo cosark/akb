@@ -9,6 +9,7 @@ import stat
 import subprocess
 import sys
 import uuid
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -306,6 +307,10 @@ async def test_postgres_reset_preserves_diagnostic_and_recovers_on_next_attempt(
     state = {"fail_once": True, "execute_calls": 0, "close_calls": 0}
 
     class Connection:
+        @asynccontextmanager
+        async def transaction(self):
+            yield
+
         async def execute(self, *_args: object) -> None:
             state["execute_calls"] += 1
             if state["fail_once"]:
@@ -328,6 +333,96 @@ async def test_postgres_reset_preserves_diagnostic_and_recovers_on_next_attempt(
 
     assert state["execute_calls"] == 4
     assert state["close_calls"] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_statement", [1, 2, 3])
+@pytest.mark.parametrize("failure", ["recover", "exhausted", "non_deadlock", "cancelled"])
+async def test_postgres_reset_retries_only_deadlocks_after_rollback(
+    monkeypatch, tmp_path, caplog, failed_statement, failure,
+):
+    import asyncpg
+
+    runtime = E2ERuntime(make_config(tmp_path))
+    monkeypatch.setenv("TEST_USERNAME_ENV", "fixture-user")
+    monkeypatch.setenv("TEST_PASSWORD_ENV", "fixture-password")
+    private = "fixture-private-marker"
+    runtime._fixture_private_values = (private,)
+    events = []
+    attempts = 0
+    statement = 0
+
+    class Connection:
+        @asynccontextmanager
+        async def transaction(self):
+            nonlocal attempts, statement
+            attempts += 1
+            statement = 0
+            events.append("begin")
+            try:
+                yield
+            except BaseException:
+                events.append("rollback")
+                raise
+            else:
+                events.append("commit")
+
+        async def execute(self, *_args):
+            nonlocal statement
+            statement += 1
+            events.append("execute")
+            if statement != failed_statement or (failure == "recover" and attempts > 1):
+                return
+            if failure == "cancelled":
+                raise asyncio.CancelledError()
+            error = (
+                asyncpg.DeadlockDetectedError
+                if failure in {"recover", "exhausted"}
+                else asyncpg.InsufficientPrivilegeError
+            )
+            raise error(f"server diagnostic {private}")
+
+        async def close(self):
+            events.append("close")
+
+    async def connect(**_kwargs):
+        return Connection()
+
+    async def sleep(delay):
+        assert events[-1] == "rollback"
+        events.append(("sleep", delay))
+
+    monkeypatch.setattr(asyncpg, "connect", connect)
+    monkeypatch.setattr(e2e_runtime.asyncio, "sleep", sleep)
+
+    if failure == "recover":
+        await runtime._reset_postgres_in_place()
+        assert events == (
+            ["begin"] + ["execute"] * failed_statement
+            + ["rollback", ("sleep", 0.05), "begin"]
+            + ["execute"] * 3 + ["commit", "close"]
+        )
+    elif failure == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            await runtime._reset_postgres_in_place()
+        assert events == ["begin"] + ["execute"] * failed_statement + ["rollback", "close"]
+    else:
+        expected_attempts = 3 if failure == "exhausted" else 1
+        sqlstate = "40P01" if failure == "exhausted" else "42501"
+        with pytest.raises(ProvisioningFailure) as caught:
+            await runtime._reset_postgres_in_place()
+        assert f"attempts={expected_attempts}" in str(caught.value)
+        assert f"sqlstate={sqlstate}" in str(caught.value)
+        assert "[REDACTED]" in str(caught.value)
+        assert private not in str(caught.value)
+        assert attempts == expected_attempts
+        assert events.count("rollback") == expected_attempts
+        assert "commit" not in events
+        assert [event for event in events if isinstance(event, tuple)] == (
+            [("sleep", 0.05), ("sleep", 0.1)] if failure == "exhausted" else []
+        )
+        assert events[-1] == "close"
+    assert private not in caplog.text
 
 
 @pytest.mark.asyncio

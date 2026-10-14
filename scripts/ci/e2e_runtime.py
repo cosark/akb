@@ -71,6 +71,8 @@ DEFAULT_COMPOSE_PROJECT = "akb-e2e"
 DEFAULT_TIMEOUT_SECONDS = 180.0
 DEFAULT_PROFILE = "tool-only"
 SOURCE_REVISION_ENV = "AKB_E2E_SOURCE_REVISION"
+POSTGRES_RESET_MAX_ATTEMPTS = 3
+POSTGRES_RESET_BACKOFF_SECONDS = (0.05, 0.1)
 MINIO_RESET_MAX_ATTEMPTS = 3
 MINIO_RESET_BACKOFF_SECONDS = (0.05, 0.1)
 MINIO_DELETE_BATCH_SIZE = 1000
@@ -2189,7 +2191,9 @@ class E2ERuntime:
         return {"services": services}
 
     async def _reset_postgres_in_place(self) -> None:
-        """Clear application rows while keeping the database schema and process alive."""
+        """Atomically clear fixture rows, retrying rolled-back deadlock victims."""
+
+        attempt = 0
 
         try:
             import asyncpg
@@ -2202,64 +2206,86 @@ class E2ERuntime:
                 database="akb",
             )
             try:
-                await connection.execute(
-                    """
-                    DO $cleanup$
-                    DECLARE table_list text;
-                    BEGIN
-                        SELECT string_agg(format('%I.%I', schemaname, tablename), ', ')
-                          INTO table_list
-                          FROM pg_tables
-                         WHERE schemaname NOT LIKE 'pg_%'
-                           AND schemaname <> 'information_schema'
-                           AND tablename NOT IN (
-                               'schema_migrations',
-                               'users',
-                               'tokens',
-                               'auth_runtime_epoch_upgrade',
-                               'auth_runtime_state',
-                               'bm25_stats',
-                               'bm25_vocab_epoch',
-                               'document_revision_bootstrap_claims',
-                               'document_revision_authority_pending',
-                               'document_revision_authority_marker',
-                               'native_revision_existing_authority_fence',
-                               'native_revision_existing_authority',
-                               'native_revision_legacy_write_fence'
-                           );
-                        IF table_list IS NOT NULL THEN
-                            EXECUTE format('TRUNCATE TABLE %s RESTART IDENTITY CASCADE', table_list);
-                        END IF;
-                        -- Fixture-only recovery for a prior reset that cleared
-                        -- the singleton. Preserve every existing epoch value;
-                        -- production readers still reject a missing row.
-                        IF to_regclass('public.bm25_vocab_epoch') IS NOT NULL THEN
-                            INSERT INTO public.bm25_vocab_epoch (id) VALUES (1)
-                            ON CONFLICT (id) DO NOTHING;
-                        END IF;
-                    END
-                    $cleanup$
-                    """
-                )
                 username, _password = self.config.credentials.values()
-                await connection.execute(
-                    """
-                    DELETE FROM tokens
-                     WHERE user_id NOT IN (
-                         SELECT id FROM users WHERE username = $1
-                     )
-                    """,
-                    username,
-                )
-                await connection.execute(
-                    "DELETE FROM users WHERE username <> $1",
-                    username,
-                )
+                for attempt in range(1, POSTGRES_RESET_MAX_ATTEMPTS + 1):
+                    try:
+                        # The live backend can still hold write locks. Roll back
+                        # ALL cleanup before retrying, including tokens/users;
+                        # a successful TRUNCATE alone is not a completed reset.
+                        async with connection.transaction():
+                            await connection.execute(
+                                """
+                                DO $cleanup$
+                                DECLARE table_list text;
+                                BEGIN
+                                    SELECT string_agg(format('%I.%I', schemaname, tablename), ', ')
+                                      INTO table_list
+                                      FROM pg_tables
+                                     WHERE schemaname NOT LIKE 'pg_%'
+                                       AND schemaname <> 'information_schema'
+                                       AND tablename NOT IN (
+                                           'schema_migrations',
+                                           'users',
+                                           'tokens',
+                                           'auth_runtime_epoch_upgrade',
+                                           'auth_runtime_state',
+                                           'bm25_stats',
+                                           'bm25_vocab_epoch',
+                                           'document_revision_bootstrap_claims',
+                                           'document_revision_authority_pending',
+                                           'document_revision_authority_marker',
+                                           'native_revision_existing_authority_fence',
+                                           'native_revision_existing_authority',
+                                           'native_revision_legacy_write_fence'
+                                       );
+                                    IF table_list IS NOT NULL THEN
+                                        EXECUTE format('TRUNCATE TABLE %s RESTART IDENTITY CASCADE', table_list);
+                                    END IF;
+                                    -- Fixture-only recovery for a prior reset that cleared
+                                    -- the singleton. Preserve every existing epoch value;
+                                    -- production readers still reject a missing row.
+                                    IF to_regclass('public.bm25_vocab_epoch') IS NOT NULL THEN
+                                        INSERT INTO public.bm25_vocab_epoch (id) VALUES (1)
+                                        ON CONFLICT (id) DO NOTHING;
+                                    END IF;
+                                END
+                                $cleanup$
+                                """
+                            )
+                            await connection.execute(
+                                """
+                                DELETE FROM tokens
+                                 WHERE user_id NOT IN (
+                                     SELECT id FROM users WHERE username = $1
+                                 )
+                                """,
+                                username,
+                            )
+                            await connection.execute(
+                                "DELETE FROM users WHERE username <> $1",
+                                username,
+                            )
+                        break
+                    except Exception as exc:
+                        if (
+                            getattr(exc, "sqlstate", None) != "40P01"
+                            or attempt == POSTGRES_RESET_MAX_ATTEMPTS
+                        ):
+                            raise
+                        # The transaction context has released all locks before
+                        # the delay. Do not log server details on retry: they can
+                        # contain fixture secrets. Final diagnostics are redacted.
+                        LOGGER.warning(
+                            "PostgreSQL fixture reset deadlocked (sqlstate=40P01, "
+                            "attempt=%d/%d); retrying after rollback",
+                            attempt, POSTGRES_RESET_MAX_ATTEMPTS,
+                        )
+                        await asyncio.sleep(POSTGRES_RESET_BACKOFF_SECONDS[attempt - 1])
             finally:
                 await connection.close()
         except Exception as exc:
             sqlstate = getattr(exc, "sqlstate", None)
-            detail = f"{type(exc).__name__}"
+            detail = f"{type(exc).__name__} attempts={attempt}"
             if sqlstate:
                 detail += f" sqlstate={sqlstate}"
             message = str(exc)

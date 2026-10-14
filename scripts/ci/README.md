@@ -157,6 +157,14 @@ The supervisor has two modes:
   retry; reset discovery records the attempt count, retry count, elapsed time,
   and redacted operation diagnostic.
 
+  PostgreSQL row cleanup (TRUNCATE, token cleanup, and user cleanup) commits
+  as one transaction. If a live writer makes that transaction a deadlock
+  victim (`40P01`), it rolls back before retrying, with at most three attempts
+  and 50/100 ms backoff. Other errors fail immediately; exhausted retries
+  preserve the redacted server diagnostic and attempt count. This recovers
+  reset-side deadlocks without restarting the backend; it does not pause
+  workers or make PostgreSQL, MinIO, and Git cleanup one atomic operation.
+
 The native catalog benchmark launcher is separate from this generic runtime;
 its interface and descriptor composition are documented in
 `eval/mcp-catalog/README.md`. The generic runtime itself has no model or
