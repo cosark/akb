@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SelectMenu } from "@/components/ui/select-menu";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { VaultTableColumnInput } from "@/lib/api";
 import {
   TABLE_PAGE_SIZES,
@@ -295,20 +296,27 @@ export function TableFilterBar({
       {onWrapTextChange ? (
         // One group, so the toggle and Refresh stay together when the bar wraps.
         <div className="ml-auto flex items-center gap-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Wrap text"
-            aria-pressed={wrapText}
-            onClick={() => onWrapTextChange(!wrapText)}
-            // Pressed: the selected surface plus an underline bar, so the state
-            // does not rest on the tint alone. Styled from aria-pressed itself so
-            // the visible and announced states cannot diverge.
-            className="relative h-8 w-8 after:absolute after:inset-x-2 after:bottom-1 after:h-0.5 after:rounded-[var(--radius-full)] aria-pressed:bg-surface-selected aria-pressed:text-surface-selected-foreground aria-pressed:after:bg-link aria-pressed:hover:bg-surface-selected"
-          >
-            <WrapText className="h-3.5 w-3.5" aria-hidden />
-          </Button>
+          <TooltipProvider delayDuration={250}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Wrap text"
+                  aria-pressed={wrapText}
+                  onClick={() => onWrapTextChange(!wrapText)}
+                  // Pressed: the selected surface plus an underline bar, so the state
+                  // does not rest on the tint alone. Styled from aria-pressed itself so
+                  // the visible and announced states cannot diverge.
+                  className="relative h-8 w-8 after:absolute after:inset-x-2 after:bottom-1 after:h-0.5 after:rounded-[var(--radius-full)] aria-pressed:bg-surface-selected aria-pressed:text-surface-selected-foreground aria-pressed:after:bg-link aria-pressed:hover:bg-surface-selected"
+                >
+                  <WrapText className="h-3.5 w-3.5" aria-hidden />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Wrap text</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           {refresh}
         </div>
       ) : (
