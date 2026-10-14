@@ -36,7 +36,8 @@ type TooltipTextProps = Omit<React.HTMLAttributes<HTMLElement>, "title"> & {
    * Receives the measured overflow state whenever it changes, for a caller
    * that needs it beyond the tooltip (e.g. a truncated table cell that becomes
    * keyboard-reachable). Reuses this measurement instead of adding a second
-   * ResizeObserver; omitting it changes nothing.
+   * ResizeObserver; omitting it changes nothing. The first call follows the
+   * first measurement: a newly mounted instance never reports a guess.
    */
   onOverflowChange?: (overflow: boolean) => void;
   /**
@@ -68,7 +69,11 @@ export function TooltipText({
   ...rest
 }: TooltipTextProps) {
   const ref = useRef<HTMLElement>(null);
-  const [overflow, setOverflow] = useState(false);
+  // null until the first measurement, so a new instance never reports an
+  // overflow it has not measured. A caller that swaps the element around the
+  // text on that report (a table cell's button and plain container) remounts
+  // this component; reporting the initial false would flip it straight back.
+  const [overflow, setOverflow] = useState<boolean | null>(null);
 
   useEffect(() => {
     const el = ref.current;
@@ -85,7 +90,7 @@ export function TooltipText({
   }, [children, tip, overflowAxis]);
 
   useEffect(() => {
-    onOverflowChange?.(overflow);
+    if (overflow !== null) onOverflowChange?.(overflow);
   }, [onOverflowChange, overflow]);
 
   const full = tip ?? (typeof children === "string" ? children : undefined);

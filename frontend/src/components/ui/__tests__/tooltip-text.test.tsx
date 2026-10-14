@@ -68,6 +68,24 @@ describe("TooltipText overflow reporting", () => {
     else expect(screen.getByTestId("host")).toContainElement(tooltip);
   });
 
+  it("reports only measured values, also from a newly mounted instance", () => {
+    stubOverflowingText("A label wider than its column");
+    const onOverflowChange = vi.fn();
+    const label = (
+      <TooltipText className="truncate" onOverflowChange={onOverflowChange}>
+        A label wider than its column
+      </TooltipText>
+    );
+    const first = render(label);
+    expect(onOverflowChange.mock.calls).toEqual([[true]]);
+
+    // A caller that swaps the element around the text remounts it. Reporting
+    // the initial, unmeasured false first would make that caller swap back.
+    first.unmount();
+    render(label);
+    expect(onOverflowChange.mock.calls).toEqual([[true], [true]]);
+  });
+
   it("reports false for text that fits and keeps the callback off the DOM", () => {
     const onOverflowChange = vi.fn();
     render(
