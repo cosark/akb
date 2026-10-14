@@ -1126,7 +1126,14 @@ an `sr-only` summary, never the only signal.
   single flat data surface fills the remaining height and owns both horizontal
   and vertical scrolling; its header and row-index column remain sticky, while
   cell values use sans/tabular typography unless the value itself is structured
-  data. Responsive layouts preserve the grid via a focusable horizontal-scroll
+  data. Cell values never hide content behind hover alone: every data cell is a
+  button that opens a read-only value viewer (column, type and row; the full
+  value as indented JSON or as text with its line breaks; Copy), and a cell is a
+  keyboard tab stop only while part of its value is hidden, so the grid never
+  becomes one tab stop per cell. The records bar's Wrap text toggle, remembered
+  per browser, switches cells from one truncated line to at most six wrapped,
+  top-aligned lines without widening columns.
+  Responsive layouts preserve the grid via a focusable horizontal-scroll
   region rather than converting records into unrelated cards. Schema opens as a
   right overlay inspector and never reduces data width; it returns focus on
   Close, backdrop click, or Escape. The inspector reads as a compact data
