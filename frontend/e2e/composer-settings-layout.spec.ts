@@ -104,16 +104,10 @@ for (const width of [375, 1440, 2560]) for (const dark of [false, true]) {
     const panel = (await page.getByRole("tabpanel").boundingBox())!;
     expect(panel.x - workspace.x).toBeLessThanOrEqual(24);
     const details = page.getByRole("complementary", { name: "Vault details" });
-    await expect(details).toBeVisible();
-    await expect(details.getByText("Workspace reviewer", { exact: true })).toBeVisible();
-    const detailsBounds = (await details.boundingBox())!;
-    if (width >= 1440) {
-      expect(detailsBounds.x).toBeGreaterThanOrEqual(panel.x + panel.width + 20);
-      expect(Math.abs(detailsBounds.y - panel.y)).toBeLessThanOrEqual(2);
-    } else {
-      expect(detailsBounds.y).toBeGreaterThanOrEqual(panel.y + panel.height + 20);
-    }
-    await expect(details.getByRole("link", { name: "Open Vault Overview" })).toHaveAttribute("href", "/vault/fixture");
+    await expect(details).toHaveCount(0);
+    await expect(page.getByRole("tabpanel").getByText("Workspace reviewer", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-slot="vault-collections-sidebar"]')).toHaveCount(0);
+    await expect(page.getByRole("navigation", { name: "Vault sections" })).toHaveCount(0);
     await expect(page.getByRole("tabpanel")).toHaveCount(1);
     await expect(page.getByRole("tab", { name: "General", exact: true })).toHaveAttribute("aria-selected", "true");
     await page.screenshot({ path: testInfo.outputPath("settings-general.png"), animations: "disabled" });
@@ -129,7 +123,7 @@ for (const width of [375, 1440, 2560]) for (const dark of [false, true]) {
     await page.getByRole("tab", { name: "Advanced", exact: true }).click();
     await expect(page.getByRole("tab", { name: "Advanced", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("heading", { name: "Operations", exact: true })).toBeVisible();
-    await expect(details).toBeVisible();
+    await expect(details).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("settings-advanced.png"), animations: "disabled" });
     const bounds = (await tabs.boundingBox())!;
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);

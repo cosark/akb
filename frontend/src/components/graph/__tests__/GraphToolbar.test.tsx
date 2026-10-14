@@ -97,7 +97,25 @@ describe("GraphToolbar resource lookup", () => {
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "remote" } });
     await act(() => vi.advanceTimersByTimeAsync(260));
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
-    expect(props.onChange).toHaveBeenCalledWith(expect.objectContaining({ entry: uri, hops: 1, selected: undefined }));
+    expect(props.onChange).toHaveBeenCalledWith(expect.objectContaining({ entry: uri, hops: 1, selected: uri }));
+  });
+
+  it.each(["document", "table", "file"] as const)("F18: an explicit remote %s choice reveals its hidden kind", async kind => {
+    vi.useFakeTimers();
+    const segment = kind === "document" ? "doc" : kind;
+    const uri = `akb://team/${segment}/remote`;
+    search.mockResolvedValue(response("Remote", uri));
+    const reveal = vi.fn();
+    const onChange = vi.fn();
+    setup({ view: { ...DEFAULT_VIEW, types: new Set<NodeKind>(["document", "table", "file"].filter(value => value !== kind) as NodeKind[]) }, hideOrphans: true, onReveal: reveal, onChange });
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "remote" } });
+    await act(() => vi.advanceTimersByTimeAsync(260));
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    const next = onChange.mock.calls[0][0];
+    expect(next.types.has(kind)).toBe(true);
+    expect(next.entry).toBe(uri);
+    expect(next.selected).toBe(uri);
+    expect(reveal).toHaveBeenCalledWith(uri);
   });
 
   it("removes results immediately when the query changes and ignores a late response", async () => {

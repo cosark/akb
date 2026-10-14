@@ -59,7 +59,8 @@ test("Vault expansion survives internal routes and history, then resets across t
   await sidebar.getByRole("button", { name: "Expand sidebar", exact: true }).click();
   await sections.getByRole("link", { name: "Settings", exact: true }).click();
   await expect(page).toHaveURL(/\/vault\/team\/settings$/);
-  await expect(sections.getByRole("link", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("button", { name: "Vault pages, current: Settings", exact: true })).toBeVisible();
+  await expect(sections).toHaveCount(0);
   await expectCompact(page, false);
   await page.goBack();
   await expect(page).toHaveURL(/\/vault\/team$/);
@@ -67,7 +68,7 @@ test("Vault expansion survives internal routes and history, then resets across t
   await expectCompact(page, false);
   await page.goForward();
   await expect(page).toHaveURL(/\/vault\/team\/settings$/);
-  await expect(sections.getByRole("link", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("button", { name: "Vault pages, current: Settings", exact: true })).toBeVisible();
   await expectCompact(page, false);
   await sidebar.getByRole("link", { name: "Home", exact: true }).click();
   await expect(page).toHaveURL(/\/$/);
@@ -77,7 +78,7 @@ test("Vault expansion survives internal routes and history, then resets across t
   await expectCompact(page, false);
   await page.goBack();
   await expect(page).toHaveURL(/\/vault\/team\/settings$/);
-  await expect(sections.getByRole("link", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("button", { name: "Vault pages, current: Settings", exact: true })).toBeVisible();
   await expectCompact(page, true);
   await page.goForward();
   await expect(page).toHaveURL(/\/$/);

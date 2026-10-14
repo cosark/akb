@@ -97,7 +97,14 @@ function GraphWorkspace({ vault, mode, setMode }: { vault: string; mode: GraphDi
   const hubs = useMemo(() => [...displayed.nodes].sort((a, b) => (degree.get(b.uri) ?? 0) - (degree.get(a.uri) ?? 0)).slice(0, 8), [displayed.nodes, degree]);
   const focusTitle = merged.nodes.find(n => n.uri === view.entry || docIdFromUri(n.uri) === view.entry)?.name;
 
-  function select(uri: string | undefined) { setEdge(null); setView({ ...view, selected: uri }); }
+  function select(uri: string | undefined) {
+    const node = merged.nodes.find(item => item.uri === uri);
+    if (uri) {
+      setHidden(current => { if (!current.has(uri)) return current; const next = new Set(current); next.delete(uri); return next; });
+      if (hideOrphans && !displayed.nodes.some(item => item.uri === uri)) setHideOrphans(false);
+    }
+    setEdge(null); setView({ ...view, selected: uri, types: node && !view.types.has(node.kind) ? new Set(view.types).add(node.kind) : view.types });
+  }
   function open(node: GraphNode, newTab = false, preview = false) {
     const id = node.doc_id || docIdFromUri(node.uri);
     if (!id) return;
@@ -150,7 +157,10 @@ function GraphWorkspace({ vault, mode, setMode }: { vault: string; mode: GraphDi
     <div ref={tools} className="pointer-events-none absolute inset-x-3 top-3 z-[var(--z-popover)] mx-auto max-w-4xl">
       <GraphToolbar vault={vault} view={view} onChange={setView}
         onNavigate={query => navigate({ search: query })}
-        nodes={displayed.nodes} resourceCounts={resourceCounts} hubs={hubs} onSelect={select}
+        nodes={displayed.nodes} resourceCounts={resourceCounts} hubs={hubs} onSelect={select} onReveal={uri => {
+          setHidden(current => { if (!current.has(uri)) return current; const next = new Set(current); next.delete(uri); return next; });
+          setHideOrphans(false);
+        }}
         nodeCount={displayed.nodes.length} edgeCount={displayed.edges.length}
         focusTitle={focusTitle} displayMode={mode} onDisplayModeChange={next => {
           setMode(next);

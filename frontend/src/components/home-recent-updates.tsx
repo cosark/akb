@@ -5,7 +5,8 @@ import { ArrowUpRight } from "lucide-react";
 import { ApiError, getRecent } from "@/lib/api";
 import { documentPreviewState } from "@/lib/document-preview-navigation";
 import { recentIcon } from "@/lib/recent";
-import { useCurrentUser } from "@/contexts/current-user-context";
+import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
+import { INVENTORY_CHANGED_EVENT } from "@/lib/inventory-refresh";
 import { Panel } from "@/components/ui/panel";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
@@ -39,10 +40,11 @@ class WatchingUnavailable extends Error {}
 /** Account-keyed boundary prevents a previous account's rows flashing on switch. */
 export function HomeRecentUpdates({ scope }: { scope?: Scope } = {}) {
   const user = useCurrentUser();
-  return <RecentUpdates key={`${user?.user_id ?? "anonymous"}:${scope ?? "tabs"}`} userId={user?.user_id ?? ""} fixedScope={scope} />;
+  const { checking, revision } = useAccessVerification();
+  return <RecentUpdates key={`${user?.user_id ?? "anonymous"}:${revision}:${checking}:${scope ?? "tabs"}`} userId={user?.user_id ?? ""} accessChecking={checking} fixedScope={scope} />;
 }
 
-function RecentUpdates({ userId, fixedScope }: { userId: string; fixedScope?: Scope }) {
+function RecentUpdates({ userId, accessChecking, fixedScope }: { userId: string; accessChecking: boolean; fixedScope?: Scope }) {
   const location = useLocation();
   const [scope, setScope] = useState<Scope>(() => fixedScope ?? preference(userId));
   const [rows, setRows] = useState<RecentRow[]>([]);
@@ -57,6 +59,7 @@ function RecentUpdates({ userId, fixedScope }: { userId: string; fixedScope?: Sc
   const generation = useRef(0);
 
   const load = useCallback(async (more = false, next?: string, limit = PAGE_SIZE) => {
+    if (accessChecking || !userId) return;
     const request = ++generation.current;
     setError(false);
     if (more) setMoreBusy(true); else setBusy(true);
@@ -82,11 +85,16 @@ function RecentUpdates({ userId, fixedScope }: { userId: string; fixedScope?: Sc
         ["notifications_disabled", "notifications_session_required"].includes(code ?? "") ||
         (failure instanceof ApiError && [404, 405, 501].includes(failure.status)))) {
         setUnsupported(true); setRows([]); setCursor(null); setLegacyMore(false);
-      } else { setError(true); setFailedMore(more); }
+      } else {
+        if (failure instanceof ApiError && [401, 403].includes(failure.status)) {
+          setRows([]); setCursor(null); setLegacyMore(false);
+        }
+        setError(true); setFailedMore(more);
+      }
     } finally {
       if (request === generation.current) { setBusy(false); setMoreBusy(false); }
     }
-  }, [scope]);
+  }, [scope, accessChecking, userId]);
 
   useEffect(() => {
     setRows([]); setUnsupported(false); setCursor(null); setLegacyMore(false);
@@ -94,11 +102,13 @@ function RecentUpdates({ userId, fixedScope }: { userId: string; fixedScope?: Sc
     const refresh = () => void load();
     window.addEventListener("akb:watch-changed", refresh);
     window.addEventListener("akb:document-status-changed", refresh);
+    window.addEventListener(INVENTORY_CHANGED_EVENT, refresh);
     window.addEventListener("focus", refresh);
     return () => {
       generation.current++;
       window.removeEventListener("akb:watch-changed", refresh);
       window.removeEventListener("akb:document-status-changed", refresh);
+      window.removeEventListener(INVENTORY_CHANGED_EVENT, refresh);
       window.removeEventListener("focus", refresh);
     };
   }, [load]);
@@ -126,6 +136,7 @@ function RecentUpdates({ userId, fixedScope }: { userId: string; fixedScope?: Sc
         </Panel></LoadingState> : unsupported ? <Alert variant="info">Watching is not supported on this server yet. {fixedScope ? "Recent updates remains available separately." : "Select All documents to see recent updates."}</Alert>
           : error && rows.length === 0 ? <Alert><div>Could not load recent updates.<Button variant="link" size="sm" onClick={() => void load()}>Retry</Button></div></Alert>
           : rows.length === 0 ? <EmptyState title={scope === "watching" ? (fixedScope ? "No watched updates yet" : "No watched documents yet") : "Nothing updated yet"}
+            className="items-start px-4 py-5 text-left"
             description={scope === "watching" ? "Turn on Watch in a document to find its latest changes here." : "Document changes across your Vaults will appear here."} />
           : <Panel>
             <ol className="divide-y divide-border">{rows.map(row => {

@@ -47,14 +47,14 @@ describe("VaultSectionNavigation", () => {
     expect(screen.getAllByRole("link").every(link => !link.hasAttribute("aria-current"))).toBe(true);
   });
 
-  it.each(["doc/note", "doc/note?view=raw", "doc/note?view=edit", "file/file-id", "table/records"])("keeps Vault links without a false current section on %s", suffix => {
+  it.each(["file/file-id", "table/records"])("keeps Vault links without a false current section on %s", suffix => {
     renderNavigation(`/vault/team/${suffix}`);
     expect(screen.getByRole("navigation", { name: "Vault sections" })).toBeInTheDocument();
     expect(screen.getAllByRole("link")).toHaveLength(5);
     expect(screen.getAllByRole("link").every(link => !link.hasAttribute("aria-current"))).toBe(true);
   });
 
-  it.each(["doc/new", "skill"])("omits the whole navigation row on %s", suffix => {
+  it.each(["doc/note", "doc/note?view=raw", "doc/note?view=edit", "doc/new", "skill"])("omits the whole navigation row on %s", suffix => {
     renderNavigation(`/vault/team/${suffix}`);
     expect(screen.queryByRole("navigation", { name: "Vault sections" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();

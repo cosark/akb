@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ComponentType,
 } from "react";
@@ -27,6 +28,7 @@ import {
 } from "lucide-react";
 
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,11 +41,17 @@ import { WorkspaceSectionHeader } from "@/components/ui/workspace-section-header
 import {
   deletePublication,
   getDocument,
+  getVaultInfo,
   listPublications,
   type Publication,
 } from "@/lib/api";
 import { parseDocUri, parseFileUri } from "@/lib/uri";
 import { formatDate } from "@/lib/utils";
+import { publicationAvailability } from "@/lib/publication-state";
+import {
+  useAccessVerification,
+  useCurrentUser,
+} from "@/contexts/current-user-context";
 
 const RESOURCE_ICON: Record<
   Publication["resource_type"],
@@ -79,6 +87,38 @@ const PUBLICATION_FILTERS: Array<{ value: PublicationFilter; label: string }> =
 
 export default function PublicationsPage() {
   const { name } = useParams<{ name: string }>();
+  const user = useCurrentUser();
+  const { checking, revision } = useAccessVerification();
+  return (
+    <PublicationsWorkspace
+      key={JSON.stringify([user?.user_id, revision, name, checking])}
+      name={name}
+      checking={checking}
+    />
+  );
+}
+
+interface VaultPublicationInfo {
+  role?: string;
+  role_source?: string;
+  is_archived?: boolean;
+  is_external_git?: boolean;
+  managed_by?: string | null;
+}
+
+function PublicationsWorkspace({
+  name,
+  checking,
+}: {
+  name?: string;
+  checking: boolean;
+}) {
+  const active = useRef(true);
+  const loadGeneration = useRef(0);
+  const permissionGeneration = useRef(0);
+  const [info, setInfo] = useState<VaultPublicationInfo | null>(null);
+  const [permissionError, setPermissionError] = useState("");
+  const [permissionsLoading, setPermissionsLoading] = useState(false);
   const [items, setItems] = useState<Publication[] | null>(null);
   const [error, setError] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -86,11 +126,24 @@ export default function PublicationsPage() {
   const [pendingRevoke, setPendingRevoke] = useState<Publication | null>(null);
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<PublicationFilter>("all");
+  const [visibleLimit, setVisibleLimit] = useState(30);
+
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+      loadGeneration.current += 1;
+      permissionGeneration.current += 1;
+    };
+  }, []);
 
   const load = useCallback(async (vault: string) => {
+    if (checking || !active.current) return;
+    const generation = ++loadGeneration.current;
     setError("");
     try {
       const result = await listPublications(vault);
+      if (!active.current || generation !== loadGeneration.current) return;
       const publications: Publication[] = result.publications || [];
       const enriched = await Promise.all(
         publications.map(async (publication) => {
@@ -114,12 +167,35 @@ export default function PublicationsPage() {
           }
         }),
       );
+      if (!active.current || generation !== loadGeneration.current) return;
       setItems(enriched);
     } catch (caught: unknown) {
-      setError(errorMessage(caught, "Failed to load publications"));
+      if (!active.current || generation !== loadGeneration.current) return;
+      setError(errorMessage(caught, "Failed to load public links"));
       setItems(null);
     }
-  }, []);
+  }, [checking]);
+
+  const loadPermissions = useCallback(async (vault: string) => {
+    if (checking || !active.current) return;
+    const generation = ++permissionGeneration.current;
+    setInfo(null);
+    setPermissionsLoading(true);
+    try {
+      const nextInfo = await getVaultInfo(vault);
+      if (!active.current || generation !== permissionGeneration.current) return;
+      if (!nextInfo) throw new Error("Vault permissions are unavailable.");
+      setInfo(nextInfo);
+      setPermissionError("");
+    } catch (caught: unknown) {
+      if (!active.current || generation !== permissionGeneration.current) return;
+      setPermissionError(errorMessage(caught, "Failed to verify Vault permissions"));
+    } finally {
+      if (active.current && generation === permissionGeneration.current) {
+        setPermissionsLoading(false);
+      }
+    }
+  }, [checking]);
 
   useEffect(() => {
     if (!name) return;
@@ -128,12 +204,13 @@ export default function PublicationsPage() {
     setQuery("");
     setTypeFilter("all");
     void load(name);
-  }, [load, name]);
+    void loadPermissions(name);
+  }, [load, loadPermissions, name]);
 
   useEffect(() => {
     if (!name) return;
     const previous = document.title;
-    document.title = `${name} · Publish · AKB`;
+    document.title = `${name} · Public links · AKB`;
     return () => {
       document.title = previous;
     };
@@ -179,14 +256,27 @@ export default function PublicationsPage() {
     [items],
   );
 
+  const unpublishDisabledReason = !info
+    ? "Unpublish is unavailable until Vault permissions can be verified."
+    : info.is_archived
+      ? `Vault '${name}' is archived (read-only)`
+      : info.is_external_git
+        ? `Vault '${name}' is a read-only external git mirror`
+        : info.managed_by && info.role_source !== "system_admin"
+          ? `Vault '${name}' is write-managed by ${info.managed_by}; writes require a granted service token with the required write action`
+          : !["writer", "admin", "owner"].includes(info.role || "")
+            ? "Unpublish requires a Writer, Admin, or Owner role."
+            : undefined;
+
   async function confirmRevoke() {
-    if (!name || !pendingRevoke) return;
+    if (!name || !pendingRevoke || !active.current) return;
+    if (unpublishDisabledReason) throw new Error(unpublishDisabledReason);
     setRevokingId(pendingRevoke.slug);
     try {
       await deletePublication(name, pendingRevoke.slug);
       await load(name);
     } finally {
-      setRevokingId(null);
+      if (active.current) setRevokingId(null);
     }
   }
 
@@ -194,8 +284,11 @@ export default function PublicationsPage() {
     try {
       if (!navigator.clipboard) return;
       await navigator.clipboard.writeText(publication.share_url);
+      if (!active.current) return;
       setCopiedId(publication.slug);
-      setTimeout(() => setCopiedId(null), 1500);
+      setTimeout(() => {
+        if (active.current) setCopiedId(null);
+      }, 1500);
     } catch {
       // The public page remains available through Open when clipboard access is blocked.
     }
@@ -211,14 +304,13 @@ export default function PublicationsPage() {
     <>
       <div data-testid="publication-workspace" className="w-full max-w-none">
         <h1 id="publications-heading" className="sr-only">
-          Publish
+          Public links
         </h1>
 
         <WorkspaceSectionHeader
           id="published-links-heading"
           icon={Share2}
-          title="Published links"
-          description="Manage public, read-only links created from this Vault."
+          title="Public links"
           tone="publish"
           testId="publication-ledger-header"
           right={
@@ -228,15 +320,15 @@ export default function PublicationsPage() {
                   {count} link{count === 1 ? "" : "s"}
                 </Badge>
               )}
-              <span className="text-xs tabular-nums text-foreground-muted">
-                {items === null
-                  ? error
-                    ? "Unavailable"
-                    : "Loading links…"
-                  : count > 0
-                    ? `${totalViews.toLocaleString()} total views`
-                    : "Vault content is private by default"}
-              </span>
+              {(items === null || count > 0) && (
+                <span className="text-xs tabular-nums text-foreground-muted">
+                  {items === null
+                    ? error
+                      ? "Unavailable"
+                      : "Loading links…"
+                    : `${totalViews.toLocaleString()} total views`}
+                </span>
+              )}
               {count > 0 && (
                 <Button asChild variant="ghost" size="sm" className="shrink-0">
                   <Link to={`/vault/${name}`}>
@@ -252,6 +344,26 @@ export default function PublicationsPage() {
         <Panel variant="workspace" className="w-full">
           <section aria-labelledby="published-links-heading">
             <PublicationPolicySummary />
+            {items !== null && unpublishDisabledReason && (
+              <p id="unpublish-restriction" className="border-b border-border px-4 py-2.5 text-xs text-foreground-muted sm:px-5">
+                {unpublishDisabledReason}
+              </p>
+            )}
+            {items !== null && permissionError && (
+              <Alert variant="destructive" title="Couldn't verify Vault permissions" className="mx-4 my-3 sm:mx-5">
+                {permissionError}
+                <div className="mt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    loading={permissionsLoading}
+                    onClick={() => void loadPermissions(name)}
+                  >
+                    Retry permissions
+                  </Button>
+                </div>
+              </Alert>
+            )}
 
             {items !== null && filtersVisible && (
               <PublicationControls
@@ -259,8 +371,8 @@ export default function PublicationsPage() {
                 typeFilter={typeFilter}
                 visibleCount={filteredItems.length}
                 totalCount={count}
-                onQueryChange={setQuery}
-                onTypeFilterChange={setTypeFilter}
+                onQueryChange={value => { setQuery(value); setVisibleLimit(30); }}
+                onTypeFilterChange={value => { setTypeFilter(value); setVisibleLimit(30); }}
               />
             )}
 
@@ -279,10 +391,10 @@ export default function PublicationsPage() {
               />
             ) : (
               <ol
-                aria-label="Published links"
+                aria-label="Public links"
                 className="divide-y divide-border bg-surface"
               >
-                {filteredItems.map((publication) => (
+                {filteredItems.slice(0, visibleLimit).map((publication) => (
                   <PublicationRow
                     key={publication.slug}
                     publication={publication}
@@ -290,15 +402,21 @@ export default function PublicationsPage() {
                     vault={name}
                     copied={copiedId === publication.slug}
                     revoking={revokingId === publication.slug}
+                    unpublishDisabledReason={unpublishDisabledReason}
                     onCopy={() => void copyLink(publication)}
                     onRevoke={() => setPendingRevoke(publication)}
                   />
                 ))}
               </ol>
             )}
-            {filtersVisible && filtersActive && filteredItems.length > 0 && (
-              <p className="border-t border-border bg-surface-2/40 px-4 py-2 text-right text-xs tabular-nums text-foreground-muted sm:px-5">
-                Showing {filteredItems.length} of {count} links
+            {filteredItems.length > visibleLimit && <div className="border-t border-border p-3">
+              <Button variant="outline" className="w-full" onClick={() => setVisibleLimit(limit => limit + 30)}>
+                Show more links ({filteredItems.length - visibleLimit} remaining)
+              </Button>
+            </div>}
+            {(count > 30 || filtersActive) && filteredItems.length > 0 && (
+              <p className="border-t border-border bg-surface px-4 py-2 text-right text-xs tabular-nums text-foreground-muted sm:px-5">
+                Showing {Math.min(visibleLimit, filteredItems.length)} of {filteredItems.length} {filtersActive ? "matching" : "loaded"} link{filteredItems.length === 1 ? "" : "s"}
               </p>
             )}
           </section>
@@ -330,6 +448,7 @@ function PublicationRow({
   vault,
   copied,
   revoking,
+  unpublishDisabledReason,
   onCopy,
   onRevoke,
 }: {
@@ -338,11 +457,31 @@ function PublicationRow({
   vault: string;
   copied: boolean;
   revoking: boolean;
+  unpublishDisabledReason?: string;
   onCopy: () => void;
   onRevoke: () => void;
 }) {
   const Icon = RESOURCE_ICON[publication.resource_type];
   const title = publicationTitle(publication);
+  const [expiryTick, setExpiryTick] = useState(0);
+  useEffect(() => {
+    if (!publication.expires_at) return;
+    const expiry = Date.parse(publication.expires_at);
+    const delay = expiry - Date.now();
+    if (!Number.isFinite(expiry) || delay <= 0) return;
+    const timer = setTimeout(() => setExpiryTick((tick) => tick + 1), Math.min(delay, 2_147_483_647));
+    return () => clearTimeout(timer);
+  }, [publication.expires_at, expiryTick]);
+  const availability = publicationAvailability(publication);
+  const availabilityLabel = {
+    active: "Active",
+    expired: "Expired",
+    "view-limit-reached": "View limit reached",
+    unknown: "Availability unknown",
+  }[availability];
+  const AvailabilityIcon = availability === "active"
+    ? Globe
+    : availability === "expired" ? Clock3 : AlertCircle;
   const views = publication.max_views
     ? `${publication.view_count ?? 0}/${publication.max_views} views`
     : `${publication.view_count ?? 0} views`;
@@ -365,30 +504,28 @@ function PublicationRow({
             <TooltipText asChild tip={title}>
               <Link
                 to={resourceHref(vault, publication)}
-                className="truncate rounded-[var(--radius-sm)] text-sm font-semibold tracking-tight text-foreground hover:text-link focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+                className="line-clamp-2 break-words rounded-[var(--radius-sm)] text-sm font-semibold tracking-tight text-link hover:text-link-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
               >
                 {title}
               </Link>
             </TooltipText>
-            <Badge variant="success">
-              <Globe className="h-3 w-3" aria-hidden />
-              Live
+            <Badge
+              variant={availability === "active" ? "success" : availability === "unknown" ? "default" : "warning"}
+            >
+              <AvailabilityIcon className="h-3 w-3" aria-hidden />
+              {availabilityLabel}
             </Badge>
-            <Badge variant="outline">
-              {RESOURCE_LABEL[publication.resource_type]}
-            </Badge>
-            {publication.mode === "snapshot" && (
-              <Badge variant="default">Snapshot</Badge>
-            )}
           </div>
 
           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-foreground-muted">
-            <span
-              title={`/p/${publication.slug}`}
-              className="truncate font-mono"
-            >
-              /p/{publication.slug}
+            <span>{RESOURCE_LABEL[publication.resource_type]}</span><span aria-hidden>·</span>
+            <span>
+              Delivery: {publication.mode === "snapshot" ? "Snapshot" : publication.mode === "live" ? "Live" : "Unknown"}
             </span>
+            <span aria-hidden>·</span>
+            <details className="min-w-0"><summary className="cursor-pointer rounded-[var(--radius-sm)] text-link focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Link address</summary>
+              <span className="block break-all py-1 font-mono">/p/{publication.slug}</span>
+            </details>
             <span aria-hidden>·</span>
             <span className="tabular-nums">{views}</span>
             <span aria-hidden>·</span>
@@ -407,9 +544,9 @@ function PublicationRow({
             <span aria-hidden>·</span>
             <span className="inline-flex items-center gap-1">
               <Clock3 className="h-3 w-3" aria-hidden />
-              {publication.expires_at
+              {publication.expires_at && Number.isFinite(Date.parse(publication.expires_at))
                 ? `Expires ${formatDate(publication.expires_at)}`
-                : "No expiry"}
+                : publication.expires_at === null ? "No expiry" : "Expiry unavailable"}
             </span>
           </div>
         </div>
@@ -444,6 +581,7 @@ function PublicationRow({
         <PublicationMenu
           title={title}
           disabled={revoking}
+          disabledReason={unpublishDisabledReason}
           onRevoke={onRevoke}
         />
       </div>
@@ -469,9 +607,6 @@ function PublicationPolicySummary() {
         ·
       </span>
       <span className="font-medium text-foreground">No sign-in required</span>
-      <span className="basis-full text-foreground-muted lg:ml-2 lg:basis-auto">
-        Password, expiry, and view limits remain configurable for each link.
-      </span>
     </div>
   );
 }
@@ -479,10 +614,12 @@ function PublicationPolicySummary() {
 function PublicationMenu({
   title,
   disabled,
+  disabledReason,
   onRevoke,
 }: {
   title: string;
   disabled: boolean;
+  disabledReason?: string;
   onRevoke: () => void;
 }) {
   return (
@@ -510,7 +647,10 @@ function PublicationMenu({
         >
           <DropdownMenu.Item
             onSelect={onRevoke}
-            className="flex cursor-pointer select-none items-center gap-2 rounded-[var(--radius-sm)] px-3 py-2 text-sm text-destructive outline-none data-[highlighted]:bg-surface-hover"
+            disabled={Boolean(disabledReason)}
+            title={disabledReason}
+            aria-describedby={disabledReason ? "unpublish-restriction" : undefined}
+            className="flex cursor-pointer select-none items-center gap-2 rounded-[var(--radius-sm)] px-3 py-2 text-sm text-destructive outline-none data-[highlighted]:bg-surface-hover data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50"
           >
             <Trash2 className="h-4 w-4" aria-hidden />
             Unpublish
@@ -542,7 +682,7 @@ function PublicationControls({
       className="flex flex-col gap-2 border-b border-border bg-surface px-4 py-3 sm:flex-row sm:items-center sm:px-5"
     >
       <label className="relative min-w-0 flex-1 sm:max-w-sm">
-        <span className="sr-only">Filter published links</span>
+        <span className="sr-only">Filter public links</span>
         <Search
           className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-foreground-muted"
           aria-hidden
@@ -551,13 +691,13 @@ function PublicationControls({
           type="search"
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="Filter published links…"
+          placeholder="Filter public links…"
           className="h-8 rounded-[var(--radius-sm)] pl-8 text-xs"
         />
       </label>
       <div
         role="group"
-        aria-label="Filter published links by type"
+        aria-label="Filter public links by type"
         className="flex flex-wrap items-center gap-1"
       >
         {PUBLICATION_FILTERS.map((filter) => (
@@ -581,51 +721,39 @@ function PublicationControls({
 
 function PublicationNoResults({ onClear }: { onClear: () => void }) {
   return (
-    <div className="flex min-h-48 items-center justify-center bg-surface px-6 py-10 text-center">
-      <div className="max-w-sm">
-        <Search className="mx-auto h-5 w-5 text-foreground-muted" aria-hidden />
-        <h2 className="mt-3 text-sm font-semibold text-foreground">
+    <div className="flex flex-wrap items-center justify-between gap-4 bg-surface px-4 py-5 sm:px-5">
+      <div className="min-w-0">
+        <h3 className="text-sm font-semibold text-foreground">
           No matching public links
-        </h2>
+        </h3>
         <p className="mt-1 text-xs leading-relaxed text-foreground-muted">
           Try another title or show all resource types.
         </p>
-        <Button variant="outline" size="sm" className="mt-4" onClick={onClear}>
-          Clear filters
-        </Button>
       </div>
+      <Button variant="outline" size="sm" onClick={onClear}>
+        Clear filters
+      </Button>
     </div>
   );
 }
 
 function PublicationEmptyState({ vault }: { vault: string }) {
   return (
-    <div className="flex min-h-80 items-center justify-center bg-surface px-6 py-12">
-      <div className="max-w-md text-center">
-        <TonalIcon
-          tone="publish"
-          size="lg"
-          className="mx-auto h-12 w-12 rounded-[var(--radius-lg)] shadow-xs"
-        >
-          <Share2 className="h-5 w-5" aria-hidden />
-        </TonalIcon>
-        <h2 className="mt-4 text-base font-semibold text-foreground">
-          Nothing is public
-        </h2>
-        <p className="mt-1.5 text-sm leading-relaxed text-foreground-muted">
-          Documents, tables, and files stay private until you create a public
-          link from their page.
-        </p>
-        <Button asChild variant="outline" size="sm" className="mt-5">
-          <Link to={`/vault/${vault}`}>
-            Browse vault content
-            <ArrowRight className="h-3.5 w-3.5" aria-hidden />
-          </Link>
-        </Button>
-        <p className="mt-4 text-xs text-foreground-muted">
-          Open a resource and choose Publish to create a read-only /p/ link.
+    <div data-testid="publication-empty-state" className="flex flex-wrap items-center justify-between gap-4 bg-surface px-4 py-5 sm:px-5">
+      <div className="min-w-0 max-w-xl">
+        <h3 className="text-sm font-semibold text-foreground">
+          No public links yet
+        </h3>
+        <p className="mt-1 text-sm leading-relaxed text-foreground-muted">
+          Open a document, table, or file and choose Publish to create a public link.
         </p>
       </div>
+      <Button asChild variant="outline" size="sm" className="shrink-0">
+        <Link to={`/vault/${vault}`}>
+          Browse vault content
+          <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+        </Link>
+      </Button>
     </div>
   );
 }
@@ -638,26 +766,22 @@ function PublicationError({
   onRetry: () => void;
 }) {
   return (
-    <div className="flex min-h-72 items-center justify-center bg-surface px-6 py-12">
-      <div className="max-w-md text-center">
-        <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-[var(--radius-lg)] bg-destructive-soft text-destructive-soft-foreground">
-          <AlertCircle className="h-5 w-5" aria-hidden />
-        </span>
-        <h2 className="mt-4 text-base font-semibold text-foreground">
-          Couldn&apos;t load published links
-        </h2>
-        <p className="mt-1.5 text-sm text-foreground-muted">{error}</p>
-        <Button variant="outline" size="sm" className="mt-5" onClick={onRetry}>
-          Retry
-        </Button>
-      </div>
+    <div className="bg-surface p-4 sm:p-5">
+      <Alert variant="destructive" title="Couldn't load public links">
+        {error}
+        <div className="mt-3">
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            Retry
+          </Button>
+        </div>
+      </Alert>
     </div>
   );
 }
 
 function PublicationSkeleton() {
   return (
-    <div role="status" aria-live="polite" aria-label="Loading published links">
+    <div role="status" aria-live="polite" aria-label="Loading public links">
       {[0, 1, 2].map((index) => (
         <div
           key={index}
@@ -673,7 +797,7 @@ function PublicationSkeleton() {
           <Skeleton className="h-8 w-28 rounded-[var(--radius-md)]" />
         </div>
       ))}
-      <span className="sr-only">Loading published links…</span>
+      <span className="sr-only">Loading public links…</span>
     </div>
   );
 }

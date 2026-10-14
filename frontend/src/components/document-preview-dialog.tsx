@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getMe } from "@/lib/api";
-import { CurrentUserProvider } from "@/contexts/current-user-context";
+import { CurrentUserProvider, useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
 import DocumentPage from "@/pages/document";
 import {
   Dialog,
@@ -22,10 +22,14 @@ import { ResourceNavigationProvider } from "@/contexts/resource-navigation-conte
 export function DocumentPreviewDialog() {
   const navigate = useNavigate();
   const location = useLocation();
+  const currentUser = useCurrentUser();
+  const { checking, revision } = useAccessVerification();
   // Read/Edit changes replace the history entry. Do not reset the identity
   // provider (and its editor/draft/scroll state) for every mode change.
   const sessionKey = useRef(location.key);
-  const user = useQuery({ queryKey: ["document-preview-user", sessionKey.current], queryFn: () => getMe(), retry: false });
+  // The shell has already proved this identity. Only standalone consumers
+  // need a fallback read, and that read must not bypass a shell proof boundary.
+  const user = useQuery({ queryKey: ["document-preview-user", sessionKey.current, currentUser?.user_id, revision], queryFn: () => getMe(), retry: false, enabled: !checking && !currentUser });
   const contentRef = useRef<HTMLDivElement | null>(null);
   const closingRef = useRef(false);
   const editorSessionRef = useRef<PreviewEditorSession | null>(null);
@@ -82,12 +86,12 @@ export function DocumentPreviewDialog() {
         <DialogDescription className="sr-only">
           Read this document without leaving the page you opened it from.
         </DialogDescription>
-        <button type="button" aria-label="Close dialog" onClick={requestClose} className="absolute right-2 top-2 inline-flex h-9 w-9 items-center justify-center rounded-[var(--radius-sm)] text-foreground-muted transition-colors hover:bg-surface-hover hover:text-foreground focus-ring-instant">
+        <button type="button" aria-label="Close dialog" onClick={requestClose} className="absolute right-2 top-2 z-[var(--z-header)] inline-flex h-9 w-9 items-center justify-center rounded-[var(--radius-sm)] bg-surface text-foreground-muted transition-colors hover:bg-surface-hover hover:text-foreground focus-ring-instant">
           <X className="h-4 w-4" aria-hidden />
         </button>
         <DocumentPreviewEditorContext.Provider value={editorSessionRef}>
           <ResourceNavigationProvider>
-            <CurrentUserProvider user={user.data ?? null}><DocumentPage presentation="preview" /></CurrentUserProvider>
+            <CurrentUserProvider user={currentUser ?? user.data ?? null} checking={checking} revision={revision}><DocumentPage presentation="preview" /></CurrentUserProvider>
           </ResourceNavigationProvider>
         </DocumentPreviewEditorContext.Provider>
       </DialogContent>

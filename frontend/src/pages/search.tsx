@@ -38,7 +38,7 @@ import {
   SearchVaultPicker,
   VaultQuerySuggestions,
 } from "@/components/search-vault-picker";
-import { useCurrentUser } from "@/contexts/current-user-context";
+import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
 import {
   clearRecentSearches,
   readRecentSearches,
@@ -142,6 +142,15 @@ function resultHref(result: DenseResult): string {
 }
 
 export default function SearchPage() {
+  const user = useCurrentUser();
+  const { checking, revision } = useAccessVerification();
+  const { name } = useParams<{ name: string }>();
+  // URL-backed query/filter state survives; private result buffers do not.
+  if (checking) return <SearchLoadingState />;
+  return <SearchWorkspace key={JSON.stringify([user?.user_id, name, revision])} />;
+}
+
+function SearchWorkspace() {
   const currentUser = useCurrentUser();
   const currentUserId = currentUser?.user_id;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1513,9 +1522,9 @@ function DenseResultList({ items }: { items: DenseResult[] }) {
                     )
                   : undefined
               }
-              className="group block p-4 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5"
+              className="group block px-4 py-3 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5"
             >
-              <div className="mb-2 flex min-w-0 items-center justify-between gap-3 text-xs text-foreground-muted">
+              <div className="mb-1.5 flex min-w-0 items-center justify-between gap-3 text-xs text-foreground-muted">
                 <span
                   className="min-w-0 truncate"
                   title={`${result.vault} / ${result.path}`}
@@ -1546,11 +1555,11 @@ function DenseResultList({ items }: { items: DenseResult[] }) {
                 </span>
               </div>
               {detail && (
-                <p className="mt-2 line-clamp-3 whitespace-pre-line text-sm leading-relaxed text-foreground">
+                <p className="mt-2 line-clamp-2 whitespace-pre-line text-sm leading-relaxed text-foreground">
                   {detail}
                 </p>
               )}
-              <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-foreground-muted">
+              <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-foreground-muted">
                 <span>{sourceLabel}</span>
                 {result.doc_type && (
                   <Badge variant="outline">{result.doc_type}</Badge>

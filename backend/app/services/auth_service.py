@@ -1122,7 +1122,12 @@ async def change_password(user_id: str, current: str, new: str) -> None:
             if row["auth_provider"] != "local" or row["account_kind"] != "human":
                 raise PasswordLifecycleUnavailableError()
             if not await verify_password_async(current, row["password_hash"]):
-                raise AuthenticationError("Current password is incorrect")
+                # The authenticated session is valid; this is a form error,
+                # not a credential-carrier failure that should end the session.
+                raise AKBError(
+                    "Current password is incorrect", status_code=400,
+                    code="current_password_incorrect",
+                )
             if await verify_password_async(new, row["password_hash"]):
                 raise BadPasswordChange("New password must differ from current")
 

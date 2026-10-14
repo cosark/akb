@@ -250,6 +250,7 @@ function LocationProbe() {
     <>
       <div data-testid="location-pathname">{loc.pathname}</div>
       <div data-testid="location-search">{loc.search}</div>
+      <div data-testid="location-hash">{loc.hash}</div>
       <div data-testid="location-state">{JSON.stringify(loc.state)}</div>
     </>
   );
@@ -260,16 +261,16 @@ function GuardedSearchLink() {
   return <Link to="/vault/v/search" onClick={(event) => { if (!requestNavigation("/vault/v/search")) event.preventDefault(); }}>Search destination</Link>;
 }
 
-function renderAt(url: string, withNavigation = false) {
+function renderAt(url: string, withNavigation = false, initialState?: unknown) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const contents = (access: { user?: typeof CURRENT_USER; checking?: boolean; revision?: number } = {}) => (
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={[url]}>
+      <MemoryRouter initialEntries={[{ pathname: url.split(/[?#]/)[0], search: new URL(url, "https://akb.example").search, hash: new URL(url, "https://akb.example").hash, state: initialState }]}>
         <CurrentUserProvider user={access.user ?? CURRENT_USER} checking={access.checking} revision={access.revision}>
           <VaultRefreshProvider refetchVaults={vi.fn()} refetchTree={vi.fn()}>
             <ResourceNavigationProvider>
             <VaultHeaderActionsProvider>
-            {withNavigation && <GuardedSearchLink />}
+            {withNavigation && <><GuardedSearchLink /><Link to="/vault/v/doc/notes%2Fsecond.md">Second document</Link></>}
             <Routes>
               <Route path="/vault/:name/doc/:id" element={<><VaultSectionNavigation vault="v" /><DocumentPage /></>} />
               <Route path="/vault/:name/search" element={<div>Vault search destination</div>} />
@@ -494,6 +495,22 @@ describe("DocumentPage resource navigation", () => {
     await waitFor(() => expect(within(dialog).getByRole("button", { name: "Leave document" })).toBeEnabled());
     await user.click(within(dialog).getByRole("button", { name: "Leave document" }));
     expect(await screen.findByText("Vault search destination")).toBeVisible();
+  });
+
+  it("masks private document content during proof before revision changes and preserves its same-account draft", async () => {
+    const user = userEvent.setup();
+    getVaultInfoMock.mockResolvedValue({ role: "writer" });
+    const rendered = renderAt("/vault/v/doc/notes%2Fhello.md?view=edit", true);
+    await user.clear(await screen.findByRole("textbox", { name: "Document title" }));
+    await user.type(screen.getByRole("textbox", { name: "Document title" }), "Private draft title");
+    await user.clear(screen.getByRole("textbox", { name: "Document body (markdown)" }));
+    await user.type(screen.getByRole("textbox", { name: "Document body (markdown)" }), "Private draft body");
+    rendered.rerenderAccess({ checking: true, revision: 0 });
+    expect(screen.queryByDisplayValue("Private draft title")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Private draft body")).not.toBeInTheDocument();
+    rendered.rerenderAccess({ checking: false, revision: 1 });
+    expect(await screen.findByRole("textbox", { name: "Document title" })).toHaveValue("Private draft title");
+    expect(await screen.findByRole("textbox", { name: "Document body (markdown)" })).toHaveValue("Private draft body");
   });
 
   it("keeps navigation confirmation available when access revalidation removes document data", async () => {
@@ -843,6 +860,30 @@ describe("DocumentPage view toggle", () => {
     expect(screen.getByTestId("location-state")).toHaveTextContent('"documentPreview":true');
   });
 
+  it("persists Summary and Domain removal through a save and server re-read", async () => {
+    const user = userEvent.setup();
+    let current = makeDoc({ summary: "Existing summary", domain: "engineering" });
+    getVaultInfoMock.mockResolvedValue({ role: "writer" });
+    getDocumentMock.mockImplementation(async () => current);
+    updateDocumentMock.mockImplementation(async (_vault, _ref, patch) => {
+      // Both legacy Git and Native APIs treat null as a no-op.
+      current = { ...current, ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== null)), current_commit: UPDATED_COMMIT };
+      return { current_commit: UPDATED_COMMIT };
+    });
+    const first = renderAt("/vault/v/doc/notes%2Fhello.md?view=edit");
+    await user.clear(await screen.findByRole("textbox", { name: "Summary" }));
+    await user.clear(screen.getByRole("textbox", { name: "Domain" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByRole("button", { name: "Edit" });
+    expect(updateDocumentMock).toHaveBeenCalledWith("v", "notes/hello.md", {
+      summary: "", domain: "", expected_commit: "abcdef1234567",
+    });
+    first.unmount();
+    renderAt("/vault/v/doc/notes%2Fhello.md?view=edit");
+    expect(await screen.findByRole("textbox", { name: "Summary" })).toHaveValue("");
+    expect(screen.getByRole("textbox", { name: "Domain" })).toHaveValue("");
+  });
+
   it("protects and recovers details-only changes and discards them on confirmed Cancel", async () => {
     const user = userEvent.setup();
     getVaultInfoMock.mockResolvedValue({ role: "writer" });
@@ -970,8 +1011,11 @@ describe("DocumentPage view toggle", () => {
     expect(documentActions).toContainElement(copyMarkdown);
     const information = screen.getByRole("group", { name: "More document options" });
     const publish = screen.getByRole("button", { name: "Publish" });
-    expect(screen.getByRole("navigation", { name: "Vault sections" }).parentElement).toContainElement(publish);
-    expect(screen.getByRole("group", { name: "Document reading tools" })).not.toContainElement(publish);
+    expect(screen.queryByRole("navigation", { name: "Vault sections" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Document reading tools" })).toContainElement(publish);
+    expect(screen.getAllByRole("group", { name: "Document publishing" })).toHaveLength(1);
+    expect(copyMarkdown.compareDocumentPosition(publish) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(publish.compareDocumentPosition(information) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open document info" })).not.toBeInTheDocument();
     expect(information).toContainElement(screen.getByRole("button", { name: "Actions for DocTitle" }));
     expect(document.getElementById("document-reading-canvas")).not.toHaveClass(
@@ -1187,7 +1231,7 @@ describe("DocumentPage view toggle", () => {
     expect(readingTools).toContainElement(summary);
     const context = summary.closest('[data-slot="resource-command-row"]');
     expect(context).toContainElement(statistics);
-    expect(context).not.toContainElement(screen.getByRole("button", { name: "Publish" }));
+    expect(context).toContainElement(screen.getByRole("button", { name: "Publish" }));
     expect(screen.queryByRole("region", { name: "Document summary" })).not.toBeInTheDocument();
     expect(document.querySelector('[data-slot="document-context-panel"]')).not.toBeInTheDocument();
     await userEvent.setup().click(summary);
@@ -1220,6 +1264,59 @@ describe("DocumentPage view toggle", () => {
     await waitFor(() =>
       expect(getRelationsMock).toHaveBeenCalledWith("v", "notes/hello.md"),
     );
+  });
+
+  it("preserves query, heading hash and preview history state on canonical replacement", async () => {
+    const state = { documentPreview: true, backgroundLocation: { pathname: "/search", search: "?q=hello", hash: "", state: null, key: "search" } };
+    renderAt("/vault/v/doc/d-oldref?commit=abcdef1234567&view=raw#bodyheading", false, state);
+    await screen.findByTestId("doc-raw");
+    await waitFor(() => expect(screen.getByTestId("location-pathname")).toHaveTextContent("/vault/v/doc/notes%2Fhello.md"));
+    expect(screen.getByTestId("location-search")).toHaveTextContent("?commit=abcdef1234567&view=raw");
+    expect(screen.getByTestId("location-hash")).toHaveTextContent("#bodyheading");
+    expect(screen.getByTestId("location-state")).toHaveTextContent(JSON.stringify(state));
+    expect(getDocumentMock).toHaveBeenCalledWith("v", "notes/hello.md", "abcdef1234567");
+  });
+
+  it.each(["resolve", "reject"])("ignores an old Relations request that completes with %s in a new access scope", async (completion) => {
+    const user = userEvent.setup();
+    let finishOld!: (result: unknown) => void;
+    let rejectOld!: (error: Error) => void;
+    getRelationsMock.mockReturnValueOnce(new Promise((resolve, reject) => { finishOld = resolve; rejectOld = reject; }));
+    const rendered = renderAt("/vault/v/doc/notes%2Fhello.md");
+    await waitFor(() => expect(getRelationsMock).toHaveBeenCalledOnce());
+    rendered.rerenderAccess({ user: { ...CURRENT_USER, user_id: "another-reader" }, revision: 2 });
+    await waitFor(() => expect(getRelationsMock).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      if (completion === "resolve") finishOld({ relations: [{ direction: "outgoing", relation: "references", uri: "akb://v/coll/notes/doc/old-private.md", resource_type: "doc", kind: "explicit" }] });
+      else rejectOld(new Error("Old request failed"));
+    });
+    await user.click(await screen.findByRole("button", { name: "Relations" }));
+    const panel = screen.getByRole("dialog", { name: "Relations" });
+    expect(within(panel).queryByText(/old-private|Failed to load relations/)).not.toBeInTheDocument();
+  });
+
+  it("clears an earlier Relations error after a successful refresh", async () => {
+    const user = userEvent.setup();
+    getRelationsMock.mockRejectedValueOnce(new Error("temporary failure"));
+    const { queryClient } = renderAt("/vault/v/doc/notes%2Fhello.md");
+    await user.click(await screen.findByRole("button", { name: "Relations" }));
+    expect(await screen.findByText("Failed to load relations.")).toBeVisible();
+    await act(async () => { await queryClient.refetchQueries({ queryKey: ["document-relations"] }); });
+    await waitFor(() => expect(screen.queryByText("Failed to load relations.")).not.toBeInTheDocument());
+  });
+
+  it("ignores a delayed Relations response after moving from document A to B", async () => {
+    const user = userEvent.setup();
+    let finishFirst!: (result: unknown) => void;
+    getRelationsMock.mockReturnValueOnce(new Promise((resolve) => { finishFirst = resolve; }));
+    getDocumentMock.mockImplementation(async (_vault, ref) => makeDoc({ path: ref, title: ref === "notes/second.md" ? "Second document" : "DocTitle" }));
+    renderAt("/vault/v/doc/notes%2Fhello.md", true);
+    await waitFor(() => expect(getRelationsMock).toHaveBeenCalledWith("v", "notes/hello.md"));
+    await user.click(screen.getByRole("link", { name: "Second document" }));
+    await waitFor(() => expect(getRelationsMock).toHaveBeenCalledWith("v", "notes/second.md"));
+    await act(async () => { finishFirst({ relations: [{ direction: "outgoing", relation: "references", uri: "akb://v/coll/notes/doc/first-only.md", resource_type: "doc", kind: "explicit" }] }); });
+    await user.click(await screen.findByRole("button", { name: "Relations" }));
+    expect(screen.queryByText(/first-only/)).not.toBeInTheDocument();
   });
 
   it("does not include a foreign endpoint in the relation panel or its count", async () => {

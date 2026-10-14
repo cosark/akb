@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
@@ -110,6 +110,45 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+describe("provider editor response ownership", () => {
+  async function startSave() {
+    vi.mocked(getAdminAuthConfig).mockResolvedValue(ssoConfig);
+    vi.mocked(getAdminSession).mockResolvedValue({ schema_version: 1, auth_mode: "sso", user: { id: "admin-a", username: "admin", email: "admin@example.com", display_name: "Admin", is_admin: true } });
+    vi.mocked(getAdminSsoCatalog).mockResolvedValue({ ...directCatalog, providers: [provider, { ...provider, alias: "partners", display_name: "Partner SSO" }] });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByLabelText("Alias");
+    await user.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    await user.type(screen.getByLabelText("Client secret"), "secret-for-a");
+    await user.click(screen.getByRole("button", { name: /Save disabled configuration/ }));
+    return user;
+  }
+  it.each(["success", "failure"])("does not apply Provider A's late %s to Provider B", async outcome => {
+    let resolve!: (value: typeof provider) => void;
+    let reject!: (error: Error) => void;
+    vi.mocked(configureAdminSsoProvider).mockReturnValue(new Promise((r, j) => { resolve = r; reject = j; }));
+    const user = await startSave();
+    await user.click(screen.getAllByRole("button", { name: "Edit" })[1]);
+    await user.type(screen.getByLabelText("Client secret"), "secret-for-b");
+    await act(async () => { if (outcome === "success") resolve(provider); else reject(new Error("A failed")); });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Save disabled configuration/ })).not.toBeDisabled());
+    expect(screen.getByLabelText("Alias")).toHaveValue("partners");
+    expect(screen.getByLabelText("Client secret")).toHaveValue("secret-for-b");
+    expect(screen.queryByText("A failed")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Provider configuration was saved disabled/)).not.toBeInTheDocument();
+  });
+  it("retains the submitted secret and reports uncertainty when that provider disappeared", async () => {
+    let resolve!: (value: typeof provider) => void;
+    vi.mocked(configureAdminSsoProvider).mockReturnValue(new Promise(r => { resolve = r; }));
+    await startSave();
+    vi.mocked(getAdminSsoCatalog).mockResolvedValue({ ...directCatalog, providers: [] });
+    await act(async () => resolve(provider));
+    await screen.findByText(/saved provider could not be verified/);
+    expect(screen.getByLabelText("Client secret")).toHaveValue("secret-for-a");
+    expect(screen.queryByText(/Provider configuration was saved disabled/)).not.toBeInTheDocument();
+  });
 });
 
 describe("AdminPage mode boundary", () => {

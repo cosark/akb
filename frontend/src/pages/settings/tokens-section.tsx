@@ -16,8 +16,10 @@ export type PAT = PatMetadata;
 interface Props {
   pats: PAT[] | null; patsError: boolean; mcpOauthEnabled: boolean; onReloadPats: () => void;
   onDirtyChange?: (dirty: boolean) => void; onBusyChange?: (busy: boolean) => void;
+  ownsOperation?: () => boolean;
+  visible?: boolean;
 }
-export function TokensSection({ pats, patsError, mcpOauthEnabled, onReloadPats, onDirtyChange, onBusyChange }: Props) {
+export function TokensSection({ pats, patsError, mcpOauthEnabled, onReloadPats, onDirtyChange, onBusyChange, ownsOperation, visible = true }: Props) {
   const [invalidatedTokenId, setInvalidatedTokenId] = useState<string>();
   const [setupDirty, setSetupDirty] = useState(false);
   const [setupBusy, setSetupBusy] = useState(false);
@@ -50,7 +52,7 @@ export function TokensSection({ pats, patsError, mcpOauthEnabled, onReloadPats, 
     revokePending.current = true; setRevoking(true);
     try {
       await revokeIssuedPat(pendingRevoke.snapshot, pendingRevoke.token.token_id);
-      if (!isCurrentAuthSession(pendingRevoke.snapshot)) return;
+      if (ownsOperation?.() === false || !isCurrentAuthSession(pendingRevoke.snapshot)) return;
       setInvalidatedTokenId(pendingRevoke.token.token_id);
       if (replacement?.token.token_id === pendingRevoke.token.token_id) setOriginalRevoked(true);
       onReloadPats();
@@ -60,7 +62,7 @@ export function TokensSection({ pats, patsError, mcpOauthEnabled, onReloadPats, 
     <div className="space-y-8">
       {notice && <Alert variant="warning">{notice}</Alert>}
       <section aria-labelledby="connection-heading"><header className="mb-5"><h2 id="connection-heading" className="text-base font-semibold">Connect an agent</h2><p className="mt-1 text-sm text-foreground-muted">Choose your tool. Follow the three steps below.</p></header>
-        <div id="setup-guide-body"><ConnectionSetup layout="settings" mcpOauthEnabled={mcpOauthEnabled} onTokenCreated={onReloadPats} onDirtyChange={setSetupDirty} onBusyChange={setSetupBusy} invalidatedTokenId={invalidatedTokenId} /></div>
+        <div id="setup-guide-body"><ConnectionSetup ownsOperation={ownsOperation} layout="settings" mcpOauthEnabled={mcpOauthEnabled} onTokenCreated={onReloadPats} onDirtyChange={setSetupDirty} onBusyChange={setSetupBusy} invalidatedTokenId={invalidatedTokenId} /></div>
       </section>
       <section aria-labelledby="tokens-heading"><header className="mb-3 flex items-start justify-between gap-4 border-b border-border pb-3"><div><h2 id="tokens-heading" className="text-base font-semibold">Saved tokens</h2><p className="mt-1 text-sm text-foreground-muted">Manage access separately from setup. Last use is not a live connection status.</p></div><Badge variant="default">{pats?.length ?? "··"}</Badge></header>
         {patsError ? <EmptyState title="Couldn't load tokens" description="Something went wrong fetching your tokens." action={<Button variant="outline" onClick={onReloadPats}>Retry</Button>} /> : !pats ? <p role="status">Loading tokens…</p> : pats.length === 0 ? <EmptyState title="No tokens yet" description="A token is only needed for token-based connections. Browser sign-in does not require one." /> : <div className="divide-y divide-border overflow-hidden rounded-[var(--radius-md)] border border-border">{pats.map(token => {
@@ -79,12 +81,12 @@ export function TokensSection({ pats, patsError, mcpOauthEnabled, onReloadPats, 
         })}</div>}
       </section>
     </div>
-    <Dialog open={replacement !== null} onOpenChange={open => { if (!open) requestCloseReplacement(); }}><DialogContent className="max-h-[90dvh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>Replace token {replacement?.token.name}</DialogTitle><DialogDescription>Review expiration, permissions and Vault write restrictions before creating a replacement. The original is retained.</DialogDescription></DialogHeader>
-      {replacement && <ConnectionSetup key={replacement.token.token_id} mcpOauthEnabled={false} initialDraft={replacement.draft} replacement onTokenCreated={onReloadPats} onDirtyChange={setReplacementDirty} onBusyChange={setReplacementBusy} invalidatedTokenId={invalidatedTokenId} onReceipt={() => setReplacementCreated(true)} />}
+    <Dialog open={replacement !== null} onOpenChange={open => { if (!open) requestCloseReplacement(); }}><DialogContent hidden={!visible} className="max-h-[90dvh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>Replace token {replacement?.token.name}</DialogTitle><DialogDescription>Review expiration, permissions and Vault write restrictions before creating a replacement. The original is retained.</DialogDescription></DialogHeader>
+      {replacement && <ConnectionSetup ownsOperation={ownsOperation} key={replacement.token.token_id} mcpOauthEnabled={false} initialDraft={replacement.draft} replacement onTokenCreated={onReloadPats} onDirtyChange={setReplacementDirty} onBusyChange={setReplacementBusy} invalidatedTokenId={invalidatedTokenId} onReceipt={() => setReplacementCreated(true)} />}
       {replacementCreated && <Alert variant="info">{originalRevoked ? "The original token was revoked. Keep the replacement secret somewhere private." : "Both tokens now exist. Update your agents, save the replacement, then explicitly revoke the original."}</Alert>}
       <DialogFooter><Button variant="outline" disabled={replacementBusy || revoking} onClick={requestCloseReplacement}>Close replacement</Button>{replacementCreated && !originalRevoked && replacement && <Button variant="destructive" disabled={replacementBusy || revoking} onClick={() => setPendingRevoke({ token: replacement.token, snapshot: replacement.snapshot })}>Revoke original token</Button>}</DialogFooter>
     </DialogContent></Dialog>
-    <ConfirmDialog open={pendingRevoke !== null} onOpenChange={open => { if (!open) setPendingRevoke(null); }} title={pendingRevoke ? `Revoke "${pendingRevoke.token.name}"?` : "Revoke token?"} description="Any agent using this token will lose access immediately. This cannot be undone. Other tokens stay active." confirmLabel="Revoke token" variant="destructive" busy={revoking} onConfirm={revoke} />
-    <ConfirmDialog open={closeReplacement} onOpenChange={setCloseReplacement} title="Have you saved your replacement?" description="Closing discards draft changes and the one-time replacement secret. It does not revoke either token." confirmLabel="I've saved it — close" onConfirm={() => { setReplacement(null); setCloseReplacement(false); }} />
+    <ConfirmDialog open={visible && pendingRevoke !== null} onOpenChange={open => { if (!open) setPendingRevoke(null); }} title={pendingRevoke ? `Revoke "${pendingRevoke.token.name}"?` : "Revoke token?"} description="Any agent using this token will lose access immediately. This cannot be undone. Other tokens stay active." confirmLabel="Revoke token" variant="destructive" busy={revoking} onConfirm={revoke} />
+    <ConfirmDialog open={visible && closeReplacement} onOpenChange={setCloseReplacement} title="Have you saved your replacement?" description="Closing discards draft changes and the one-time replacement secret. It does not revoke either token." confirmLabel="I've saved it — close" onConfirm={() => { setReplacement(null); setCloseReplacement(false); }} />
   </>;
 }

@@ -421,6 +421,13 @@ h1, h2, h3, h4, h5, h6 {
   color: transparent;
 }
 
+/* The light-brand teal gradient is too dark on slate. Keep the wordmark
+   readable without changing the mark or introducing another palette. */
+.dark .brand-gradient {
+  background: none;
+  color: var(--color-foreground);
+}
+
 /* Search-led Home masthead. The mockup uses one strict 800px axis: a 44px,
    heavy title followed by the complete search system. Its atmosphere is a
    single 720×420 teal bloom, centered and pulled 220px above the hero. The
@@ -856,6 +863,12 @@ body::before {
   min-width: var(--reader-control-size);
   padding-inline: 0;
 }
+/* A successful publish changes the label, not the reader's height. Measure
+   both labels with the current font; preview-header controls remain unchanged. */
+.document-publication-reserve { display: none; }
+.document-command-inner .document-publication-label { display: inline-grid; }
+.document-command-inner .document-publication-label > span { grid-area: 1 / 1; }
+.document-command-inner .document-publication-reserve { display: block; visibility: hidden; }
 .document-command-group {
   display: inline-flex;
   flex-shrink: 0;
@@ -888,6 +901,7 @@ body::before {
 @container resource-commands (max-width: 32rem) {
   .document-command-inner [data-slot="resource-command-actions"] { gap: .25rem; }
   .document-read-modes [role="tab"] { padding-inline: .5rem; }
+  .document-command-inner [data-publication-trigger] > svg { display: none; }
 }
 
 .document-preview-surface {

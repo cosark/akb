@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   Download,
@@ -57,19 +57,36 @@ interface FileAccess {
   download_url?: string;
   mime_type?: string;
   size_bytes?: number;
+  expires_in?: number;
+}
+
+class FileRequestError extends Error {
+  constructor(public readonly status: number, message: string) { super(message); }
+}
+
+function fileRequestError(status: number, action: string): FileRequestError {
+  return new FileRequestError(status, status === 403
+    ? "You no longer have permission to read this file."
+    : status === 404 ? "File not found in vault."
+      : `Couldn't ${action} (${status}). Try again.`);
 }
 
 export default function FilePage() {
   const { name: vault, id: fileId } = useParams<{ name: string; id: string }>();
   const user = useCurrentUser();
   const { checking, revision } = useAccessVerification();
-  return <FilePageContent key={`${user?.user_id ?? ""}:${revision}:${vault}:${fileId}`} accessChecking={checking} />;
+  return <FilePageContent key={JSON.stringify([user?.user_id, revision, vault, fileId, checking])} accessChecking={checking} />;
 }
 
 function FilePageContent({ accessChecking }: { accessChecking: boolean }) {
   const { name: vault, id: fileId } = useParams<{ name: string; id: string }>();
   const navigate = useNavigate();
   const { refetchTree } = useVaultRefresh();
+  const active = useRef(true);
+  const metadataGeneration = useRef(0);
+  const permissionGeneration = useRef(0);
+  const previewGeneration = useRef(0);
+  const previewController = useRef<AbortController | null>(null);
   const [info, setInfo] = useState<FileInfo | null>(null);
   const [access, setAccess] = useState<FileAccess | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -80,30 +97,41 @@ function FilePageContent({ accessChecking }: { accessChecking: boolean }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
   const [published, setPublished] = useState<Publication | null>(null);
+  const [previewVersion, setPreviewVersion] = useState(0);
+  const [expiresAt, setExpiresAt] = useState<number | null>(null);
+  const [linkExpired, setLinkExpired] = useState(false);
 
   useEffect(() => {
-    if (!vault) return;
-    let cancelled = false;
-    setCanDelete(false);
-    getVaultInfo(vault)
-      .then((data) => {
-        if (!cancelled) {
-          setCanDelete(
-            canEdit(data?.role) && !data?.is_archived && !data?.is_external_git,
-          );
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setCanDelete(false);
-      });
+    active.current = true;
     return () => {
-      cancelled = true;
+      active.current = false;
+      metadataGeneration.current += 1;
+      previewGeneration.current += 1;
+      previewController.current?.abort();
     };
-  }, [vault]);
+  }, []);
 
-  useEffect(() => {
-    if (!vault || !fileId) return;
-    let cancelled = false;
+  const loadPermissions = useCallback(async () => {
+    if (!vault || accessChecking || !active.current) return;
+    const generation = ++permissionGeneration.current;
+    setCanDelete(false);
+    try {
+      const data = await getVaultInfo(vault);
+      if (!active.current || generation !== permissionGeneration.current) return;
+      setCanDelete(
+        canEdit(data?.role) && !data?.is_archived && !data?.is_external_git &&
+          (!data?.managed_by || data?.role_source === "system_admin"),
+      );
+    } catch {
+      if (active.current && generation === permissionGeneration.current) setCanDelete(false);
+    }
+  }, [vault, accessChecking]);
+
+  useEffect(() => { void loadPermissions(); }, [loadPermissions]);
+
+  const loadInfo = useCallback(async () => {
+    if (!vault || !fileId || accessChecking || !active.current) return;
+    const generation = ++metadataGeneration.current;
     setInfo(null);
     setLoadError("");
     setInfoLoading(true);
@@ -111,59 +139,85 @@ function FilePageContent({ accessChecking }: { accessChecking: boolean }) {
     // Resolve the File by id. This used to read the vault listing and search
     // the page that came back, so any File outside that window reported itself
     // as missing however reachable it actually was.
-    authenticatedFetch(
-      `/api/v1/files/${encodeURIComponent(vault)}/${encodeURIComponent(fileId)}`,
-    )
-      .then(async (response) => {
-        if (response.status === 404) {
-          throw new Error("File not found in vault.");
-        }
-        if (!response.ok) {
-          throw new Error(`Couldn't load the file (${response.status}).`);
-        }
-        return response.json().catch(() => null);
-      })
-      .then((data) => {
-        if (cancelled) return;
-        if (!data) throw new Error("The file metadata could not be read.");
-        setInfo(data as FileInfo);
-      })
-      .catch((error) => {
-        if (!cancelled) setLoadError(error instanceof Error ? error.message : String(error));
-      })
-      .finally(() => {
-        if (!cancelled) setInfoLoading(false);
-      });
+    try {
+      const response = await authenticatedFetch(
+        `/api/v1/files/${encodeURIComponent(vault)}/${encodeURIComponent(fileId)}`,
+      );
+      if (!response.ok) throw fileRequestError(response.status, "load the file");
+      const data = await response.json().catch(() => null);
+      if (!active.current || generation !== metadataGeneration.current) return;
+      if (!data) throw new Error("The file metadata could not be read.");
+      setInfo(data as FileInfo);
+    } catch (error) {
+      if (!active.current || generation !== metadataGeneration.current) return;
+      setLoadError(error instanceof Error ? error.message : String(error));
+      setAccess(null);
+      setCanDelete(false);
+      permissionGeneration.current += 1;
+    } finally {
+      if (active.current && generation === metadataGeneration.current) setInfoLoading(false);
+    }
+  }, [vault, fileId, accessChecking]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [vault, fileId]);
+  useEffect(() => { void loadInfo(); }, [loadInfo]);
 
   const loadPreview = useCallback(async () => {
-    if (!vault || !fileId) return;
+    if (!vault || !fileId || accessChecking || !active.current) return;
+    const generation = ++previewGeneration.current;
+    previewController.current?.abort();
+    const controller = new AbortController();
+    previewController.current = controller;
     setPreviewLoading(true);
     setPreviewError("");
+    setAccess(null);
     try {
       const response = await authenticatedFetch(
         `/api/v1/files/${encodeURIComponent(vault)}/${encodeURIComponent(fileId)}/download`,
+        { signal: controller.signal },
       );
+      if (!response.ok) throw fileRequestError(response.status, "refresh the file link");
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.download_url) {
-        throw new Error(data.error || data.detail || `Preview unavailable (${response.status}).`);
+      if (!active.current || generation !== previewGeneration.current) return;
+      if (typeof data.download_url !== "string" || !data.download_url) {
+        throw new Error("The original file URL was not returned.");
       }
       setAccess(data);
+      setExpiresAt(typeof data.expires_in === "number" && Number.isFinite(data.expires_in)
+        ? Date.now() + Math.max(0, data.expires_in) * 1000 : null);
+      setLinkExpired(false);
+      setPreviewVersion((version) => version + 1);
     } catch (error) {
+      if (!active.current || generation !== previewGeneration.current) return;
       setAccess(null);
       setPreviewError(error instanceof Error ? error.message : String(error));
+      if (error instanceof FileRequestError && [403, 404].includes(error.status)) {
+        setInfo(null);
+        setCanDelete(false);
+        permissionGeneration.current += 1;
+        setLoadError(error.message);
+        metadataGeneration.current += 1;
+        setInfoLoading(false);
+      }
     } finally {
-      setPreviewLoading(false);
+      if (active.current && generation === previewGeneration.current) setPreviewLoading(false);
     }
-  }, [vault, fileId]);
+  }, [vault, fileId, accessChecking]);
 
   useEffect(() => {
     void loadPreview();
   }, [loadPreview]);
+
+  useEffect(() => {
+    if (expiresAt === null) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const check = () => {
+      const remaining = expiresAt - Date.now();
+      if (remaining <= 0) setLinkExpired(true);
+      else timer = setTimeout(check, Math.min(remaining, 2_147_483_647));
+    };
+    check();
+    return () => clearTimeout(timer);
+  }, [expiresAt]);
 
   const displayName = info?.name || access?.name || "File";
   const mime = effectiveFileMime(
@@ -188,7 +242,7 @@ function FilePageContent({ accessChecking }: { accessChecking: boolean }) {
       <h1 className="sr-only">{loadError ? "File unavailable" : displayName}</h1>
       <ResourceCommandRow
         meta={resolved ? (
-          <>
+          <div className="hidden min-w-0 items-center gap-3 sm:flex">
             <Badge variant="outline">{kindLabel}</Badge>
             {size !== undefined && (
               <span className="whitespace-nowrap tabular-nums">{formatFileSize(size)}</span>
@@ -198,12 +252,12 @@ function FilePageContent({ accessChecking }: { accessChecking: boolean }) {
                 {info.description}
               </TooltipText>
             )}
-          </>
+          </div>
         ) : undefined}
       >
         {resolved && (
           <>
-            {access?.download_url ? (
+            {access?.download_url && !linkExpired ? (
               <Button asChild size="sm" className="min-h-11 sm:min-h-0">
                 <a
                   href={access.download_url}
@@ -211,6 +265,12 @@ function FilePageContent({ accessChecking }: { accessChecking: boolean }) {
                   rel="noreferrer"
                   download={displayName}
                   aria-label="Download file"
+                  onClick={(event) => {
+                    if (expiresAt !== null && Date.now() >= expiresAt) {
+                      event.preventDefault();
+                      void loadPreview();
+                    }
+                  }}
                 >
                   <Download className="h-4 w-4" aria-hidden />
                   Download
@@ -222,13 +282,17 @@ function FilePageContent({ accessChecking }: { accessChecking: boolean }) {
                 variant="outline"
                 size="sm"
                 className="min-h-11 sm:min-h-0"
-                loading={previewLoading}
-                onClick={() => void loadPreview()}
+                disabled
+                aria-label="Download file"
               >
-                {!previewLoading && <RefreshCw className="h-4 w-4" aria-hidden />}
-                Retry preview
+                <Download className="h-4 w-4" aria-hidden />
+                Download
               </Button>
             )}
+            <Button variant="ghost" size="sm" loading={previewLoading} onClick={() => void loadPreview()}>
+              {!previewLoading && <RefreshCw className="h-4 w-4" aria-hidden />}
+              Refresh link
+            </Button>
             <Dialog>
               <DialogTrigger asChild>
                 <Button type="button" variant="ghost" size="sm" className="min-h-11 sm:min-h-0">
@@ -236,16 +300,18 @@ function FilePageContent({ accessChecking }: { accessChecking: boolean }) {
                   Info
                 </Button>
               </DialogTrigger>
-              <DialogContent aria-describedby={undefined}>
-                <DialogTitle>File info</DialogTitle>
-                <dl className="space-y-3 text-sm">
+              <DialogContent aria-describedby={undefined} className="left-auto right-0 top-0 flex h-dvh max-h-dvh w-full max-w-sm translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none p-0">
+                <DialogTitle className="shrink-0 border-b border-border px-5 py-4 pr-14">File info</DialogTitle>
+                <dl className="min-h-0 space-y-4 overflow-y-auto p-5 text-sm">
                   <FileMetadata label="Name" value={displayName} />
                   {info?.description && <FileMetadata label="Description" value={info.description} />}
                   {info?.collection && <FileMetadata label="Collection" value={info.collection} />}
                   {mime && <FileMetadata label="Format" value={mime} />}
                   {size !== undefined && <FileMetadata label="Size" value={formatFileSize(size)} />}
                   {creator && <FileMetadata label="Uploaded by" value={creator} />}
-                  {info?.created_at && <FileMetadata label="Created" value={timeAgo(info.created_at)} />}
+                  {info?.created_at && Number.isFinite(Date.parse(info.created_at)) && (
+                    <FileMetadata label="Created" value={`${new Date(info.created_at).toLocaleString()} (${timeAgo(info.created_at)})`} />
+                  )}
                 </dl>
               </DialogContent>
             </Dialog>
@@ -277,17 +343,22 @@ function FilePageContent({ accessChecking }: { accessChecking: boolean }) {
             <div className="mx-auto w-full max-w-2xl p-4 sm:p-6">
               <Alert variant="destructive" title="File unavailable">
                 {loadError}
+                <div className="mt-3">
+                  <Button variant="outline" size="sm" onClick={() => { void loadInfo(); void loadPreview(); void loadPermissions(); }}>
+                    Try again
+                  </Button>
+                </div>
               </Alert>
             </div>
           ) : (
             <section aria-label="File preview" className="min-h-0 flex-1 overflow-auto">
                 {previewLoading ? (
                   <FilePreviewLoading />
-                ) : previewError || !access?.download_url ? (
+                ) : linkExpired || previewError || !access?.download_url ? (
                   <div className="mx-auto flex min-h-64 max-w-xl items-center px-4 py-10">
                     <Alert variant="warning" title="Preview unavailable" className="w-full">
                       <div className="space-y-3">
-                        <p>{previewError || "The original file URL was not returned."}</p>
+                        <p>{linkExpired ? "The file link has expired. Refresh it to preview or download again." : previewError || "The original file URL was not returned."}</p>
                         <Button
                           type="button"
                           variant="outline"
@@ -295,18 +366,20 @@ function FilePageContent({ accessChecking }: { accessChecking: boolean }) {
                           onClick={() => void loadPreview()}
                         >
                           <RefreshCw className="h-4 w-4" aria-hidden />
-                          Retry
+                          Refresh link
                         </Button>
                       </div>
                     </Alert>
                   </div>
                 ) : (
                   <FilePreviewBody
-                    key={access.download_url}
+                    key={`${access.download_url}:${previewVersion}`}
                     mime={mime}
                     directUrl={access.download_url}
                     rawUrl={access.download_url}
                     name={displayName}
+                    sizeBytes={size}
+                    onRefreshLink={() => void loadPreview()}
                   />
                 )}
             </section>
@@ -319,7 +392,9 @@ function FilePageContent({ accessChecking }: { accessChecking: boolean }) {
         kind="file"
         name={displayName}
         onConfirm={async () => {
+          if (!active.current || !canDelete) throw new Error("File deletion is not available with your current permissions.");
           await deleteVaultFile(vault!, fileId!);
+          if (!active.current) return;
           refetchTree();
           navigate(`/vault/${vault}`);
         }}
@@ -332,6 +407,7 @@ function FilePageContent({ accessChecking }: { accessChecking: boolean }) {
         resourceUri={info?.uri}
         resourceName={displayName}
         onPublished={(_slug, publication) => {
+          if (!active.current) return;
           if (publication) setPublished(publication);
         }}
       />

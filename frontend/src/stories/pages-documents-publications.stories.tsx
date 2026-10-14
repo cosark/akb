@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, within } from "storybook/test";
 import { http, HttpResponse } from "msw";
+import { useLocation } from "react-router-dom";
 import {
   API,
   defaultDocumentSupportHandlers,
@@ -29,6 +30,11 @@ const documentPageHandlers = [
   ...defaultDocumentSupportHandlers,
 ];
 
+function DocumentRouteProbe() {
+  const location = useLocation();
+  return <output data-testid="document-route" hidden>{location.pathname}{location.search}</output>;
+}
+
 // The canonical guide doc (overview/vault-skill.md) no longer renders in the
 // document viewer — it redirects to the vault-settings guide editor — so the
 // viewer stories read a regular document instead.
@@ -43,12 +49,17 @@ export const DocumentRawTab: Story = {
       ],
     },
   },
-  render: () => <AkbRouteTree />,
+  render: () => <><AkbRouteTree /><DocumentRouteProbe /></>,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    // Enter the browser iframe before the action: foreground access proof can
+    // replace a loaded surface while an initial pointer gesture is in flight.
+    await userEvent.click(await canvas.findByRole("heading", { level: 1, name: "Release note" }));
     await expect(await canvas.findByRole("tab", { name: "Raw" })).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("tab", { name: "Raw" }));
-    await expect(canvas.getByTestId("doc-raw")).toHaveTextContent("# Release note");
+    await expect((await canvas.findByTestId("doc-raw")).textContent).toBe(regularDoc.content);
+    await expect(canvas.getByRole("tab", { name: "Raw" })).toHaveAttribute("aria-selected", "true");
+    await expect(canvas.getByTestId("document-route").textContent).toBe("/vault/akb/doc/notes%2Frelease.md?view=raw");
     await expect(await canvas.findByRole("navigation", { name: "Vaults" })).toBeInTheDocument();
   },
 };

@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogTrigger } from "@/components/ui/dialog";
 import { useNotificationCount } from "@/hooks/use-notifications";
 import { NotificationInbox } from "@/components/notification-inbox";
-import type { NotificationCategory } from "@/lib/api-notifications";
+import { type NotificationCategory } from "@/lib/api-notifications";
+import { NotificationReadFeedback } from "@/components/notification-read-feedback";
 
 export function NotificationBell() {
   const count = useNotificationCount();
@@ -14,7 +15,7 @@ export function NotificationBell() {
   const pendingNavigation = useRef<(() => void) | null>(null);
   const unread = count.error ? undefined : count.data?.unread_count;
   const countLabel = unread === undefined ? "Notifications, unread count unavailable" : `Notifications, ${unread} unread`;
-  return <Dialog open={open} onOpenChange={setOpen}>
+  return <><Dialog open={open} onOpenChange={setOpen}>
     <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{countLabel}</span>
     <DialogTrigger asChild>
       <Button id="notifications-trigger" variant="ghost" size="icon" className="relative h-9 w-9 shrink-0 rounded-[var(--radius-sm)] text-foreground-muted hover:bg-surface-hover hover:text-foreground"
@@ -38,5 +39,7 @@ export function NotificationBell() {
         setOpen(false);
       }} />
     </DialogContent>
-  </Dialog>;
+  </Dialog><NotificationReadFeedback inboxOpen={open} onReviewCurrent={() => {
+    setState("all"); setCategory("all"); setOpen(true);
+  }} /></>;
 }

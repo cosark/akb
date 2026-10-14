@@ -16,6 +16,8 @@ import { parseUri } from "@/lib/uri";
 import { documentPreviewState } from "@/lib/document-preview-navigation";
 import { cn, timeAgo } from "@/lib/utils";
 import { useSettingsDialog } from "@/contexts/settings-dialog-context";
+import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
+import { notificationReadOwner, reportNotificationReadFailure } from "@/lib/notification-read-feedback";
 
 const categories = [
   { value: "all", label: "All" },
@@ -33,6 +35,8 @@ export function NotificationInbox({ compact = false, heading, onNavigate, state,
   onCategoryChange: (category: NotificationCategory) => void;
 }) {
   const inbox = useNotificationInbox(state, category);
+  const user = useCurrentUser();
+  const { revision } = useAccessVerification();
   const menuNavigation = useRef(false);
   const client = useQueryClient();
   const navigate = useNavigate();
@@ -40,6 +44,7 @@ export function NotificationInbox({ compact = false, heading, onNavigate, state,
   const location = useLocation();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const opening = useRef(false);
   const summary = inbox.data?.pages[0];
   const items = [...new Map(inbox.data?.pages.flatMap(page => page.items).map(item => [item.id, item]) || []).values()];
   const unavailable = inbox.error instanceof NotificationsUnavailable;
@@ -60,13 +65,26 @@ export function NotificationInbox({ compact = false, heading, onNavigate, state,
   }
 
   async function open(item: NotificationItem) {
-    if (busy !== null) return;
+    if (busy !== null || opening.current) return;
     const target = parseUri(item.target?.uri);
     if (!target || target.vault !== item.target?.vault) return;
     const route = target.kind === "vault" ? `/vault/${encodeURIComponent(target.vault)}`
       : target.kind === "doc" ? `/vault/${encodeURIComponent(target.vault)}/doc/${encodeURIComponent(target.id)}` : null;
     if (!route) return;
-    if (!item.read && !await change(() => markNotification(item, true), item.id)) return;
+    opening.current = true;
+    const owner = notificationReadOwner(user?.user_id ?? "", revision);
+    // Read state must not gate access to the selected resource.
+    if (!item.read) {
+      setBusy(item.id); setError(null);
+      void markNotification(item, true).then(() => client.invalidateQueries({ queryKey: ["notifications", owner.userId] })).catch(failure => {
+        // Report to the shell immediately, without waiting for another GET or
+        // depending on this route still being mounted.
+        reportNotificationReadFailure(owner, item, failure);
+        setError(failure instanceof Error ? failure.message : "Could not update notifications. Try again.");
+        if (failure instanceof NotificationConflict) void client.invalidateQueries({ queryKey: ["notifications", owner.userId] });
+      }).finally(() => { opening.current = false; setBusy(null); });
+    }
+    else opening.current = false;
     const action = () => navigate(route, target.kind === "doc" ? {
       state: documentPreviewState(location, compact ? "notifications-trigger" : `notification-${item.id}`),
     } : undefined);
@@ -153,7 +171,13 @@ export function NotificationInbox({ compact = false, heading, onNavigate, state,
             </span>
           </>;
           return <li key={item.id} data-read={item.read} data-actionable={!!canOpen} className={cn("relative flex items-start gap-2 px-3 py-2 transition-token sm:px-4", canOpen && "hover:bg-surface-hover", !item.read && "before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-link")}>
-            {canOpen ? <button id={`notification-${item.id}`} aria-label={item.title} aria-describedby={metadataId} disabled={busy !== null} onClick={() => void open(item)} className="group/notification flex min-w-0 flex-1 cursor-pointer gap-3 rounded-[var(--radius-sm)] text-left text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">{content}</button>
+            {canOpen ? <Link id={`notification-${item.id}`} aria-label={item.title} aria-describedby={metadataId}
+              to={target.kind === "vault" ? `/vault/${encodeURIComponent(target.vault)}` : `/vault/${encodeURIComponent(target.vault)}/doc/${encodeURIComponent(target.id)}`}
+              state={target.kind === "doc" ? documentPreviewState(location, compact ? "notifications-trigger" : `notification-${item.id}`) : undefined}
+              onClick={event => {
+                if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                event.preventDefault(); void open(item);
+              }} className="group/notification flex min-w-0 flex-1 cursor-pointer gap-3 rounded-[var(--radius-sm)] text-left text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{content}</Link>
               : <div className="flex min-w-0 flex-1 gap-3 text-foreground">{content}</div>}
             <div className="flex shrink-0 items-center gap-1">
               <time className="text-xs leading-5 tabular-nums text-foreground-muted" dateTime={item.updated_at} title={new Date(item.updated_at).toLocaleString()}>{timeAgo(item.updated_at)}</time>
@@ -173,7 +197,7 @@ export function NotificationInbox({ compact = false, heading, onNavigate, state,
     {!compact && summary && <p className="border-t border-border px-4 py-3 text-xs text-foreground-muted">Notifications are kept for {summary.retention_days} days.</p>}
     {compact && <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
       {summary && <span className="text-xs text-foreground-muted">Kept for {summary.retention_days} days</span>}
-      <Link to={viewAllUrl} onClick={event => { if (onNavigate) { event.preventDefault(); onNavigate(() => navigate(viewAllUrl)); } }} className="inline-flex min-h-9 items-center gap-2 rounded-[var(--radius-sm)] text-sm font-medium text-link hover:text-link-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">View all notifications<ArrowRight className="h-3.5 w-3.5" aria-hidden /></Link>
+      <Link to={viewAllUrl} onClick={event => { if (onNavigate && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) { event.preventDefault(); onNavigate(() => navigate(viewAllUrl)); } }} className="inline-flex min-h-9 items-center gap-2 rounded-[var(--radius-sm)] text-sm font-medium text-link hover:text-link-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">View all notifications<ArrowRight className="h-3.5 w-3.5" aria-hidden /></Link>
     </div>}
   </Tabs></TooltipProvider>;
 }

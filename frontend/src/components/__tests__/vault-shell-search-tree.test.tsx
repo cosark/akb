@@ -77,9 +77,8 @@ function renderShell(entry = "/vault/demo/search") {
               </div>
             }
           />
-          <Route path="members" element={<div>Members page</div>} />
-          <Route path="publications" element={<div>Publications page</div>} />
-          <Route path="settings" element={<div>Settings page</div>} />
+          {["members", "publications", "settings", "graph"].map(route => <Route key={route} path={route}
+            element={<div>{route} page<Link to="/vault/demo">Open overview</Link></div>} />)}
           <Route path="activity" element={<div>Activity page</div>} />
         </Route>
       </Routes>
@@ -122,7 +121,7 @@ describe("VaultShell search collection tree", () => {
     expect(within(screen.getByRole("complementary", { name: "Collections" })).queryByRole("navigation")).not.toBeInTheDocument();
   });
 
-  it.each(["members", "publications", "settings", "activity"])(
+  it.each(["activity"])(
     "retains the Vault navigation on the %s tool view",
     async (route) => {
       render(
@@ -158,13 +157,60 @@ describe("VaultShell search collection tree", () => {
   );
 });
 
+describe("VaultShell focused task presentation", () => {
+  it.each(["members", "publications", "settings", "graph", "settings/"])(
+    "omits both the tree and section row on %s without changing preferences",
+    async route => {
+      const user = userEvent.setup();
+      localStorage.setItem("akb.treeWidth.v2", "300");
+      renderShell(`/vault/demo/${route}`);
+      expect(screen.queryByText("Collection tree content")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /collections/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("navigation", { name: "Vault sections" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("separator", { name: "Resize tree panel" })).not.toBeInTheDocument();
+      expect(screen.getByRole("navigation", { name: "Vaults" })).toBeInTheDocument();
+      expect(localStorage.getItem("akb.treeVisible")).toBe("1");
+      expect(localStorage.getItem("akb.treeWidth.v2")).toBe("300");
+      await user.click(screen.getByRole("link", { name: "Open overview" }));
+      expect(screen.getByText("Collection tree content")).toBeInTheDocument();
+      expect(screen.getByRole("navigation", { name: "Vault sections" })).toBeInTheDocument();
+    },
+  );
+
+  it("retains a collapsed tree preference when returning to content", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("akb.treeVisible", "0");
+    renderShell("/vault/demo/settings");
+    expect(screen.queryByRole("button", { name: "Expand collections" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "Open overview" }));
+    expect(screen.getByRole("button", { name: "Expand collections" })).toBeInTheDocument();
+    expect(screen.queryByText("Collection tree content")).not.toBeInTheDocument();
+    expect(localStorage.getItem("akb.treeVisible")).toBe("0");
+  });
+
+  it("does not mount Collections inside the mobile task navigator", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, "matchMedia").mockImplementation(query => ({
+      matches: false, media: query, onchange: null,
+      addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
+    }));
+    renderShell("/vault/demo/members");
+    await user.click(screen.getByRole("button", { name: "Open vault navigation" }));
+    expect(screen.getByRole("navigation", { name: "Vaults" })).toBeInTheDocument();
+    expect(screen.queryByText("Collection tree content")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Expand collections" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Vault pages, current: Members" })).toBeInTheDocument();
+    expect(localStorage.getItem("akb.treeVisible")).toBe("1");
+  });
+});
+
 function ResolvedResource() {
   usePublishResourceLocation({ vault: "demo", title: "Resolved resource title", kind: "Document" });
   return <div>Resource content</div>;
 }
 
 describe("VaultShell resource navigation", () => {
-  it.each([true, false])("retains Vault navigation with a mobile-only location row, without duplicate titles (desktop=%s)", desktop => {
+  it.each([true, false])("keeps the document tree but replaces the section row with a mobile-only header menu (desktop=%s)", desktop => {
     vi.spyOn(window, "matchMedia").mockImplementation(query => ({
       matches: desktop && query === "(min-width: 1024px)", media: query, onchange: null,
       addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
@@ -175,15 +221,15 @@ describe("VaultShell resource navigation", () => {
       </Route></Routes></ResourceLocationProvider>
     </MemoryRouter></QueryClientProvider>);
     expect(screen.getByText("Resource content")).toBeInTheDocument();
-    const navigation = screen.getByRole("navigation", { name: "Vault sections" });
-    expect(navigation).toBeInTheDocument();
-    expect(navigation.querySelector('[aria-current="page"]')).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Vault sections" })).not.toBeInTheDocument();
+    expect(localStorage.getItem("akb.treeVisible")).toBe("1");
     expect(screen.queryByText("In this vault")).not.toBeInTheDocument();
     if (desktop) {
       expect(screen.queryByTestId("title-bar")).not.toBeInTheDocument();
+      expect(screen.getByText("Collection tree content")).toBeInTheDocument();
     } else {
       expect(screen.getByRole("navigation", { name: "Resource location" })).toHaveTextContent("Resolved resource title");
-      expect(screen.queryByRole("button", { name: /Vault pages/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Vault pages for demo" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Open vault navigation" })).toBeInTheDocument();
       expect(screen.queryByText("a-private-url-ref")).not.toBeInTheDocument();
     }

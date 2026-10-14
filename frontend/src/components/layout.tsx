@@ -3,7 +3,10 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { useQueryClient } from "@tanstack/react-query";
 import { Boxes, House, PanelLeftOpen, PanelLeftClose, type LucideIcon } from "lucide-react";
 import {
+  authSessionSnapshot,
+  isCurrentAuthSession,
   clearPrivateAssetCache,
+  clearSharedVaultReads,
   getAuthConfig,
   getMe,
   getToken,
@@ -71,6 +74,9 @@ export function Layout() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      // A new shell may follow a cookie-backed login without a local token
+      // change. Do not attach it to reads started by the previous shell.
+      clearSharedVaultReads();
       const config = await getAuthConfig();
       if (
         config.available !== true ||
@@ -82,8 +88,18 @@ export function Layout() {
         return;
       }
       try {
-        const user = await getMe({ redirectOnUnauthorized: false });
-        if (!cancelled) setSession({ status: "authenticated", user });
+        while (!cancelled) {
+          const snapshot = authSessionSnapshot();
+          try {
+            const user = await getMe({ redirectOnUnauthorized: false });
+            if (!isCurrentAuthSession(snapshot)) continue;
+            if (!cancelled) setSession({ status: "authenticated", user });
+            break;
+          } catch (error) {
+            if (!isCurrentAuthSession(snapshot)) continue;
+            throw error;
+          }
+        }
       } catch {
         if (!cancelled) setSession({ status: "unauthenticated", user: null });
       }
@@ -100,32 +116,39 @@ export function Layout() {
     if (!activeUser || activeFingerprint === null) return;
     let disposed = false;
     let running = false;
+    let queued = false;
 
     const revalidateForegroundIdentity = async () => {
-      if (running || document.visibilityState === "hidden") return;
+      if (document.visibilityState === "hidden") return;
+      if (running) { queued = true; return; }
       running = true;
       setRevalidating(true);
       clearPrivateAssetCache();
+      clearSharedVaultReads();
       try {
-        const verified = await getMe({ redirectOnUnauthorized: false });
-        if (disposed) return;
-        const identityChanged =
-          identityFingerprint(verified) !== activeFingerprint;
-        // SSO cookies are shared across tabs and are intentionally invisible
-        // to JavaScript. After every foreground proof, clear query state so a
-        // replaced identity or changed server-side ACL cannot inherit data
-        // rendered under the prior cookie. Local mode only pays this cost when
-        // its storage-backed identity actually changed.
-        if (activeUser.auth_method === "browser_session" || identityChanged) {
-          queryClient.clear();
-        }
-        setSession({ status: "authenticated", user: verified });
-        setAccessRevision(revision => revision + 1);
-      } catch (error) {
-        if (disposed || (error instanceof Error && error.name === "DeferredSessionError")) return;
-        queryClient.clear();
-        clearPrivateAssetCache();
-        setSession({ status: "unauthenticated", user: null });
+        do {
+          queued = false;
+          const snapshot = authSessionSnapshot();
+          try {
+            const verified = await getMe({ redirectOnUnauthorized: false });
+            if (disposed) return;
+            // An event or changed carrier invalidates even a successful old
+            // response. Keep private UI hidden until the latest proof settles.
+            if (queued || !isCurrentAuthSession(snapshot)) { queued = true; continue; }
+            clearSharedVaultReads();
+            const identityChanged = identityFingerprint(verified) !== activeFingerprint;
+            if (activeUser.auth_method === "browser_session" || identityChanged) queryClient.clear();
+            setSession({ status: "authenticated", user: verified });
+            setAccessRevision(revision => revision + 1);
+          } catch (error) {
+            if (queued || !isCurrentAuthSession(snapshot)) { queued = true; continue; }
+            if (disposed || (error instanceof Error && error.name === "DeferredSessionError")) return;
+            queryClient.clear();
+            clearPrivateAssetCache();
+            clearSharedVaultReads();
+            setSession({ status: "unauthenticated", user: null });
+          }
+        } while (queued && !disposed);
       } finally {
         running = false;
         if (!disposed) setRevalidating(false);
@@ -303,7 +326,7 @@ export function Layout() {
             </nav>
 
             <div ref={accountControlsRef} className="ml-2 flex shrink-0 items-center justify-end gap-2 border-l border-border pl-2 lg:min-w-28">
-              <CurrentUserProvider user={session.user}>
+              <CurrentUserProvider user={session.user} checking={revalidating} revision={accessRevision}>
                 <NotificationBell key={session.user.user_id} />
               </CurrentUserProvider>
               <UserMenu initialUser={session.user} />

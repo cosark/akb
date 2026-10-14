@@ -1,11 +1,9 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   AlertTriangle,
   Archive,
-  Box,
   CheckCircle2,
-  ChevronRight,
   Globe,
   Lock,
   RotateCcw,
@@ -46,6 +44,7 @@ import { RoleBadge, VaultStateBadge } from "@/components/status-badge";
 import { useOptionalSearchStatus } from "@/hooks/use-search-status";
 import { SearchStatusStages } from "@/components/search-status-stages";
 import { useVaultRefresh } from "@/contexts/vault-refresh-context";
+import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
 
 interface TableMeta {
   name: string;
@@ -106,13 +105,19 @@ const PUBLIC_ORDER: PublicAccess[] = ["none", "reader", "writer"];
 
 export default function VaultSettingsPage() {
   const { name } = useParams<{ name: string }>();
-  return <VaultSettingsWorkspace key={name} name={name} />;
+  const user = useCurrentUser();
+  // Proof revisions refresh reads, not the same account's active Guide draft.
+  return <VaultSettingsWorkspace key={JSON.stringify([user?.user_id, name])} name={name} />;
 }
 
 function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { refetchVaults } = useVaultRefresh();
+  const user = useCurrentUser();
+  const { checking, revision } = useAccessVerification();
+  const [loadedRevision, setLoadedRevision] = useState<number | null>(null);
+  const requestGeneration = useRef(0);
   const [info, setInfo] = useState<VaultInfo | null>(null);
   const [loadError, setLoadError] = useState("");
   const [description, setDescription] = useState("");
@@ -160,38 +165,44 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
   );
 
   const skillQuery = useQuery({
-    queryKey: ["document", name, VAULT_SKILL_PATH],
+    queryKey: ["document", name, VAULT_SKILL_PATH, user?.user_id, revision],
     queryFn: () => getDocument(name!, VAULT_SKILL_PATH),
     retry: false,
-    enabled: !!name && !!info && !info.is_external_git,
+    enabled: !checking && loadedRevision === revision && !!name && !!info && !info.is_external_git,
   });
-  const skillDoc = skillQuery.isError ? null : skillQuery.data;
+  const skillMissing = skillQuery.isError &&
+    typeof skillQuery.error === "object" && skillQuery.error !== null &&
+    "status" in skillQuery.error && skillQuery.error.status === 404;
+  const skillDoc = skillMissing ? null : skillQuery.data;
+  const skillError = skillQuery.isError && !skillMissing
+    ? skillQuery.error.message || "Couldn't load the vault guide."
+    : undefined;
 
   function loadInfo(vault: string) {
+    const generation = ++requestGeneration.current;
     setLoadError("");
     getVaultInfo(vault)
       .then((data) => {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || generation !== requestGeneration.current) return;
+        setLoadedRevision(revision);
         setInfo(data);
-        setDescription(data.description || "");
-        setPublicAccess((data.public_access as PublicAccess) || "none");
+        setDescription(value => !info || value === (info.description || "") ? data.description || "" : value);
+        setPublicAccess(value => !info || value === (info.public_access || "none") ? (data.public_access as PublicAccess) || "none" : value);
       })
       .catch((error) => {
-        if (mountedRef.current) setLoadError(error?.message || "Couldn't load this vault.");
+        if (mountedRef.current && generation === requestGeneration.current) setLoadError(error?.message || "Couldn't load this vault.");
       });
   }
 
   useEffect(() => {
-    if (!name) return;
-    setInfo(null);
+    if (!name || checking) return;
     setLoadError("");
-    setDescription("");
-    setPublicAccess("none");
-    setSaveError("");
-    setSaveErrorScope(null);
-    setSavedScope(null);
     loadInfo(name);
-  }, [name]);
+    return () => { requestGeneration.current += 1; };
+    // The workspace is account/vault keyed. Retain same-account drafts while
+    // proof revision invalidates the private read and its late completions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, checking, revision]);
 
   useEffect(() => {
     selectedSectionRef.current = activeSection;
@@ -216,8 +227,9 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
     };
   }, [name]);
 
-  const canEdit = info?.role === "owner";
-  const canManageSkill = info?.role === "owner" && !info?.is_archived;
+  const verified = !checking && loadedRevision === revision && !loadError;
+  const canEdit = verified && info?.role === "owner";
+  const canManageSkill = verified && info?.role === "owner" && !info?.is_archived;
   const savedPublic = (info?.public_access as PublicAccess) || "none";
   const descriptionDirty = Boolean(
     info && description !== (info.description || ""),
@@ -250,7 +262,8 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
   }
 
   async function doSave(scope: SaveScope) {
-    if (!name || !info) return;
+    if (!name || !info || !verified) return;
+    const generation = requestGeneration.current;
     setSavingScope(scope);
     setSaveError("");
     setSaveErrorScope(null);
@@ -259,7 +272,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
         scope === "general" ? { description } : { public_access: publicAccess };
       await updateVault(name, patch);
       refetchVaults();
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || generation !== requestGeneration.current) return;
       setInfo({ ...info, ...patch });
       setSavedScope(scope);
       requestAnimationFrame(() => {
@@ -270,7 +283,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
         if (status && !status.closest("[hidden]")) status.focus();
       });
     } catch (error: unknown) {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || generation !== requestGeneration.current) return;
       setSaveError(error instanceof Error ? error.message : "Save failed");
       setSaveErrorScope(scope);
       selectSection(scope);
@@ -289,16 +302,22 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
   }
 
   async function confirmArchive() {
-    if (!name) return;
+    if (!name || !verified) return;
+    const generation = requestGeneration.current;
     await archiveVault(name);
-    setInfo(await getVaultInfo(name));
+    const data = await getVaultInfo(name);
+    if (!mountedRef.current || generation !== requestGeneration.current) return;
+    setInfo(data);
     refetchVaults();
   }
 
   async function confirmUnarchive() {
-    if (!name) return;
+    if (!name || !verified) return;
+    const generation = requestGeneration.current;
     await unarchiveVault(name);
-    setInfo(await getVaultInfo(name));
+    const data = await getVaultInfo(name);
+    if (!mountedRef.current || generation !== requestGeneration.current) return;
+    setInfo(data);
     refetchVaults();
   }
 
@@ -330,7 +349,10 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
       contentClassName="min-h-full xl:flex xl:h-full xl:min-h-0 xl:flex-col"
     >
       <h1 className="sr-only">Settings</h1>
+      {info && !verified && (loadError ? <Alert variant="destructive">{loadError} <Button variant="outline" size="sm" onClick={() => loadInfo(name)} disabled={checking}>Try again</Button></Alert> : <SettingsLoadingState />)}
       <Tabs
+        hidden={!!info && !verified}
+        inert={!!info && !verified}
         value={activeSection}
         onValueChange={selectSection}
         className="flex min-h-full min-w-0 flex-col xl:min-h-0 xl:flex-1"
@@ -359,7 +381,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
           </Alert>
         )}
         <div className="shrink-0 border-b border-border sm:px-2 lg:px-3">
-          <div className="overflow-x-auto">
+          <div className="rail-scroll overflow-x-auto">
             <TabsList
               aria-label="Vault settings sections"
               className="h-12 gap-0 rounded-none bg-transparent p-0"
@@ -392,10 +414,9 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
         <div
           ref={settingsMainRef}
           data-testid="settings-workspace-frame"
-          className="@container/vault-settings rail-scroll min-w-0 flex-1 px-3 py-5 sm:px-5 lg:p-6 xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain"
+          className="rail-scroll min-w-0 flex-1 px-3 py-5 sm:px-5 lg:p-6 xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain"
         >
-          <div className="grid w-full max-w-[86rem] min-w-0 items-start gap-6 @[52rem]/vault-settings:grid-cols-[minmax(0,1fr)_18rem] @[72rem]/vault-settings:grid-cols-[minmax(0,1fr)_20rem]">
-          <div className="min-w-0 w-full max-w-5xl">
+          <div className="min-w-0 w-full">
             {loadError && (
               <Alert variant="destructive">
                 {loadError}
@@ -417,7 +438,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                   value="general"
                   forceMount
                   hidden={activeSection !== "general"}
-                  className="pt-0"
+                  className="w-full max-w-3xl pt-0"
                 >
                   <section
                     id="general"
@@ -497,6 +518,41 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                           onDiscard={() => handleDiscard("general")}
                         />
                       )}
+                      <dl
+                        aria-label="Vault ownership and dates"
+                        className="divide-y divide-border border-t border-border px-4 py-1"
+                      >
+                        <ContextRow
+                          label="Owner"
+                          value={info.owner_display_name || info.owner || "Not available"}
+                        />
+                        <ContextRow
+                          label="Your role"
+                          value={info.role ? <RoleBadge role={info.role} /> : "Not available"}
+                        />
+                        {(info.is_archived || info.is_external_git || (info.public_access && info.public_access !== "none")) && (
+                          <ContextRow
+                            label="Vault state"
+                            value={
+                              <div className="flex justify-end">
+                                <VaultStateBadge
+                                  archived={info.is_archived}
+                                  externalGit={info.is_external_git}
+                                  publicAccess={info.public_access}
+                                />
+                              </div>
+                            }
+                          />
+                        )}
+                        <ContextRow
+                          label="Created"
+                          value={info.created_at ? timeAgo(info.created_at) : "Not available"}
+                        />
+                        <ContextRow
+                          label="Last active"
+                          value={info.last_activity ? timeAgo(info.last_activity) : "Not available"}
+                        />
+                      </dl>
                     </Panel>
                   </section>
 
@@ -505,7 +561,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                   value="access"
                   forceMount
                   hidden={activeSection !== "access"}
-                  className="pt-0"
+                  className="w-full max-w-3xl pt-0"
                 >
                   <section
                     id="access"
@@ -630,21 +686,24 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                   value="skill"
                   forceMount
                   hidden={activeSection !== "skill"}
-                  className="pt-0"
+                  className="w-full max-w-5xl pt-0"
                 >
                   <SkillSection
                     vault={name}
                     doc={skillDoc}
                     loading={skillQuery.isLoading || (!info && !loadError)}
+                    error={skillError}
+                    onRetry={() => { void skillQuery.refetch(); }}
                     isMirror={info.is_external_git}
                     canManage={canManageSkill}
+                    queryKey={["document", name, VAULT_SKILL_PATH, user?.user_id, revision]}
                   />
                 </TabsContent>
                 <TabsContent
                   value="danger"
                   forceMount
                   hidden={activeSection !== "danger"}
-                  className="space-y-6 pt-0"
+                  className="w-full max-w-5xl space-y-6 pt-0"
                 >
                   <section aria-labelledby="operations-heading">
                     <WorkspaceSectionHeader
@@ -778,8 +837,6 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
               </>
             )}
           </div>
-          {info && <VaultDetailsPanel name={name} info={info} />}
-          </div>
         </div>
       </Tabs>
 
@@ -792,7 +849,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
       </span>
 
       <ConfirmDialog
-        open={pendingArchive}
+        open={verified && pendingArchive}
         onOpenChange={setPendingArchive}
         title={`Archive "${name}"?`}
         description={
@@ -802,7 +859,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
         onConfirm={confirmArchive}
       />
       <ConfirmDialog
-        open={pendingUnarchive}
+        open={verified && pendingUnarchive}
         onOpenChange={setPendingUnarchive}
         title={`Unarchive "${name}"?`}
         description="The vault returns to active. Agents can write again."
@@ -810,7 +867,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
         onConfirm={confirmUnarchive}
       />
       <ConfirmDialog
-        open={pendingPublicWrite}
+        open={verified && pendingPublicWrite}
         onOpenChange={setPendingPublicWrite}
         title={`Make "${name}" world-writable?`}
         variant="destructive"
@@ -832,10 +889,11 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
       />
 
       <DeleteVaultDialog
-        open={deleteOpen}
+        open={verified && deleteOpen}
         onOpenChange={setDeleteOpen}
         vault={name}
         onDeleted={() => {
+          if (!mountedRef.current || !verified) return;
           refetchVaults();
           navigate("/vault");
         }}
@@ -896,58 +954,7 @@ function SettingsActionBar({
   );
 }
 
-function VaultDetailsPanel({ name, info }: { name: string; info: VaultInfo }) {
-  const counts = [
-    ["Members", info.member_count],
-    ["Collections", info.collection_count],
-    ["Documents", info.document_count],
-    ["Tables", info.table_count],
-    ["Files", info.file_count],
-    ["Graph links", info.edge_count],
-  ] as const;
-
-  return (
-    <aside className="min-w-0" aria-labelledby="vault-details-heading">
-      <Panel variant="workspace" flush className="rounded-[var(--radius-sm)]">
-        <div className="flex min-h-12 items-center gap-2.5 border-b border-border bg-background px-4 py-2.5">
-          <TonalIcon tone="knowledge" size="sm"><Box aria-hidden /></TonalIcon>
-          <h2 id="vault-details-heading" className="text-sm font-semibold text-foreground">Vault details</h2>
-        </div>
-        <div className="px-4 pb-2 pt-4">
-          {(info.role || info.is_archived || info.is_external_git || (info.public_access && info.public_access !== "none")) && (
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              {info.role && <RoleBadge role={info.role} />}
-              <VaultStateBadge archived={info.is_archived} externalGit={info.is_external_git} publicAccess={info.public_access} />
-            </div>
-          )}
-          <dl className="divide-y divide-border">
-            <ContextRow label="Owner" value={info.owner_display_name || info.owner || "Not available"} />
-            <ContextRow label="Created" value={info.created_at ? timeAgo(info.created_at) : "Not available"} />
-            <ContextRow label="Last active" value={info.last_activity ? timeAgo(info.last_activity) : "Not available"} />
-          </dl>
-        </div>
-        <dl className="grid grid-cols-2 gap-x-5 gap-y-4 border-t border-border p-4">
-          {counts.map(([label, count]) => (
-            <div key={label} className="min-w-0">
-              <dt className="text-xs text-foreground-muted">{label}</dt>
-              <dd className="mt-1 break-words text-sm font-medium tabular-nums text-foreground">
-                {typeof count === "number" ? count.toLocaleString() : "Not available"}
-              </dd>
-            </div>
-          ))}
-        </dl>
-        <div className="border-t border-border p-3">
-          <Link to={`/vault/${name}`} className="flex min-h-10 items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 text-sm font-medium text-link transition-token hover:bg-surface-hover hover:text-link-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-            Open Vault Overview
-            <ChevronRight className="h-4 w-4 shrink-0" aria-hidden />
-          </Link>
-        </div>
-      </Panel>
-    </aside>
-  );
-}
-
-function ContextRow({ label, value }: { label: string; value: string }) {
+function ContextRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3 py-2.5 text-sm">
       <dt className="text-foreground-muted">{label}</dt>

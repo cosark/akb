@@ -11,6 +11,7 @@ import { getMe, logoutOrdinarySession, type CurrentUser } from "@/lib/api";
 import { useTheme, type Theme } from "@/hooks/use-theme";
 import { TooltipText } from "@/components/ui/tooltip-text";
 import { useSettingsDialog } from "@/contexts/settings-dialog-context";
+import { useResourceNavigation } from "@/contexts/resource-navigation-context";
 
 const THEME_LABELS: Record<Theme, string> = {
   light: "Light",
@@ -35,6 +36,7 @@ function initialsFor(label: string): string {
  */
 export function UserMenu({ initialUser }: { initialUser?: CurrentUser | null }) {
   const navigate = useNavigate();
+  const { completeSessionNavigation } = useResourceNavigation();
   const settings = useSettingsDialog();
   const settingsRequested = useRef(false);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -66,7 +68,7 @@ export function UserMenu({ initialUser }: { initialUser?: CurrentUser | null }) 
         return;
       }
       setOpen(false);
-      navigate(result.logout_url, { replace: true });
+      completeSessionNavigation(() => navigate(result.logout_url, { replace: true }));
     } catch (caught) {
       setSignOutError(caught instanceof Error ? caught.message : "Sign-out failed");
     } finally {

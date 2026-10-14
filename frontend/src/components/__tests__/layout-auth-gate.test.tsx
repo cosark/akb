@@ -19,11 +19,14 @@ import { useAccessVerification } from "@/contexts/current-user-context";
 // throw inside React's commit phase.
 vi.mock("@/lib/api", () => ({
   getToken: vi.fn(),
+  authSessionSnapshot: vi.fn(),
+  isCurrentAuthSession: vi.fn(),
   getAuthConfig: vi.fn(),
   getMe: vi.fn(),
   searchDocs: vi.fn(),
   logoutOrdinarySession: vi.fn(),
   clearPrivateAssetCache: vi.fn(),
+  clearSharedVaultReads: vi.fn(),
   authenticatedFetch: vi.fn(async () => new Response(JSON.stringify({ vaults: [] }), { status: 200 })),
 }));
 
@@ -66,6 +69,8 @@ describe("Layout — auth gate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    vi.mocked(api.authSessionSnapshot).mockReturnValue({ generation: 0, token: "fixture", mode: "local", csrfToken: null });
+    vi.mocked(api.isCurrentAuthSession).mockReturnValue(true);
     vi.mocked(api.getAuthConfig).mockResolvedValue({
       available: true,
       schema_version: 2,
@@ -185,6 +190,27 @@ describe("Layout — auth gate", () => {
     expect(proof).toHaveAttribute("data-revision", "0");
     fireEvent(window, new Event("focus"));
     await waitFor(() => expect(proof).toHaveAttribute("data-revision", "1"));
+  });
+
+  it("coalesces identity changes during a proof and never accepts the old response", async () => {
+    vi.mocked(api.getToken).mockReturnValue("fake-jwt");
+    renderAt("/");
+    await screen.findByTestId("home");
+    let finish!: (user: api.CurrentUser) => void;
+    vi.mocked(api.getMe).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    fireEvent(window, new Event("focus"));
+    const proof = screen.getByTestId("access-proof");
+    expect(proof).toHaveAttribute("data-checking", "true");
+    const bob: api.CurrentUser = { user_id: "user-2", username: "bob", email: "bob@example.test", display_name: "Bob", is_admin: false, auth_method: "jwt", key_class: null };
+    vi.mocked(api.getMe).mockResolvedValue(bob);
+    vi.mocked(api.authSessionSnapshot).mockReturnValue({ generation: 1, token: "new-fixture", mode: "local", csrfToken: null });
+    vi.mocked(api.isCurrentAuthSession).mockImplementation(snapshot => snapshot.generation === 1);
+    fireEvent(window, new StorageEvent("storage", { key: "akb_token" }));
+    finish({ ...bob, user_id: "user-1", username: "alice", display_name: "Alice" });
+    await screen.findByRole("button", { name: /^Account menu — Bob \(@bob\)/ });
+    await waitFor(() => expect(proof).toHaveAttribute("data-checking", "false"));
+    expect(proof).toHaveAttribute("data-revision", "1");
+    expect(screen.queryByRole("button", { name: /^Account menu — Alice/ })).not.toBeInTheDocument();
   });
 
   it("moves desktop entry points into an expanded workspace sidebar", async () => {
@@ -340,10 +366,12 @@ describe("Layout — auth gate", () => {
 
     renderAt("/", queryClient);
     const mountedWorkspace = await screen.findByTestId("home");
+    vi.mocked(api.clearSharedVaultReads).mockClear();
 
     window.dispatchEvent(new Event("focus"));
 
     expect(await screen.findByText("Refreshing access…")).toBeTruthy();
+    expect(api.clearSharedVaultReads).toHaveBeenCalled();
     expect(screen.getByTestId("home")).toBe(mountedWorkspace);
     resolveForeground?.({
       user_id: "user-2",
@@ -361,5 +389,6 @@ describe("Layout — auth gate", () => {
     expect(screen.getByTestId("home")).toBe(mountedWorkspace);
     expect(queryClient.getQueryData(["private", "alice"])).toBeUndefined();
     expect(api.clearPrivateAssetCache).toHaveBeenCalled();
+    expect(api.clearSharedVaultReads).toHaveBeenCalledTimes(2);
   });
 });

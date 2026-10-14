@@ -12,8 +12,10 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import VaultSettingsPage from "@/pages/vault-settings";
+import { CurrentUserProvider } from "@/contexts/current-user-context";
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/api")>(),
   archiveVault: vi.fn(),
   authenticatedFetch: vi.fn().mockResolvedValue({ ok: false }),
   deleteVaultPermanent: vi.fn(),
@@ -92,6 +94,43 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Vault Settings redesign", () => {
+  it("preserves a same-account Guide draft and OCC pin across proof but drops another account's buffer", async () => {
+    const user = userEvent.setup();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = (id: string, checking = false, revision = 0) => <QueryClientProvider client={client}><MemoryRouter initialEntries={["/vault/platform-docs/settings#skill"]}><CurrentUserProvider user={{ user_id: id, username: id, email: `${id}@x.test`, display_name: null, is_admin: false, auth_method: "local", key_class: null }} checking={checking} revision={revision}><Routes><Route path="/vault/:name/settings" element={<VaultSettingsPage />} /></Routes></CurrentUserProvider></MemoryRouter></QueryClientProvider>;
+    const { rerender } = render(view("a"));
+    await user.click(await screen.findByRole("tab", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Vault guide body"), { target: { value: "Private draft A" } });
+    rerender(view("a", true));
+    expect(screen.queryByLabelText("Vault guide body")).not.toBeInTheDocument();
+    vi.mocked(getDocument).mockResolvedValue({ content: "New server body", current_commit: "new-server-commit" });
+    rerender(view("a", false, 1));
+    await waitFor(() => expect(screen.getByLabelText("Vault guide body")).toBeVisible());
+    expect(screen.getByLabelText("Vault guide body")).toHaveValue("Private draft A");
+    vi.mocked(updateDocument).mockResolvedValue({ current_commit: "saved" });
+    await user.click(screen.getByRole("button", { name: "Save guide" }));
+    expect(updateDocument).toHaveBeenCalledWith("platform-docs", "overview/vault-skill.md", { content: "Private draft A", expected_commit: "original-commit" });
+    rerender(view("b", false, 2));
+    await screen.findByText("New server body");
+    expect(screen.queryByDisplayValue("Private draft A")).not.toBeInTheDocument();
+  });
+  it("distinguishes a failed Guide GET from a confirmed 404 and supports retry", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getDocument).mockRejectedValueOnce(Object.assign(new Error("Service unavailable"), { status: 503 }));
+    renderSettings("#skill");
+    expect(await screen.findByText("Couldn't load the vault guide")).toBeVisible();
+    expect(screen.queryByText(/restored automatically/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Original guide")).toBeVisible();
+    expect(screen.queryByText("Couldn't load the vault guide")).not.toBeInTheDocument();
+  });
+
+  it("shows the missing Guide notice only after a 404", async () => {
+    vi.mocked(getDocument).mockRejectedValueOnce(Object.assign(new Error("Not found"), { status: 404 }));
+    renderSettings("#skill");
+    expect(await screen.findByText(/restored automatically/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
   it.each(["Leave settings", "Another vault"])("ignores a delayed save failure after %s", async (destination) => {
     const user = userEvent.setup();
     let rejectSave!: (error: Error) => void;
@@ -108,17 +147,28 @@ describe("Vault Settings redesign", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("keeps Vault details visible without disclosure across settings categories", async () => {
+  it("keeps ownership and the copyable address in General without a permanent details or inventory panel", async () => {
     const user = userEvent.setup();
     renderSettings();
-    const details = await screen.findByRole("complementary", { name: "Vault details" });
-    expect(within(details).getByText("Vault Owner")).toBeVisible();
-    expect(within(details).getByText("Documents").nextElementSibling).toHaveTextContent("18");
-    expect(within(details).getByRole("link", { name: "Open Vault Overview" })).toHaveAttribute("href", "/vault/platform-docs");
+    await screen.findByRole("textbox", { name: "Description" });
+    const general = screen.getByRole("region", { name: "General" });
+    const ownership = within(general).getByLabelText("Vault ownership and dates");
+    expect(within(ownership).getByText("Owner").nextElementSibling).toHaveTextContent("Vault Owner");
+    expect(within(ownership).getByText("Your role").nextElementSibling).toHaveTextContent("owner");
+    expect(within(ownership).getByText("Created").nextElementSibling).not.toHaveTextContent("Not available");
+    expect(within(ownership).getByText("Last active").nextElementSibling).not.toHaveTextContent("Not available");
+    expect(within(general).getByText("akb://platform-docs")).toBeVisible();
+    expect(within(general).getByRole("button", { name: "Copy vault address" })).toBeVisible();
     for (const category of ["Access", "Vault guide", "Advanced", "General"]) {
       await user.click(screen.getByRole("tab", { name: category }));
-      expect(details).toBeVisible();
-      expect(screen.getAllByRole("complementary", { name: "Vault details" })).toHaveLength(1);
+      expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Vault details" })).not.toBeInTheDocument();
+      const panel = screen.getByRole("tabpanel", { name: category });
+      for (const label of ["Collections", "Documents", "Tables", "Files", "Graph links"]) {
+        expect(within(panel).queryByText(label)).not.toBeInTheDocument();
+      }
+      if (category === "General") expect(ownership).toBeVisible();
+      else expect(ownership).not.toBeVisible();
     }
   });
 
@@ -225,7 +275,7 @@ describe("Vault Settings redesign", () => {
     );
   });
 
-  it("retains description and guide drafts when switching categories", async () => {
+  it("retains description, access, and guide drafts when switching categories", async () => {
     const user = userEvent.setup();
     renderSettings();
     const description = await screen.findByRole("textbox", {
@@ -233,6 +283,8 @@ describe("Vault Settings redesign", () => {
     });
     await user.clear(description);
     await user.type(description, "Unsaved description");
+    await user.click(screen.getByRole("tab", { name: "Access" }));
+    await user.click(screen.getByRole("radio", { name: "Public · read" }));
     await user.click(screen.getByRole("tab", { name: "Vault guide" }));
     await user.click(await screen.findByRole("tab", { name: "Edit" }));
     await user.type(
@@ -243,6 +295,8 @@ describe("Vault Settings redesign", () => {
     expect(screen.getByRole("textbox", { name: "Description" })).toHaveValue(
       "Unsaved description",
     );
+    await user.click(screen.getByRole("tab", { name: "Access" }));
+    expect(screen.getByRole("radio", { name: "Public · read" })).toBeChecked();
     await user.click(screen.getByRole("tab", { name: "Vault guide" }));
     expect(
       screen.getByRole("textbox", { name: "Vault guide body" }),
@@ -427,22 +481,41 @@ describe("Vault Settings redesign", () => {
     ).toBeInTheDocument();
   });
 
-  it("falls back for unknown sections and keeps unavailable details distinct from zero", async () => {
+  it("falls back for unknown sections and keeps unavailable ownership explicit without inventing inventory totals", async () => {
+    const user = userEvent.setup();
     getVaultInfoMock.mockResolvedValue({
       name: "platform-docs",
       role: "owner",
       document_count: null,
+      table_count: null,
+      file_count: null,
     });
     renderSettings("#unknown");
     expect(
       await screen.findByRole("tab", { name: "General", selected: true }),
     ).toBeInTheDocument();
-    const details = await screen.findByRole("complementary", { name: "Vault details" });
-    expect(details).toHaveTextContent("Not available");
-    expect(
-      within(details).getByText("Documents").nextElementSibling,
-    ).toHaveTextContent("Not available");
-    expect(within(details).queryByText("0")).not.toBeInTheDocument();
+    const ownership = await screen.findByLabelText("Vault ownership and dates");
+    expect(within(ownership).getByText("Owner").nextElementSibling).toHaveTextContent("Not available");
+    expect(within(ownership).getByText("Created").nextElementSibling).toHaveTextContent("Not available");
+    expect(within(ownership).getByText("Last active").nextElementSibling).toHaveTextContent("Not available");
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Advanced" }));
+    expect(screen.getByText(/Removes everything inside/)).not.toHaveTextContent(/0 documents|0 tables|0 files/);
+  });
+
+  it("retains the unload guard for drafts in a hidden category and clears it after discard", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    await user.type(await screen.findByRole("textbox", { name: "Description" }), " draft");
+    await user.click(screen.getByRole("tab", { name: "Advanced" }));
+    const dirtyEvent = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(dirtyEvent);
+    expect(dirtyEvent.defaultPrevented).toBe(true);
+    await user.click(screen.getByRole("tab", { name: "General" }));
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    const cleanEvent = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(cleanEvent);
+    expect(cleanEvent.defaultPrevented).toBe(false);
   });
 
   it("recovers a failed initial load without losing the requested category", async () => {

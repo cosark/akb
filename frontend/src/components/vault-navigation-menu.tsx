@@ -25,7 +25,8 @@ export function VaultSectionNavigation({ vault }: { vault: string }) {
   const match = matchRoutes([...appRouteContract], pathname)?.at(-1);
   if (
     match?.route.boundary !== "vault-shell" || match.params.name !== vault
-    || !["/vault/:name/activity", "/vault/:name/doc/:id", "/vault/:name/file/:id", "/vault/:name/table/:table", ...Object.values(sectionPaths)].includes(match.route.path)
+    || match.route.component === "DocumentPage"
+    || !["/vault/:name/activity", "/vault/:name/file/:id", "/vault/:name/table/:table", ...Object.values(sectionPaths)].includes(match.route.path)
   ) return null;
   return <VaultNavigationLinks key={vault} vault={vault} route={match.route.path} />;
 }

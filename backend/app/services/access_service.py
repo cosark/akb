@@ -460,22 +460,26 @@ async def _check_vault_access_impl(
         if vault["owner_id"] == uid:
             return {"vault_id": vault["id"], "role": "owner", "status": vault["status"], "role_source": "member"}
 
-        # Public vault access (none / reader / writer)
-        public_access = vault.get("public_access", "none")
-        if public_access != "none" and _role_level(required_role) <= _role_level(public_access):
-            return {"vault_id": vault["id"], "role": public_access, "status": vault["status"], "role_source": "public"}
-
-        # Check vault_access table
+        # Public policy and explicit membership are independent grants. Read
+        # both before choosing the highest role, even for a reader check:
+        # get_vault_info uses that result to describe the caller's authority.
         access = await conn.fetchrow(
             "SELECT role FROM vault_access WHERE vault_id = $1 AND user_id = $2",
             vault["id"], uid,
         )
 
-        user_role = access["role"] if access else None
+        member_role = access["role"] if access else None
+        public_role = vault.get("public_access", "none")
+        public_is_stronger = _role_level(public_role) > _role_level(member_role or "")
+        user_role = public_role if public_is_stronger else member_role
         if not user_role or _role_level(user_role) < _role_level(required_role):
             raise ForbiddenError(f"Requires '{required_role}' role on vault '{vault_name}'")
 
-        return {"vault_id": vault["id"], "role": user_role, "status": vault["status"], "role_source": "member"}
+        return {
+            "vault_id": vault["id"], "role": user_role,
+            "status": vault["status"],
+            "role_source": "public" if public_is_stronger else "member",
+        }
 
 
 async def check_delegated_vault_writer(user_id: str, vault_name: str) -> dict:
@@ -951,7 +955,12 @@ async def list_accessible_vaults(user_id: str, *, conn=None) -> list[dict]:
         rows = await conn.fetch(
             """
             SELECT v.id, v.name, v.description, v.status, v.created_at,
-                   COALESCE(va.role, CASE WHEN v.owner_id = $1 THEN 'owner' WHEN v.public_access != 'none' THEN v.public_access END) as role,
+                   CASE
+                       WHEN v.owner_id = $1 OR va.role = 'owner' THEN 'owner'
+                       WHEN va.role = 'admin' THEN 'admin'
+                       WHEN va.role = 'writer' OR v.public_access = 'writer' THEN 'writer'
+                       WHEN va.role = 'reader' OR v.public_access = 'reader' THEN 'reader'
+                   END as role,
                    vwp.managed_by
             FROM vaults v
             LEFT JOIN vault_access va ON v.id = va.vault_id AND va.user_id = $1

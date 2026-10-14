@@ -1,12 +1,13 @@
 // Query-attached scopes work on both global and Vault search routes. An absent
 // v uses the route default, while an explicit empty v means all accessible Vaults.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, waitFor } from "@testing-library/react";
+import { act, render, screen, cleanup, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 import SearchPage from "../search";
 import { searchDocs, grepDocs, listVaults } from "@/lib/api";
+import { CurrentUserProvider } from "@/contexts/current-user-context";
 
 vi.mock("@/lib/api", () => ({
   searchDocs: vi.fn(),
@@ -55,6 +56,20 @@ function Navigation() {
 }
 
 describe("SearchPage · multi-vault scope", () => {
+  it("drops old-account completions while retaining the URL query and scope", async () => {
+    let resolve!: (value: typeof EMPTY) => void;
+    mockedSearch.mockReturnValueOnce(new Promise(r => { resolve = r; }));
+    const view = (id: string, checking = false, revision = 0) => <MemoryRouter initialEntries={["/search?q=postgres&v=alpha"]}><CurrentUserProvider user={{ user_id: id, username: id, email: `${id}@example.com`, display_name: null, is_admin: false, auth_method: "local", key_class: null }} checking={checking} revision={revision}><SearchPage /></CurrentUserProvider></MemoryRouter>;
+    const { rerender } = render(view("a"));
+    await waitFor(() => expect(mockedSearch).toHaveBeenCalledOnce());
+    rerender(view("b", true));
+    await act(async () => resolve({ ...EMPTY, results: [{ title: "Private A result", vault: "alpha", path: "private.md", uri: "akb://alpha/doc/private.md", score: 1 }] } as unknown as typeof EMPTY));
+    expect(screen.queryByText("Private A result")).not.toBeInTheDocument();
+    rerender(view("b", false, 1));
+    await waitFor(() => expect(mockedSearch).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("searchbox", { name: "Search query" })).toHaveValue("postgres");
+    expect(mockedSearch).toHaveBeenLastCalledWith("postgres", ["alpha"], 25, expect.any(Object));
+  });
   it("uses an explicit multi-Vault scope on a named Vault route", async () => {
     renderAt("/vault/alpha/search?q=postgres&v=alpha,beta&source=file&collection=guides");
     await waitFor(() => expect(mockedSearch).toHaveBeenCalledWith(

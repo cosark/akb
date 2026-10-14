@@ -13,7 +13,7 @@ for (const scenario of [
   { width: 1440, height: 900, dark: false, preview: false },
   { width: 2560, height: 1440, dark: true, preview: false },
   { width: 1280, height: 800, dark: false, preview: true },
-]) test(`document publishing belongs to the upper header at ${scenario.width}px ${scenario.preview ? "preview" : "page"}`, async ({ page }, testInfo) => {
+]) test(`document publishing belongs to ${scenario.preview ? "the preview header" : "reading tools"} at ${scenario.width}px`, async ({ page }, testInfo) => {
   await page.setViewportSize(scenario);
   await fixture(page, scenario.dark, false, body, "reading-public");
   if (scenario.preview) {
@@ -24,15 +24,17 @@ for (const scenario of [
   const trigger = publishing.getByRole("button", { name: "Public link", exact: true });
   await expect(trigger).toBeInViewport({ ratio: 1 });
   const tools = page.getByRole("group", { name: "Document reading tools", exact: true });
-  await expect(tools.getByRole("button", { name: /Publish|Public link/ })).toHaveCount(0);
   const triggerBox = (await trigger.boundingBox())!;
   const toolsBox = (await tools.boundingBox())!;
-  expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(toolsBox.y + 1);
-  if (!scenario.preview) {
-    const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
-    const navBox = (await navigation.boundingBox())!;
-    expect(Math.abs(triggerBox.y + triggerBox.height / 2 - navBox.y - navBox.height / 2)).toBeLessThanOrEqual(1);
-    await expect(navigation.locator("..").getByRole("button", { name: "Public link", exact: true })).toHaveCount(1);
+  if (scenario.preview) {
+    await expect(tools.getByRole("button", { name: /Publish|Public link/ })).toHaveCount(0);
+    expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(toolsBox.y + 1);
+    await expect(page.getByTestId("document-preview-dialog").getByRole("button", { name: "Vault pages for fixture", exact: true })).toHaveCount(0);
+  } else {
+    await expect(page.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
+    await expect(tools.getByRole("button", { name: "Public link", exact: true })).toHaveCount(1);
+    expect(triggerBox.y).toBeGreaterThanOrEqual(toolsBox.y);
+    expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(toolsBox.y + toolsBox.height);
   }
   const canvas = page.locator("#document-reading-canvas");
   const before = await canvas.boundingBox();
@@ -51,9 +53,9 @@ for (const scenario of [
   await page.getByRole("navigation", { name: "Resource location", exact: true }).locator('[aria-current="page"]').click();
   await expect(panel).toHaveCount(0);
   expect(await canvas.boundingBox()).toEqual(before);
-  await page.screenshot({ path: testInfo.outputPath("publication-upper-header.png") });
+  await page.screenshot({ path: testInfo.outputPath("publication-placement.png") });
   if (!scenario.preview) {
-    await page.getByRole("navigation", { name: "Vault sections", exact: true }).getByRole("link", { name: "Overview", exact: true }).click();
+    await openVaultDestination(page, "Overview");
     await expect(publishing).toHaveCount(0);
   }
 });
@@ -119,10 +121,16 @@ async function expectQuietResourceTrail(trail: Locator, kind: "document" | "file
 async function expectQuietVaultTrail(page: Page, label: string) {
   const trail = page.getByRole("navigation", { name: "Current page", exact: true });
   await expect(trail.locator('[aria-current="page"]')).toHaveText(label);
-  await expect(trail.locator("svg")).toHaveCount(1);
   const vault = trail.getByRole("link", { name: "fixture", exact: true });
   await expect(vault).toHaveAttribute("href", "/vault/fixture");
   await expect(vault.locator(".lucide-box")).toBeVisible();
+  const switcher = trail.getByRole("button", { name: `Vault pages, current: ${label}`, exact: true });
+  if (await switcher.count()) {
+    await expect(switcher).toBeInViewport({ ratio: 1 });
+    await expect(trail.locator("svg")).toHaveCount(2);
+    return;
+  }
+  await expect(trail.locator("svg")).toHaveCount(1);
   const current = trail.locator('[aria-current="page"]');
   await expect(current).toBeInViewport({ ratio: 1 });
   const textBounds = (await current.boundingBox())!;
@@ -442,6 +450,12 @@ for (const scope of ["vault", "all"] as const) for (const destination of ["resul
 });
 
 async function openVaultDestination(page: Page, name: string) {
+  const headerMenu = page.getByRole("button", { name: /^(Vault pages for fixture|Vault pages, current:)/ });
+  if (await headerMenu.isVisible()) {
+    await headerMenu.click();
+    await page.getByRole("menu", { name: "Vault pages", exact: true }).getByRole("menuitem", { name, exact: true }).click();
+    return;
+  }
   const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
   const link = navigation.getByRole("link", { name, exact: true });
   if (await link.isVisible()) await link.click();
@@ -452,6 +466,16 @@ async function openVaultDestination(page: Page, name: string) {
 }
 
 async function expectVaultDestinationsReachable(page: Page) {
+  const headerMenu = page.getByRole("button", { name: /^(Vault pages for fixture|Vault pages, current:)/ });
+  if (await headerMenu.isVisible()) {
+    await headerMenu.click();
+    const menu = page.getByRole("menu", { name: "Vault pages", exact: true });
+    await expect(menu.getByRole("menuitem")).toHaveCount(5);
+    for (const [name, href] of vaultDestinations) await expect(menu.getByRole("menuitem", { name, exact: true })).toHaveAttribute("href", href);
+    await page.keyboard.press("Escape");
+    await expect(headerMenu).toBeFocused();
+    return;
+  }
   const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
   await expect(navigation).toBeVisible();
   const expected = vaultDestinations.map(([, href]) => href).sort();
@@ -495,11 +519,12 @@ for (const width of [375, 1440, 2560]) for (const dark of [false, true]) {
       expect((await control.boundingBox())!.height).toBe(36);
     }
     const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
+    await expect(navigation).toHaveCount(0);
     if (width >= 1440) {
       await expect(search).toHaveText("Search knowledge…");
       await expect(account.getByText("Reading reviewer", { exact: true })).toBeVisible();
       const headerColor = await header.evaluate(el => getComputedStyle(el).backgroundColor);
-      expect(await navigation.locator("..").evaluate(el => getComputedStyle(el).backgroundColor)).toBe(headerColor);
+      expect(await page.getByRole("group", { name: "Document reading tools", exact: true }).evaluate(el => getComputedStyle(el).backgroundColor)).toBe(headerColor);
       expect(await page.locator('[aria-label="Document workspace"]').evaluate(el => getComputedStyle(el).backgroundColor)).toBe(headerColor);
       expect(await account.evaluate(el => getComputedStyle(el).boxShadow)).toBe("none");
     }
@@ -534,20 +559,18 @@ test("a short resource title keeps its kind marker attached on a wide header", a
   await page.screenshot({ path: testInfo.outputPath("breadcrumb-short-title.png") });
 });
 
-test("Vault destinations stay together instead of splitting across the workspace", async ({ page }) => {
+test("document Vault destinations share one header menu without selecting Overview", async ({ page }) => {
   await page.setViewportSize({ width: 2560, height: 1000 });
   await fixture(page);
   await page.goto(`/vault/fixture/doc/${encodeURIComponent(path)}`);
   const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
-  await expect(navigation.getByRole("link", { name: "Settings", exact: true })).toBeVisible();
-  await expect.poll(async () => {
-    const publicLinks = (await navigation.getByRole("link", { name: "Public links", exact: true }).boundingBox())!;
-    const members = (await navigation.getByRole("link", { name: "Members", exact: true }).boundingBox())!;
-    return members.x - (publicLinks.x + publicLinks.width);
-  }).toBeLessThanOrEqual(24);
-  // A document is not Overview: its breadcrumb/tree, not a false selected tab,
-  // identifies the current resource.
-  await expect(navigation.locator('[aria-current="page"]')).toHaveCount(0);
+  await expect(navigation).toHaveCount(0);
+  await page.getByRole("button", { name: "Vault pages for fixture", exact: true }).click();
+  const menu = page.getByRole("menu", { name: "Vault pages", exact: true });
+  await expect(menu.getByRole("menuitem")).toHaveCount(5);
+  await expect(menu.locator('[aria-current="page"]')).toHaveCount(0);
+  for (const [name, href] of vaultDestinations) await expect(menu.getByRole("menuitem", { name, exact: true })).toHaveAttribute("href", href);
+  await page.keyboard.press("Escape");
 });
 
 for (const width of [320, 1440]) test(`long summaries preserve draft state and publishing controls at ${width}px`, async ({ page }, testInfo) => {
@@ -654,9 +677,8 @@ for (const width of [375, 768, 1440, 2560]) for (const dark of [false, true]) {
     await expect(page.getByRole("button", { name: /^(More|Vault pages) in fixture/ })).toHaveCount(0);
     const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
     await expectVaultDestinationsReachable(page);
-    await expect(navigation.locator('[aria-current="page"]')).toHaveCount(0);
-    expect((await navigation.boundingBox())!.height).toBe(width >= 1024 ? 40 : 44);
-    await expect(navigation.getByRole("link", { name: "Overview", exact: true })).toBeInViewport();
+    await expect(navigation).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Vault pages for fixture", exact: true })).toBeInViewport();
     await expect(page.getByRole("navigation", { name: "Vault management", exact: true })).toHaveCount(0);
     await expect(page.getByText("In this vault", { exact: true })).toHaveCount(0);
     await expect(page.locator('[data-slot="resource-command-row"]').getByRole("navigation", { name: "Resource location", exact: true })).toHaveCount(0);
@@ -684,7 +706,7 @@ for (const width of [375, 768, 1440, 2560]) for (const dark of [false, true]) {
     for (const name of ["Edit", "Copy markdown", `Actions for ${title}`]) {
       await expect(page.getByRole("region", { name: "Document workspace" }).getByRole("button", { name, exact: true })).toBeInViewport();
     }
-    await expect(navigation.locator("..").getByRole("button", { name: "Publish", exact: true })).toBeInViewport();
+    await expect(readingTools.getByRole("button", { name: "Publish", exact: true })).toBeInViewport();
     await expect(page.getByRole("tab", { name: "Raw", exact: true })).toBeInViewport();
     const flow = page.locator(".document-reading-flow .ProseMirror");
     const measures = await flow.evaluate(root => {
@@ -859,37 +881,37 @@ test("a deep document reader opens every Vault page directly and browser Back re
   await page.goto(`/vault/fixture/doc/${encodeURIComponent(path)}`);
   await expect(page.getByRole("heading", { name: "Authored heading", exact: true })).toBeVisible();
   const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
-  await expect(navigation).toBeVisible();
-  await expect(navigation.locator('[aria-current="page"]')).toHaveCount(0);
-  // The navigation shares its row with document publishing actions. Its own
-  // width varies by route; the complete section row is the stable boundary.
-  const navigationRow = navigation.locator("..");
-  const initialPosition = (await navigationRow.boundingBox())!;
+  const switcher = page.getByRole("button", { name: "Vault pages for fixture", exact: true });
+  await expect(navigation).toHaveCount(0);
+  await expect(switcher).toBeVisible();
   for (const [name, href] of vaultDestinations) {
     await openVaultDestination(page, name);
     await expect(page).toHaveURL(new RegExp(`${href}$`));
-    await expect(navigation.getByRole("link", { name, exact: true })).toHaveAttribute("aria-current", "page");
-    await expect(navigation.locator('[aria-current="page"]')).toHaveCount(1);
-    expect(await navigationRow.boundingBox()).toEqual(initialPosition);
+    if (name === "Overview") await expect(navigation.getByRole("link", { name, exact: true })).toHaveAttribute("aria-current", "page");
+    else {
+      await expect(navigation).toHaveCount(0);
+      await expect(page.getByRole("button", { name: `Vault pages, current: ${name}`, exact: true })).toBeVisible();
+    }
     await page.goBack();
     await expect(page).toHaveURL(new RegExp(`/doc/${encodeURIComponent(path)}$`));
     await expect(page.getByRole("heading", { name: "Authored heading", exact: true })).toBeVisible();
-    await expect(navigation.locator('[aria-current="page"]')).toHaveCount(0);
+    await expect(navigation).toHaveCount(0);
+    await expect(switcher).toBeVisible();
     await expect(page.locator(".app-header").getByRole("navigation", { name: "Resource location", exact: true })).toContainText(title);
   }
-  await navigation.getByRole("link", { name: "Overview", exact: true }).focus();
-  for (const [name] of vaultDestinations.slice(1)) {
-    await page.keyboard.press("Tab");
-    await expect(navigation.getByRole("link", { name, exact: true })).toBeFocused();
-  }
+  await switcher.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menuitem", { name: "Overview", exact: true })).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(page.getByRole("menuitem", { name: "Settings", exact: true })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/vault\/fixture\/settings$/);
-  await expect(navigation.getByRole("link", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
-  expect(await navigationRow.boundingBox()).toEqual(initialPosition);
+  await expect(page.getByRole("button", { name: "Vault pages, current: Settings", exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("vault-settings-navigation.png") });
   await page.goBack();
   await expect(page.getByRole("heading", { name: "Authored heading", exact: true })).toBeVisible();
-  await expect(navigation).toBeVisible();
+  await expect(navigation).toHaveCount(0);
+  await expect(switcher).toBeVisible();
   await expect(page.locator(".app-header").getByRole("navigation", { name: "Resource location", exact: true })).toBeVisible();
   await expect(page.locator('[data-slot="resource-command-row"]').getByRole("navigation", { name: "Resource location", exact: true })).toHaveCount(0);
   // Clicking the already selected Vault must navigate, not be swallowed as a
@@ -930,7 +952,12 @@ test("maximum saved rail widths use a temporary drawer without changing preferen
   await page.screenshot({ path: testInfo.outputPath("maximum-rails-compact.png") });
   // A Collection breadcrumb must reveal its destination even when the saved
   // desktop rails currently require the temporary drawer.
-  await location.getByRole("link", { name: "Operations", exact: true }).click();
+  const parentCollection = location.getByRole("link", { name: "Operations", exact: true });
+  if (await parentCollection.isVisible()) await parentCollection.click();
+  else {
+    await location.getByRole("button", { name: "Show collection ancestry", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Operations", exact: true }).click();
+  }
   await expect(page).toHaveURL(/\/vault\/fixture\?collection=guides%2Fteam%2Foperations$/);
   await expect(page.locator("#vault-workspace-navigation")).toBeInViewport();
   await page.keyboard.press("Escape");
@@ -945,6 +972,7 @@ for (const dark of [false, true]) test(`working-page navigation stays outside co
   await page.setViewportSize({ width: 1920, height: 1000 });
   await fixture(page, dark);
   await page.goto("/vault/fixture");
+  const initialTreePreference = await page.evaluate(() => localStorage.getItem("akb.treeVisible"));
   const collections = page.locator('[data-slot="vault-collections-sidebar"]');
   const tree = collections.getByRole("tree", { name: "fixture explorer", exact: true });
   await expect(tree).toBeVisible();
@@ -963,13 +991,24 @@ for (const dark of [false, true]) test(`working-page navigation stays outside co
   for (const [name, href] of vaultDestinations) {
     await openVaultDestination(page, name);
     await expect(page).toHaveURL(new RegExp(`${href}$`));
-    await expect(navigation.getByRole("link", { name, exact: true })).toHaveAttribute("aria-current", "page");
-    await expect(tree).toBeVisible();
     await expectQuietVaultTrail(page, name);
-    expect(await navigation.boundingBox()).toEqual(position);
+    if (name === "Overview") {
+      await expect(navigation.getByRole("link", { name, exact: true })).toHaveAttribute("aria-current", "page");
+      await expect(tree).toBeVisible();
+      expect(await navigation.boundingBox()).toEqual(position);
+    } else {
+      await expect(navigation).toHaveCount(0);
+      await expect(collections).toHaveCount(0);
+      expect(await page.evaluate(() => localStorage.getItem("akb.treeVisible"))).toBe(initialTreePreference);
+    }
     await expect(page.locator(".app-header").getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
     await expect(collections.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
     await expect(page.locator('[data-slot="vault-route-viewport"]').getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
+    if (name !== "Overview") {
+      await page.goBack();
+      await expect(tree).toBeVisible();
+      expect(await navigation.boundingBox()).toEqual(position);
+    }
   }
   const viewport = page.locator('[data-slot="vault-route-viewport"]');
   await viewport.evaluate(element => { element.scrollTop = element.scrollHeight; });
@@ -981,10 +1020,13 @@ for (const dark of [false, true]) test(`working-page navigation stays outside co
   await expect(collections).toBeHidden();
   await expect(navigation).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem("akb.treeVisible"))).toBe("0");
+  await openVaultDestination(page, "Members");
+  await expect(collections).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem("akb.treeVisible"))).toBe("0");
   await page.goBack();
   await expect(expand).toBeInViewport();
   await expect(collections).toBeHidden();
-  await expect(navigation.getByRole("link", { name: "Members", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(navigation.getByRole("link", { name: "Overview", exact: true })).toHaveAttribute("aria-current", "page");
   await expand.click();
   await expect(tree).toBeVisible();
   expect(await navigation.boundingBox()).toEqual(position);
@@ -1074,7 +1116,7 @@ test("resizing an open Vault overflow closes it without reopening or losing keyb
   await page.setViewportSize({ width: 375, height: 900 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await fixture(page);
-  await page.goto(`/vault/fixture/doc/${encodeURIComponent(path)}`);
+  await page.goto("/vault/fixture");
   const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
   const more = navigation.getByRole("button", { name: "More vault pages", exact: true });
   await more.focus();
@@ -1098,12 +1140,12 @@ test("Vault navigation adapts to enlarged text and a short landscape viewport", 
   await page.setViewportSize({ width: 375, height: 900 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await fixture(page);
-  await page.goto("/vault/fixture/settings");
+  await page.goto("/vault/fixture");
   const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
   await expect(navigation).toBeVisible();
   await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
   await expectVaultDestinationsReachable(page);
-  await expect(navigation.getByRole("link", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(navigation.getByRole("link", { name: "Overview", exact: true })).toHaveAttribute("aria-current", "page");
   const sameRow = () => navigation.evaluate(element => {
     const box = element.getBoundingClientRect();
     return Array.from(element.querySelectorAll<HTMLElement>(":scope > a, :scope > button")).every(control => {
@@ -1157,8 +1199,8 @@ for (const width of [375, 768]) {
       await page.keyboard.press("Enter");
       await expect(page).toHaveURL(/\/vault\/fixture\/settings$/);
       await expect(menu).toHaveCount(0);
-      await expect(navigation.getByRole("link", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
-      await expect(navigation.getByRole("link", { name: "Overview", exact: true })).toBeInViewport();
+      await expect(navigation).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Vault pages, current: Settings", exact: true })).toBeInViewport();
       await expectQuietVaultTrail(page, "Settings");
       await expectVaultDestinationsReachable(page);
       await page.goBack();
@@ -1166,10 +1208,8 @@ for (const width of [375, 768]) {
     } else await expect(more).toBeHidden();
     await openVaultDestination(page, "Members");
     await expect(page).toHaveURL(/\/vault\/fixture\/members$/);
-    await expect(navigation.getByRole("link", { name: "Members", exact: true })).toHaveAttribute("aria-current", "page");
-    await expect(navigation.locator('[aria-current="page"]')).toHaveCount(1);
-    await expect(navigation.getByRole("link", { name: "Overview", exact: true })).toBeInViewport();
-    expect(await navigation.boundingBox()).toEqual(navBox);
+    await expect(navigation).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Vault pages, current: Members", exact: true })).toBeInViewport();
     await expect(page.getByTestId("members-workspace-frame")).toBeVisible();
     await expectQuietVaultTrail(page, "Members");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -1255,7 +1295,7 @@ test("preview owns local location, restores Search, and promotes Raw to the Vaul
   await expect(page.getByTestId("doc-raw")).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Resource location", exact: true })).toContainText(title);
   await expectVaultDestinationsReachable(page);
-  await expect(page.getByRole("navigation", { name: "Vault sections", exact: true }).locator('[aria-current="page"]')).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
 });
 
 test("Vault Search preview hides inactive section navigation and restores it on close", async ({ page }) => {
@@ -1321,12 +1361,8 @@ for (const width of [375, 1440]) test(`modified keyboard Vault links keep a dirt
   const editor = page.getByRole("textbox", { name: "Document body (markdown)" });
   await editor.fill("Keep editing here while checking Vault settings in another tab.");
   await expect(page.getByText("Draft saved locally", { exact: true })).toBeVisible();
-  const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
-  let destination = navigation.getByRole("link", { name: "Settings", exact: true });
-  if (!await destination.count()) {
-    await navigation.getByRole("button", { name: "More vault pages", exact: true }).click();
-    destination = page.getByRole("menuitem", { name: "Settings", exact: true });
-  }
+  await page.getByRole("button", { name: "Vault pages for fixture", exact: true }).click();
+  const destination = page.getByRole("menuitem", { name: "Settings", exact: true });
   await destination.focus();
   // Browser-native new-tab gestures do not necessarily retain a JS opener.
   const popupPromise = context.waitForEvent("page");
@@ -1358,7 +1394,7 @@ for (const width of [375, 1440]) test(`Vault navigation protects an unsaved edit
   await openVaultDestination(page, "Settings");
   await confirmation.getByRole("button", { name: "Leave document", exact: true }).click();
   await expect(page).toHaveURL(/\/vault\/fixture\/settings$/);
-  await expect(page.getByRole("navigation", { name: "Vault sections", exact: true }).getByRole("link", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("button", { name: "Vault pages, current: Settings", exact: true })).toBeVisible();
 });
 
 test("toolbar publishing opens a review, never publishes on disclosure, and restores focus", async ({ page }, testInfo) => {
@@ -1514,8 +1550,7 @@ for (const dark of [false, true]) test(`public-link popover anchors to its butto
   expect(await page.locator("body").evaluate(element => getComputedStyle(element).pointerEvents)).not.toBe("none");
   await page.screenshot({ path: testInfo.outputPath("public-link-popover.png") });
 
-  // The upper-header popover intentionally overlays the right-hand read modes.
-  // An uncovered reader action must still work on the first outside click.
+  // An uncovered reader action works on the first outside click.
   const summary = page.getByRole("button", { name: "Read document summary", exact: true });
   await summary.click();
   await expect(panel).toHaveCount(0);
@@ -2241,7 +2276,7 @@ for (const width of [375, 1440]) for (const kind of ["file", "table"] as const) 
     await page.screenshot({ path: testInfo.outputPath(`${kind}.png`) });
     await openVaultDestination(page, "Settings");
     await expect(page).toHaveURL(/\/vault\/fixture\/settings$/);
-    await expect(navigation.getByRole("link", { name: "Settings", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("button", { name: "Vault pages, current: Settings", exact: true })).toBeVisible();
     await page.goBack();
     await expect(trail).toContainText(kind === "file" ? "Reading notes.txt" : "reading_catalog");
     await expect(navigation).toBeVisible();

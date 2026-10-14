@@ -468,6 +468,24 @@ class MeasurementFileService:
         async with pool.acquire() as conn:
             await conn.execute("DELETE FROM m1_file_transfer_intents WHERE id = $1", intent_id)
 
+    async def cancel_upload(self, vault_id: uuid.UUID, file_id: str) -> dict:
+        """Withdraw PUT intents under the same lock used by confirmation."""
+        fid = uuid.UUID(file_id)
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                intents = await conn.fetch(
+                    "SELECT id FROM m1_file_transfer_intents "
+                    "WHERE file_id = $1 AND vault_id = $2 AND method = 'PUT' FOR UPDATE",
+                    fid, vault_id,
+                )
+                existing = await vault_files_repo.find_measurement_by_id(conn, vault_id, fid)
+                if existing is not None:
+                    return {"cancelled": False, "state": "confirmed"}
+                for intent in intents:
+                    await conn.execute("DELETE FROM m1_file_transfer_intents WHERE id = $1", intent["id"])
+                return {"cancelled": bool(intents), "state": "cancelled" if intents else "absent"}
+
     async def get_download_url(self, vault_id: uuid.UUID, file_id: str) -> dict:
         try:
             fid = uuid.UUID(file_id)

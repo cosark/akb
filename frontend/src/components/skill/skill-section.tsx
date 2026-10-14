@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useLocation, useNavigate, type NavigateOptions } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { BookOpen, History, RotateCcw, Save } from "lucide-react";
 import { AgentPreview } from "./agent-preview";
@@ -14,9 +14,12 @@ import { Panel } from "@/components/ui/panel";
 import { WorkspaceSectionHeader } from "@/components/ui/workspace-section-header";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { getSkillTemplate, updateDocument } from "@/lib/api";
+import { authSessionSnapshot, getSkillTemplate, isCurrentAuthSession, updateDocument } from "@/lib/api";
 import { VAULT_SKILL_PATH } from "@/lib/skill";
 import { timeAgo } from "@/lib/utils";
+import { useResourceNavigation, useResourceNavigationGuard } from "@/contexts/resource-navigation-context";
+import { useDocumentHistoryGuard } from "@/hooks/use-document-history-guard";
+import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
 
 interface SkillDoc {
   content?: string;
@@ -26,14 +29,17 @@ interface SkillDoc {
 
 interface Props {
   vault: string;
-  /** The canonical doc from the settings page's skillQuery; absent = missing. */
+  /** The canonical doc from the settings page's skillQuery. */
   doc?: SkillDoc | null;
   loading?: boolean;
+  error?: string;
+  onRetry?: () => void;
   /** External-git mirror vaults never carry a vault guide (backend excludes
    *  them from the seed and the reservation backfill). */
   isMirror?: boolean;
   /** Owner-authorized management capability. Read surfaces remain visible. */
   canManage: boolean;
+  queryKey?: readonly unknown[];
 }
 
 /**
@@ -51,10 +57,25 @@ export function SkillSection({
   vault,
   doc,
   loading,
+  error,
+  onRetry,
   isMirror,
   canManage,
+  queryKey = ["document", vault, VAULT_SKILL_PATH],
 }: Props) {
+  const { checking } = useAccessVerification();
+  const user = useCurrentUser();
+  const ownerScope = JSON.stringify([vault, user?.user_id]);
+  const latestScope = useRef(ownerScope);
+  latestScope.current = ownerScope;
+  const latestChecking = useRef(checking);
+  latestChecking.current = checking;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { requestNavigation } = useResourceNavigation();
   const [tab, setTab] = useState("preview");
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -62,7 +83,30 @@ export function SkillSection({
   const [saveConflict, setSaveConflict] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [baseCommit, setBaseCommit] = useState<string | null>(null);
+  const [baseBody, setBaseBody] = useState<string | null>(null);
   const [resetBaseCommit, setResetBaseCommit] = useState<string | null>(null);
+  const [pendingExit, setPendingExit] = useState<
+    { kind: "cancel" } | { kind: "navigation"; href: string; options?: NavigateOptions } | { kind: "history"; proceed: () => void } | null
+  >(null);
+  const dirty = baseBody !== null && draft !== baseBody;
+  const changedElsewhere = dirty && baseCommit !== (doc?.current_commit || null);
+  const guardNavigation = useCallback((href: string, options?: NavigateOptions) => {
+    // Settings categories retain this mounted editor and its draft.
+    if (new URL(href, window.location.origin).pathname === location.pathname) return true;
+    setPendingExit({ kind: "navigation", href, options });
+    return false;
+  }, [location.pathname]);
+  const continueNavigation = useResourceNavigationGuard(dirty || saving ? guardNavigation : null);
+  useDocumentHistoryGuard(dirty || saving, (proceed) => setPendingExit({ kind: "history", proceed }));
+  useEffect(() => {
+    if (!dirty && !saving) return;
+    const guard = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [dirty, saving]);
 
   function invalidate() {
     queryClient.invalidateQueries({
@@ -71,12 +115,12 @@ export function SkillSection({
     queryClient.invalidateQueries({ queryKey: ["vault-skill-preview", vault] });
   }
 
-  // Seed the draft from the freshest doc every time Edit is entered, so a
-  // background refetch (or an agent's write) is never silently overwritten by
-  // a stale buffer left over from an earlier visit to the tab.
+  // Read tabs do not own the draft. A dirty buffer keeps its original revision
+  // pin even when a background read discovers another writer's changes.
   function selectTab(next: string) {
-    if (next === "edit") {
+    if (next === "edit" && !dirty && !saving) {
       setDraft(doc?.content || "");
+      setBaseBody(doc?.content || "");
       setBaseCommit(doc?.current_commit || null);
       setSaveError("");
       setSaveConflict(false);
@@ -84,18 +128,46 @@ export function SkillSection({
     setTab(next);
   }
 
+  function discardDraft() {
+    setDraft("");
+    setBaseBody(null);
+    setBaseCommit(null);
+    setSaveError("");
+    setSaveConflict(false);
+  }
+
+  function confirmExit() {
+    if (!pendingExit || saving) return;
+    discardDraft();
+    setTab("preview");
+    if (pendingExit.kind === "navigation") continueNavigation(() => navigate(pendingExit.href, pendingExit.options));
+    else if (pendingExit.kind === "history") pendingExit.proceed();
+  }
+
   async function handleSave() {
+    if (!canManage || checking) return;
+    const scope = ownerScope;
+    const session = authSessionSnapshot();
+    const currentOperation = () => mounted.current && latestScope.current === scope && isCurrentAuthSession(session);
     setSaving(true);
     setSaveError("");
     setSaveConflict(false);
     try {
-      await updateDocument(vault, VAULT_SKILL_PATH, {
+      const saved = await updateDocument(vault, VAULT_SKILL_PATH, {
         content: draft,
         expected_commit: baseCommit || undefined,
       });
+      if (!currentOperation()) return;
+      queryClient.setQueryData(queryKey, {
+        ...doc,
+        content: draft,
+        current_commit: saved.current_commit ?? saved.commit_hash ?? doc?.current_commit,
+      });
+      discardDraft();
       invalidate();
       setTab("preview");
     } catch (e: unknown) {
+      if (!currentOperation()) return;
       const message = e instanceof Error ? e.message : "Save failed";
       if (/^current_commit moved:/i.test(message)) {
         // Keep the local buffer and stale OCC pin intact: silently rebasing a
@@ -104,13 +176,13 @@ export function SkillSection({
         invalidate();
         setSaveConflict(true);
         setSaveError(
-          "The guide changed in another session. Your draft is still here and was not saved. Compare it with History, then reopen Edit from the latest version before applying your changes.",
+          "The guide changed in another session. Your draft is still here and was not saved. Copy it and compare with History. Cancel and discard only when you are ready to start from the latest version.",
         );
       } else {
         setSaveError(message);
       }
     } finally {
-      setSaving(false);
+      if (mounted.current) setSaving(false);
     }
   }
 
@@ -118,12 +190,20 @@ export function SkillSection({
   // error inside the open dialog (one place), so the section keeps no error
   // state of its own for this path.
   async function handleReset() {
+    if (!canManage || checking) return;
+    const scope = ownerScope;
+    const session = authSessionSnapshot();
+    const currentOperation = () => mounted.current && latestScope.current === scope && isCurrentAuthSession(session);
     const template = await getSkillTemplate();
+    if (!currentOperation() || latestChecking.current) return;
     const content = template.replaceAll("{vault}", vault);
     await updateDocument(vault, VAULT_SKILL_PATH, {
       content,
       expected_commit: resetBaseCommit || undefined,
     });
+    if (!currentOperation()) return;
+    discardDraft();
+    setTab("preview");
     queryClient.invalidateQueries({
       queryKey: ["document", vault, VAULT_SKILL_PATH],
     });
@@ -142,6 +222,12 @@ export function SkillSection({
 
       <Panel variant="workspace" className="border-border-strong">
         <div className="p-4">
+          {error && !isMirror && (
+            <Alert variant="destructive" title="Couldn't load the vault guide" className="mb-4">
+              <p>{error}</p>
+              {onRetry && <Button variant="outline" size="sm" className="mt-2" onClick={onRetry}>Retry</Button>}
+            </Alert>
+          )}
           {isMirror ? (
             <Alert variant="info">
               Read-only mirror vaults don't carry a vault guide. Edit the guide
@@ -151,20 +237,20 @@ export function SkillSection({
             <LoadingState label="Loading vault guide">
               <Skeleton className="h-40 w-full rounded-[var(--radius-lg)]" />
             </LoadingState>
-          ) : !doc ? (
+          ) : !doc && error ? null : !doc ? (
             <Alert variant="warning">
               The vault guide is missing. It is restored automatically by the
               system backfill; contact an administrator if this persists.
             </Alert>
           ) : (
             <>
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-md)] border border-border bg-surface-2 px-3 py-2.5">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
                 <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
                   <SkillBadge defined />
                   <span className="text-foreground-muted">
                     {doc.updated_at
                       ? `Updated ${timeAgo(doc.updated_at)}`
-                      : VAULT_SKILL_PATH}
+                      : "Update time unavailable"}
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -172,6 +258,10 @@ export function SkillSection({
                     <Button asChild variant="ghost" size="sm">
                       <Link
                         to={`/vault/${vault}/doc/${encodeURIComponent(VAULT_SKILL_PATH)}?commit=${doc.current_commit}`}
+                        onClick={(event) => {
+                          if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                          if (!requestNavigation(`/vault/${vault}/doc/${encodeURIComponent(VAULT_SKILL_PATH)}?commit=${doc.current_commit}`)) event.preventDefault();
+                        }}
                       >
                         <History className="h-3.5 w-3.5" aria-hidden />
                         History
@@ -183,6 +273,7 @@ export function SkillSection({
                       variant="outline"
                       size="sm"
                       className="border-destructive text-destructive hover:bg-destructive-soft"
+                      disabled={saving}
                       onClick={() => {
                         setResetBaseCommit(doc.current_commit || null);
                         setResetOpen(true);
@@ -195,6 +286,8 @@ export function SkillSection({
                 </div>
               </div>
 
+              {dirty && <p role="status" className="mb-3 text-sm text-foreground-muted">Unsaved guide changes are kept while you switch views.</p>}
+
               <Tabs value={tab} onValueChange={selectTab}>
                 <TabsList className="max-w-full overflow-x-auto">
                   <TabsTrigger value="preview">Preview</TabsTrigger>
@@ -203,7 +296,7 @@ export function SkillSection({
                 </TabsList>
 
                 <TabsContent value="preview">
-                  <div className="min-w-0 rounded-[var(--radius-md)] border border-border bg-background p-5 sm:p-6">
+                  <div className="min-w-0 bg-surface py-4">
                     <MarkdownRender
                       markdown={doc.content || ""}
                       assetContext={{
@@ -236,15 +329,15 @@ export function SkillSection({
                       className="resize-y font-mono text-xs leading-relaxed"
                       spellCheck={false}
                     />
-                    {saveError && (
+                    {(saveError || changedElsewhere) && (
                       <Alert
-                        variant={saveConflict ? "warning" : "destructive"}
+                        variant={saveConflict || changedElsewhere ? "warning" : "destructive"}
                         title={
-                          saveConflict ? "Guide changed elsewhere" : undefined
+                          saveConflict || changedElsewhere ? "Guide changed elsewhere" : undefined
                         }
                         className="mt-3"
                       >
-                        {saveError}
+                        {saveError || "The saved guide changed while you were editing. Your draft and original revision are preserved; compare with History before saving."}
                       </Alert>
                     )}
                     <div className="mt-3 flex items-center gap-3">
@@ -252,14 +345,17 @@ export function SkillSection({
                         variant="accent"
                         onClick={handleSave}
                         loading={saving}
-                        disabled={draft === (doc.content || "")}
+                        disabled={!dirty}
                       >
                         {!saving && <Save className="h-4 w-4" aria-hidden />}
                         {saving ? "Saving…" : "Save guide"}
                       </Button>
                       <Button
                         variant="outline"
-                        onClick={() => selectTab("preview")}
+                        onClick={() => {
+                          if (dirty) setPendingExit({ kind: "cancel" });
+                          else { discardDraft(); setTab("preview"); }
+                        }}
                         disabled={saving}
                       >
                         Cancel
@@ -274,10 +370,22 @@ export function SkillSection({
       </Panel>
 
       <ConfirmDialog
-        open={resetOpen}
+        open={!checking && pendingExit !== null}
+        onOpenChange={(open) => { if (!open) setPendingExit(null); }}
+        title="Discard unsaved guide changes?"
+        description={saving ? "Wait for the guide save to finish before leaving." : "Your unsaved guide draft will be discarded."}
+        confirmLabel="Discard changes"
+        cancelLabel="Keep editing"
+        variant="destructive"
+        busy={saving}
+        onConfirm={confirmExit}
+      />
+
+      <ConfirmDialog
+        open={!checking && resetOpen}
         onOpenChange={setResetOpen}
         title="Reset to template?"
-        description="Replace current content with the AKB-default template? Previous content stays in git history."
+        description="Replace current content and any unsaved draft with the AKB-default template? Previous content stays in version history."
         confirmLabel="Reset"
         variant="destructive"
         onConfirm={handleReset}

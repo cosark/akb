@@ -64,7 +64,7 @@ describe("document details", () => {
 
   it("explicitly clears nullable text fields and changes lifecycle fields only when edited", () => {
     expect(changedDocumentDetails({ ...base, summary: "  ", domain: "", type: "note", status: "active" }, base)).toEqual({
-      summary: null, domain: null, type: "note", status: "active",
+      summary: "", domain: "", type: "note", status: "active",
     });
   });
 
