@@ -44,7 +44,10 @@ export const TableCellExpanded = forwardRef<HTMLDivElement, TableCellExpandedPro
         >
           <CellValue value={formatted} />
         </div>
-        <div className="flex items-center justify-end gap-1 px-1.5 pb-1.5">
+        {/* A column narrowed below both buttons wraps them, and Collapse keeps
+            only its chevron (its name stays for assistive technology), so the
+            buttons never spill out of the cell. */}
+        <div className="@container flex flex-wrap items-center justify-end gap-1 px-1.5 pb-1.5">
           {/* The "Empty string" label is not copied: an empty string copies as "". */}
           <CopyButton
             value={formatted.text}
@@ -60,7 +63,7 @@ export const TableCellExpanded = forwardRef<HTMLDivElement, TableCellExpandedPro
             className="gap-1.5 px-2 focus-visible:ring-offset-surface"
           >
             <ChevronUp className="h-4 w-4" aria-hidden />
-            Collapse
+            <span className="@max-[7.5rem]:sr-only">Collapse</span>
           </Button>
         </div>
       </div>
