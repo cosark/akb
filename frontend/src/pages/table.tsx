@@ -40,6 +40,7 @@ import { TooltipText } from "@/components/ui/tooltip-text";
 import { ResourceActionsMenu } from "@/components/resource-actions-menu";
 import { ResourceDeleteDialog } from "@/components/resource-delete-dialog";
 import { PublicationSuccessBanner } from "@/components/publication-success-banner";
+import { TableCellViewer, type ViewedTableCell } from "@/components/table-cell-viewer";
 import { TablePublishDialog } from "@/components/table-publish-dialog";
 import { TableRowDialog } from "@/components/table-row-dialog";
 import {
@@ -114,6 +115,8 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
   const [selectedRow, setSelectedRow] = useState<Record<string, unknown> | null>(null);
   const [rowToDelete, setRowToDelete] = useState<Record<string, unknown> | null>(null);
   const [rowNotice, setRowNotice] = useState("");
+  const [viewedCell, setViewedCell] = useState<ViewedTableCell | null>(null);
+  const viewedCellTriggerRef = useRef<HTMLElement | null>(null);
   const schemaToggleRef = useRef<HTMLButtonElement | null>(null);
   const schemaCloseRef = useRef<HTMLButtonElement | null>(null);
   const loadedAccessRevision = useRef(accessRevision);
@@ -527,48 +530,46 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                       </tr>
                     </thead>
                     <tbody>
-                      {rows.map((row, rowIndex) => (
-                        <tr
-                          key={typeof row.id === "string" ? row.id : rowIndex}
-                          className="group transition-colors hover:bg-surface-hover"
-                        >
-                          <td className="sticky left-0 z-[var(--z-raised)] border-b border-r border-border bg-surface px-3 py-2 text-xs text-foreground-muted tabular-nums group-hover:bg-surface-hover">
-                            {displayPageIndex * displayPageSize + rowIndex + 1}
-                          </td>
-                          {cols.map((columnName) => {
-                            const value = row[columnName];
-                            const numeric =
-                              typeof value === "number" ||
-                              isNumericColumnType(columnByName.get(columnName)?.type);
-                            return (
-                              <TooltipText key={columnName} asChild tip={formatCellFull(value)}>
-                                <td
-                                  className={cn(
-                                    "max-w-md truncate whitespace-nowrap border-b border-r border-border px-3 py-2 text-foreground last:border-r-0",
-                                    numeric && "text-right tabular-nums",
-                                    value !== null && typeof value === "object" && "font-mono text-xs",
-                                    value === null && "italic text-foreground-muted",
-                                  )}
-                                >
-                                  {formatCell(value)}
-                                </td>
-                              </TooltipText>
-                            );
-                          })}
-                          {canManageRows && (
-                            <td className="sticky right-0 z-[var(--z-raised)] border-b border-l border-border bg-surface px-1 py-1 text-center group-hover:bg-surface-hover">
-                              <RowActionsMenu
-                                rowNumber={displayPageIndex * displayPageSize + rowIndex + 1}
-                                onEdit={() => {
-                                  setSelectedRow(row);
-                                  setRowDialogMode("edit");
-                                }}
-                                onDelete={() => setRowToDelete(row)}
-                              />
+                      {rows.map((row, rowIndex) => {
+                        const rowNumber = displayPageIndex * displayPageSize + rowIndex + 1;
+                        return (
+                          <tr
+                            key={typeof row.id === "string" ? row.id : rowIndex}
+                            className="group transition-colors hover:bg-surface-hover"
+                          >
+                            <td className="sticky left-0 z-[var(--z-raised)] border-b border-r border-border bg-surface px-3 py-2 text-xs text-foreground-muted tabular-nums group-hover:bg-surface-hover">
+                              {rowNumber}
                             </td>
-                          )}
-                        </tr>
-                      ))}
+                            {cols.map((columnName) => {
+                              const value = row[columnName];
+                              const columnType = columnByName.get(columnName)?.type;
+                              return (
+                                <TableDataCell
+                                  key={columnName}
+                                  value={value}
+                                  numeric={typeof value === "number" || isNumericColumnType(columnType)}
+                                  onOpen={(trigger) => {
+                                    viewedCellTriggerRef.current = trigger;
+                                    setViewedCell({ columnName, columnType, rowNumber, value });
+                                  }}
+                                />
+                              );
+                            })}
+                            {canManageRows && (
+                              <td className="sticky right-0 z-[var(--z-raised)] border-b border-l border-border bg-surface px-1 py-1 text-center group-hover:bg-surface-hover">
+                                <RowActionsMenu
+                                  rowNumber={rowNumber}
+                                  onEdit={() => {
+                                    setSelectedRow(row);
+                                    setRowDialogMode("edit");
+                                  }}
+                                  onDelete={() => setRowToDelete(row)}
+                                />
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -820,6 +821,11 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
           setRowToDelete(null);
         }}
       />
+      <TableCellViewer
+        cell={viewedCell}
+        onOpenChange={(open) => !open && setViewedCell(null)}
+        returnFocusRef={viewedCellTriggerRef}
+      />
     </ResourceWorkspace>
   );
 }
@@ -1023,14 +1029,64 @@ function TablePageLoading() {
   );
 }
 
+const CELL_DISPLAY_LIMIT = 120;
+
+/**
+ * One data cell. The whole cell is a button that opens the cell viewer, but it
+ * is a tab stop only while part of the value is hidden — cut by the display
+ * limit or by the column width — so a large grid does not become one tab stop
+ * per cell. The overflow flag comes from TooltipText's own measurement; its
+ * tooltip is portaled so it never becomes part of the button.
+ */
+function TableDataCell({
+  value,
+  numeric,
+  onOpen,
+}: {
+  value: unknown;
+  numeric: boolean;
+  onOpen: (trigger: HTMLButtonElement) => void;
+}) {
+  const [overflow, setOverflow] = useState(false);
+  const full = formatCellFull(value);
+  const capped = full.length > CELL_DISPLAY_LIMIT;
+  const display = capped ? `${full.slice(0, CELL_DISPLAY_LIMIT)}…` : full;
+  const truncated = capped || overflow;
+  return (
+    // h-px gives the cell a specified height, so the h-full button can fill a
+    // row made taller by another cell; without it the button keeps its own height.
+    <td className="h-px max-w-md border-b border-r border-border p-0 last:border-r-0">
+      <button
+        type="button"
+        tabIndex={truncated ? 0 : -1}
+        aria-haspopup="dialog"
+        onClick={(event) => onOpen(event.currentTarget)}
+        className="flex h-full w-full cursor-pointer items-center text-start focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      >
+        <TooltipText
+          tip={full}
+          onOverflowChange={setOverflow}
+          portal
+          className={cn(
+            "block min-w-0 flex-1 truncate whitespace-nowrap px-3 py-2 text-foreground",
+            numeric && "text-right tabular-nums",
+            value !== null && typeof value === "object" && "font-mono text-xs",
+            value === null && "italic text-foreground-muted",
+          )}
+        >
+          {display}
+        </TooltipText>
+        {display === "" && <span className="sr-only">Empty</span>}
+        {/* The space is its own text node: name computation trims element text. */}
+        {truncated && <>{" "}<span className="sr-only">(view full value)</span></>}
+      </button>
+    </td>
+  );
+}
+
 function formatCellFull(value: unknown): string {
   if (value === null || value === undefined) return "null";
   if (typeof value === "number" && !Number.isFinite(value)) return "—";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
-}
-
-function formatCell(value: unknown): string {
-  const full = formatCellFull(value);
-  return full.length > 120 ? `${full.slice(0, 120)}…` : full;
 }

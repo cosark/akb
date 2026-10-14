@@ -282,6 +282,8 @@ describe("table row management", () => {
     expect(refetchTree).toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Actions for row 1" }));
+    // The row-actions cell is not a data cell: its menu never opens the cell viewer.
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await user.click(screen.getByRole("menuitem", { name: "Edit row" }));
     dialog = screen.getByRole("dialog");
     const severity = within(dialog).getByLabelText("severity");
