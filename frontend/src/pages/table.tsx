@@ -1030,13 +1030,15 @@ function TablePageLoading() {
 }
 
 const CELL_DISPLAY_LIMIT = 120;
+const LINE_BREAK = /[\r\n]/;
 
 /**
  * One data cell. The whole cell is a button that opens the cell viewer, but it
  * is a tab stop only while part of the value is hidden — cut by the display
  * limit or by the column width — so a large grid does not become one tab stop
- * per cell. The overflow flag comes from TooltipText's own measurement; its
- * tooltip is portaled so it never becomes part of the button.
+ * per cell. A single line also collapses line breaks, so a multi-line string
+ * never shows in full there. The overflow flag comes from TooltipText's own
+ * measurement; its tooltip is portaled so it never becomes part of the button.
  */
 function TableDataCell({
   value,
@@ -1051,7 +1053,8 @@ function TableDataCell({
   const full = formatCellFull(value);
   const capped = full.length > CELL_DISPLAY_LIMIT;
   const display = capped ? `${full.slice(0, CELL_DISPLAY_LIMIT)}…` : full;
-  const truncated = capped || overflow;
+  const collapsedLines = typeof value === "string" && LINE_BREAK.test(value);
+  const truncated = capped || overflow || collapsedLines;
   return (
     // h-px gives the cell a specified height, so the h-full button can fill a
     // row made taller by another cell; without it the button keeps its own height.

@@ -273,6 +273,16 @@ describe("table cell viewer", () => {
     }
   });
 
+  it("makes a short multi-line string a tab stop, since one line hides its breaks", async () => {
+    renderTable();
+    const multiLine = await screen.findByRole("button", {
+      name: /^Drain the gateway\s+Rotate the pool\s+Confirm recovery \(view full value\)$/,
+    });
+    expect(steps.length).toBeLessThan(120);
+    expect(multiLine).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("button", { name: "API outage" })).toHaveAttribute("tabindex", "-1");
+  });
+
   it("names an empty cell and marks it in the viewer", async () => {
     listRowsMock.mockResolvedValue({
       kind: "table_query",
