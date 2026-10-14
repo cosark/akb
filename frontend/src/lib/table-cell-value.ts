@@ -1,7 +1,7 @@
 export type TableCellValueKind = "json" | "text" | "number" | "boolean" | "null";
 
 export interface TableCellValueText {
-  /** The complete value as text: what the cell viewer shows and copies. */
+  /** The complete value as text: what an expanded table cell shows and copies. */
   text: string;
   kind: TableCellValueKind;
 }

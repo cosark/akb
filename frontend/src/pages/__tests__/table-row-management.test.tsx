@@ -282,7 +282,11 @@ describe("table row management", () => {
     expect(refetchTree).toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Actions for row 1" }));
-    // The row-actions cell is not a data cell: its menu never opens the cell viewer.
+    // The row-actions cell is not a data cell: its menu neither expands a
+    // cell nor opens anything but the menu itself.
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /, row 1$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Collapse" })).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await user.click(screen.getByRole("menuitem", { name: "Edit row" }));
     dialog = screen.getByRole("dialog");

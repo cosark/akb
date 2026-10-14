@@ -1,6 +1,6 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowDown,
@@ -40,7 +40,7 @@ import { TooltipText } from "@/components/ui/tooltip-text";
 import { ResourceActionsMenu } from "@/components/resource-actions-menu";
 import { ResourceDeleteDialog } from "@/components/resource-delete-dialog";
 import { PublicationSuccessBanner } from "@/components/publication-success-banner";
-import { TableCellViewer, type ViewedTableCell } from "@/components/table-cell-viewer";
+import { TableCellExpanded } from "@/components/table-cell-expanded";
 import { TablePublishDialog } from "@/components/table-publish-dialog";
 import { TableRowDialog } from "@/components/table-row-dialog";
 import {
@@ -115,13 +115,30 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
   const [selectedRow, setSelectedRow] = useState<Record<string, unknown> | null>(null);
   const [rowToDelete, setRowToDelete] = useState<Record<string, unknown> | null>(null);
   const [rowNotice, setRowNotice] = useState("");
-  const [viewedCell, setViewedCell] = useState<ViewedTableCell | null>(null);
   const [wrapText, setWrapText] = useState(readWrapTextPreference);
-  const viewedCellTriggerRef = useRef<HTMLElement | null>(null);
   const schemaToggleRef = useRef<HTMLButtonElement | null>(null);
   const schemaCloseRef = useRef<HTMLButtonElement | null>(null);
+  const recordsRef = useRef<HTMLDivElement | null>(null);
   const loadedAccessRevision = useRef(accessRevision);
   const queryState = useMemo(() => parseTableQueryState(searchParams), [searchParams]);
+
+  // Cells showing their full value in place, keyed by tableCellKey(). Several
+  // can be open at once. They belong to the records on screen: another page,
+  // page size, sort or filter set collapses them all, while a refresh or a row
+  // edit of the same view keeps them open.
+  const recordView = JSON.stringify([
+    queryState.pageIndex,
+    queryState.pageSize,
+    queryState.sort,
+    queryState.filters,
+  ]);
+  const [expandedCells, setExpandedCells] = useState<ReadonlySet<string>>(NO_EXPANDED_CELLS);
+  const [expandedCellsView, setExpandedCellsView] = useState(recordView);
+  if (expandedCellsView !== recordView) {
+    setExpandedCellsView(recordView);
+    setExpandedCells(NO_EXPANDED_CELLS);
+  }
+  const focusRecords = useCallback(() => recordsRef.current?.focus({ preventScroll: true }), []);
 
   const setQueryState = useCallback(
     (next: TableQueryState) => {
@@ -463,6 +480,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                 </div>
               ) : (
                 <div
+                  ref={recordsRef}
                   role="region"
                   aria-label={`Records for ${table}`}
                   aria-busy={rowsQuery.isFetching || undefined}
@@ -540,18 +558,24 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                     <tbody>
                       {rows.map((row, rowIndex) => {
                         const rowNumber = displayPageIndex * displayPageSize + rowIndex + 1;
+                        const rowKey = typeof row.id === "string" ? row.id : `#${rowIndex}`;
+                        const rowExpanded =
+                          expandedCells.size > 0 &&
+                          cols.some((columnName) => expandedCells.has(tableCellKey(rowKey, columnName)));
+                        // Wrapped rows, and rows holding an expanded cell, grow.
+                        const alignTop = wrapText || rowExpanded;
                         return (
                           <tr
                             key={typeof row.id === "string" ? row.id : rowIndex}
                             className="group transition-colors hover:bg-surface-hover"
                           >
-                            {/* Wrapped rows grow, so the row number and the actions move
-                                to the top and center on the values' first line, a 20px
-                                line box 8px down: leading-5 gives the number that box. */}
+                            {/* A row that grows moves the row number and the actions to
+                                the top, centered on the values' first line, a 20px line
+                                box 8px down: leading-5 gives the number that box. */}
                             <td
                               className={cn(
                                 "sticky left-0 z-[var(--z-raised)] border-b border-r border-border bg-surface px-3 py-2 text-xs text-foreground-muted tabular-nums group-hover:bg-surface-hover",
-                                wrapText && "align-top leading-5",
+                                alignTop && "align-top leading-5",
                               )}
                             >
                               {rowNumber}
@@ -559,16 +583,28 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                             {cols.map((columnName) => {
                               const value = row[columnName];
                               const columnType = columnByName.get(columnName)?.type;
+                              const cellKey = tableCellKey(rowKey, columnName);
                               return (
                                 <TableDataCell
                                   key={columnName}
                                   value={value}
+                                  columnName={columnName}
+                                  rowNumber={rowNumber}
                                   numeric={typeof value === "number" || isNumericColumnType(columnType)}
                                   wrap={wrapText}
-                                  onOpen={(trigger) => {
-                                    viewedCellTriggerRef.current = trigger;
-                                    setViewedCell({ columnName, columnType, rowNumber, value });
-                                  }}
+                                  alignTop={alignTop}
+                                  expanded={expandedCells.has(cellKey)}
+                                  onExpand={() =>
+                                    setExpandedCells((current) => new Set(current).add(cellKey))
+                                  }
+                                  onCollapse={() =>
+                                    setExpandedCells((current) => {
+                                      const next = new Set(current);
+                                      next.delete(cellKey);
+                                      return next;
+                                    })
+                                  }
+                                  focusRecords={focusRecords}
                                 />
                               );
                             })}
@@ -578,7 +614,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                                   "sticky right-0 z-[var(--z-raised)] border-b border-l border-border bg-surface px-1 text-center group-hover:bg-surface-hover",
                                   // The 32px menu button centers on that line; the cell
                                   // keeps its single-line height.
-                                  wrapText ? "pb-1.5 pt-0.5 align-top" : "py-1",
+                                  alignTop ? "pb-1.5 pt-0.5 align-top" : "py-1",
                                 )}
                               >
                                 <RowActionsMenu
@@ -845,11 +881,6 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
           setRowToDelete(null);
         }}
       />
-      <TableCellViewer
-        cell={viewedCell}
-        onOpenChange={(open) => !open && setViewedCell(null)}
-        returnFocusRef={viewedCellTriggerRef}
-      />
     </ResourceWorkspace>
   );
 }
@@ -1072,6 +1103,13 @@ function writeWrapTextPreference(next: boolean) {
   }
 }
 
+const NO_EXPANDED_CELLS: ReadonlySet<string> = new Set();
+
+/** Identifies a cell of the records on screen; rows without a string id use their position. */
+function tableCellKey(rowKey: string, columnName: string): string {
+  return `${rowKey}\u0000${columnName}`;
+}
+
 const CELL_DISPLAY_LIMIT = 120;
 /**
  * Wrapped cells show up to six lines. The cap sits above what six lines of the
@@ -1082,77 +1120,165 @@ const CELL_WRAP_DISPLAY_LIMIT = 600;
 const LINE_BREAK = /[\r\n]/;
 
 /**
- * One data cell. The whole cell is a button that opens the cell viewer, but it
- * is a tab stop only while part of the value is hidden, so a large grid does
- * not become one tab stop per cell. Hidden means cut by the display limit, or
- * by the column as TooltipText measures it: its width on a single line, and
- * also the six-line clamp when wrapped. A single line also collapses line
- * breaks, so a multi-line string never shows in full there. The tooltip is
- * portaled so it never becomes part of the button.
+ * One data cell. While part of its value is hidden, the content is a button
+ * that expands the cell in place: the full value, Copy value and Collapse
+ * appear inside the cell and the row grows. Only those cells are buttons and
+ * tab stops, so a large grid does not become one tab stop per cell, and a
+ * fully visible value stays plain, selectable text. Hidden means cut by the
+ * display limit, or by the column as TooltipText measures it: its width on a
+ * single line, and also the six-line clamp when wrapped. A single line also
+ * collapses line breaks, so a multi-line string never shows in full there.
+ * The tooltip is portaled so it never becomes part of the button.
  */
 function TableDataCell({
   value,
+  columnName,
+  rowNumber,
   numeric,
   wrap,
-  onOpen,
+  alignTop,
+  expanded,
+  onExpand,
+  onCollapse,
+  focusRecords,
 }: {
   value: unknown;
+  columnName: string;
+  /** 1-based row number as shown in the grid's `#` column. */
+  rowNumber: number;
   numeric: boolean;
   /** Wrap the value onto up to six lines instead of truncating one line. */
   wrap: boolean;
-  onOpen: (trigger: HTMLButtonElement) => void;
+  /** The row grows (wrapped, or it holds an expanded cell): align to the top. */
+  alignTop: boolean;
+  /** Show the full value inside the cell. */
+  expanded: boolean;
+  onExpand: () => void;
+  onCollapse: () => void;
+  /** Focuses the records region, for a collapsed cell left without a button. */
+  focusRecords: () => void;
 }) {
   const [overflow, setOverflow] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const valueRef = useRef<HTMLDivElement | null>(null);
+  // Set only by this cell's own controls, so a sort or page change that
+  // collapses every cell at once moves focus nowhere.
+  const focusAfterToggle = useRef<"value" | "cell" | null>(null);
   const full = formatCellFull(value);
   const limit = wrap ? CELL_WRAP_DISPLAY_LIMIT : CELL_DISPLAY_LIMIT;
   const capped = full.length > limit;
   const display = capped ? `${full.slice(0, limit)}…` : full;
   const collapsedLines = !wrap && typeof value === "string" && LINE_BREAK.test(value);
   const truncated = capped || overflow || collapsedLines;
+  const valueTypography = cn(
+    numeric && "text-right tabular-nums",
+    value !== null && typeof value === "object" && "font-mono text-xs",
+    value === null && "italic text-foreground-muted",
+  );
+
+  // The control the person used is replaced, so focus would fall to the page:
+  // expanding moves it to the value, collapsing back to the cell.
+  useLayoutEffect(() => {
+    const target = focusAfterToggle.current;
+    focusAfterToggle.current = null;
+    if (target === "value") valueRef.current?.focus({ preventScroll: true });
+    if (target === "cell") {
+      if (buttonRef.current) buttonRef.current.focus({ preventScroll: true });
+      else focusRecords();
+    }
+  }, [expanded, focusRecords]);
+
+  if (expanded) {
+    return (
+      <td
+        data-wrap={wrap ? "true" : "false"}
+        className="h-px max-w-md border-b border-r border-border p-0 align-top last:border-r-0"
+      >
+        <TableCellExpanded
+          ref={valueRef}
+          value={value}
+          columnName={columnName}
+          rowNumber={rowNumber}
+          onCollapse={() => {
+            focusAfterToggle.current = "cell";
+            onCollapse();
+          }}
+        />
+        {/* Holds the column at the width of the collapsed text, so showing a
+            value in a narrower shape (indented JSON, the lines of a note)
+            never narrows its column. Never painted or announced. */}
+        <div
+          aria-hidden
+          className={cn(
+            "invisible h-0 overflow-hidden px-3",
+            wrap ? "whitespace-pre" : "whitespace-nowrap",
+            valueTypography,
+          )}
+        >
+          {display}
+        </div>
+      </td>
+    );
+  }
+
+  // The button and the plain container share this box exactly, so turning one
+  // into the other cannot change the width the text is measured in. A growing
+  // row aligns to the top, and the vertical padding moves to the box so a
+  // clamped text box ends at its last shown line: padding inside it would
+  // expose the top of the next, hidden line.
+  const box = cn("flex h-full w-full text-start", alignTop ? "items-start py-2" : "items-center");
+  const content = (
+    <>
+      <TooltipText
+        tip={full}
+        onOverflowChange={setOverflow}
+        overflowAxis={wrap ? "both" : "x"}
+        portal
+        className={cn(
+          "min-w-0 flex-1 px-3 text-foreground",
+          // Wrapped: w-max still sizes the column from the value's single-line
+          // width, as truncation does, and max-w-full wraps it inside that
+          // column. Wrapping alone would let every column shrink to its minimum.
+          wrap
+            ? "w-max max-w-full line-clamp-6 whitespace-pre-wrap [overflow-wrap:anywhere]"
+            : cn("block truncate whitespace-nowrap", !alignTop && "py-2"),
+          valueTypography,
+        )}
+      >
+        {display}
+      </TooltipText>
+      {display === "" && <span className="sr-only">Empty</span>}
+    </>
+  );
   return (
-    // h-px gives the cell a specified height, so the h-full button can fill a
-    // row made taller by another cell; without it the button keeps its own height.
+    // h-px gives the cell a specified height, so the h-full box can fill a
+    // row made taller by another cell; without it the box keeps its own height.
     <td
       data-wrap={wrap ? "true" : "false"}
       className="h-px max-w-md border-b border-r border-border p-0 last:border-r-0"
     >
-      <button
-        type="button"
-        tabIndex={truncated ? 0 : -1}
-        aria-haspopup="dialog"
-        onClick={(event) => onOpen(event.currentTarget)}
-        className={cn(
-          "flex h-full w-full cursor-pointer text-start focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-          // Wrapped: top-aligned, and the vertical padding moves to the button
-          // so the clamped text box ends at its last shown line; padding inside
-          // it would expose the top of the next, hidden line.
-          wrap ? "items-start py-2" : "items-center",
-        )}
-      >
-        <TooltipText
-          tip={full}
-          onOverflowChange={setOverflow}
-          overflowAxis={wrap ? "both" : "x"}
-          portal
+      {truncated ? (
+        <button
+          ref={buttonRef}
+          type="button"
+          tabIndex={0}
+          aria-expanded={false}
+          onClick={() => {
+            focusAfterToggle.current = "value";
+            onExpand();
+          }}
           className={cn(
-            "min-w-0 flex-1 px-3 text-foreground",
-            // Wrapped: w-max still sizes the column from the value's single-line
-            // width, as truncation does, and max-w-full wraps it inside that
-            // column. Wrapping alone would let every column shrink to its minimum.
-            wrap
-              ? "w-max max-w-full line-clamp-6 whitespace-pre-wrap [overflow-wrap:anywhere]"
-              : "block truncate whitespace-nowrap py-2",
-            numeric && "text-right tabular-nums",
-            value !== null && typeof value === "object" && "font-mono text-xs",
-            value === null && "italic text-foreground-muted",
+            box,
+            "cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
           )}
         >
-          {display}
-        </TooltipText>
-        {display === "" && <span className="sr-only">Empty</span>}
-        {/* The space is its own text node: name computation trims element text. */}
-        {truncated && <>{" "}<span className="sr-only">(view full value)</span></>}
-      </button>
+          {content}
+          {/* The space is its own text node: name computation trims element text. */}
+          {" "}<span className="sr-only">(show full value)</span>
+        </button>
+      ) : (
+        <div className={box}>{content}</div>
+      )}
     </td>
   );
 }
