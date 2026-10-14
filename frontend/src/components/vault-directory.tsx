@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, Box, Plus, Search, Star } from "lucide-react";
 import { useVaultFavorites } from "@/hooks/use-vault-favorites";
@@ -23,6 +23,9 @@ export function VaultDirectory({ vaults }: { vaults: DirectoryVault[] }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [visible, setVisible] = useState(PAGE);
+  const favoriteButtons = useRef(new Map<string, HTMLButtonElement>());
+  const favoritesFilter = useRef<HTMLButtonElement>(null);
+  const pendingFavoriteFocus = useRef<{ source: HTMLButtonElement; index: number } | null>(null);
   const matches = useMemo(() => vaults.filter(vault =>
     (filter !== "owned" || vault.role === "owner") &&
     (filter !== "favorites" || isFavorite(vault.id)) &&
@@ -31,6 +34,19 @@ export function VaultDirectory({ vaults }: { vaults: DirectoryVault[] }) {
     const aFav = isFavorite(a.id), bFav = isFavorite(b.id);
     return aFav !== bFav ? (aFav ? -1 : 1) : aFav ? favOrder(a.id) - favOrder(b.id) : a.name.localeCompare(b.name);
   }), [vaults, filter, query, isFavorite, favOrder]);
+
+  useLayoutEffect(() => {
+    const pending = pendingFavoriteFocus.current;
+    pendingFavoriteFocus.current = null;
+    if (!pending || pending.source.isConnected ||
+      (document.activeElement !== document.body && document.activeElement !== pending.source)) return;
+
+    const remaining = matches.slice(0, visible);
+    const next = remaining[Math.min(pending.index, remaining.length - 1)];
+    const target = next && favoriteButtons.current.get(next.id);
+    if (target && !target.disabled) target.focus();
+    else favoritesFilter.current?.focus();
+  }, [matches, visible]);
 
   return <section aria-labelledby="vault-directory-heading" className="@container/directory mx-auto w-full max-w-6xl p-3 sm:p-4 lg:p-6">
     <h1 className="sr-only">Vaults</h1>
@@ -46,7 +62,7 @@ export function VaultDirectory({ vaults }: { vaults: DirectoryVault[] }) {
         </div>
       </div>
       <div role="group" aria-label="Vault list filter" className="flex flex-wrap gap-1 rounded-[var(--radius-md)] border border-border p-1">
-        {(["all", "favorites", "owned"] as const).map(value => <Button key={value} variant="ghost" size="sm" aria-pressed={filter === value}
+        {(["all", "favorites", "owned"] as const).map(value => <Button key={value} ref={value === "favorites" ? favoritesFilter : undefined} variant="ghost" size="sm" aria-pressed={filter === value}
           onClick={() => { setFilter(value); setVisible(PAGE); }}
           className={filter === value ? "bg-surface-selected text-surface-selected-foreground" : ""}>
           {value === "all" ? "All" : value === "favorites" ? "Favorites" : "Owned"}
@@ -66,9 +82,16 @@ export function VaultDirectory({ vaults }: { vaults: DirectoryVault[] }) {
           <span className="hidden shrink-0 gap-2 @min-[32rem]/directory:flex">{vault.status === "archived" && <Badge variant="archived">Archived</Badge>}{vault.role === "reader" && <Badge>Read only</Badge>}</span>
           <ArrowRight className="h-4 w-4 shrink-0 text-foreground-muted" aria-hidden />
         </Link>
-        <Button variant="ghost" size="icon" disabled={!user?.user_id} aria-pressed={isFavorite(vault.id)}
+        <Button ref={node => { if (node) favoriteButtons.current.set(vault.id, node); else favoriteButtons.current.delete(vault.id); }}
+          variant="ghost" size="icon" disabled={!user?.user_id} aria-pressed={isFavorite(vault.id)}
           aria-label={(isFavorite(vault.id) ? "Remove " : "Add ") + vault.name + (isFavorite(vault.id) ? " from favorites" : " to favorites")}
-          className="mr-2 shrink-0" onClick={() => toggleFavorite(vault.id)}>
+          className="mr-2 shrink-0" onClick={event => {
+            // A keyboard/assistive activation removes this focused row only in Favorites.
+            if (filter === "favorites" && isFavorite(vault.id) && event.detail === 0 && document.activeElement === event.currentTarget) {
+              pendingFavoriteFocus.current = { source: event.currentTarget, index: matches.findIndex(match => match.id === vault.id) };
+            }
+            toggleFavorite(vault.id);
+          }}>
           <Star className={isFavorite(vault.id) ? "h-4 w-4 fill-current text-link" : "h-4 w-4 text-foreground-muted"} aria-hidden />
         </Button>
       </li>)}

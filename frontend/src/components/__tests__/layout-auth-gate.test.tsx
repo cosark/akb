@@ -17,7 +17,8 @@ import { useAccessVerification } from "@/contexts/current-user-context";
 // hook's network call never fires. UserMenu (rendered by Layout) calls
 // getMe() in an effect; stub it to resolve null so the component doesn't
 // throw inside React's commit phase.
-vi.mock("@/lib/api", () => ({
+vi.mock("@/lib/api", async importOriginal => ({
+  ApiError: (await importOriginal<typeof import("@/lib/api")>()).ApiError,
   getToken: vi.fn(),
   authSessionSnapshot: vi.fn(),
   isCurrentAuthSession: vi.fn(),

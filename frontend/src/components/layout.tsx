@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { useQueryClient } from "@tanstack/react-query";
 import { Boxes, House, PanelLeftOpen, PanelLeftClose, type LucideIcon } from "lucide-react";
 import {
+  ApiError,
   authSessionSnapshot,
   isCurrentAuthSession,
   clearPrivateAssetCache,
@@ -44,6 +45,13 @@ function identityFingerprint(user: CurrentUser): string {
     user.auth_method,
     user.key_class,
   ]);
+}
+
+function isExpiredIdentityProof(error: unknown): boolean {
+  // The transport has already invalidated this session on an ordinary 401.
+  // That generation change is not a replacement account to verify again.
+  // Stale responses and pending lifecycle receipts are explicitly deferred.
+  return error instanceof ApiError && error.status === 401 && error.name !== "DeferredSessionError";
 }
 
 export function Layout() {
@@ -96,6 +104,7 @@ export function Layout() {
             if (!cancelled) setSession({ status: "authenticated", user });
             break;
           } catch (error) {
+            if (isExpiredIdentityProof(error)) throw error;
             if (!isCurrentAuthSession(snapshot)) continue;
             throw error;
           }
@@ -141,8 +150,10 @@ export function Layout() {
             setSession({ status: "authenticated", user: verified });
             setAccessRevision(revision => revision + 1);
           } catch (error) {
-            if (queued || !isCurrentAuthSession(snapshot)) { queued = true; continue; }
-            if (disposed || (error instanceof Error && error.name === "DeferredSessionError")) return;
+            if (disposed) return;
+            if (!isExpiredIdentityProof(error) && (queued || !isCurrentAuthSession(snapshot))) { queued = true; continue; }
+            if (error instanceof Error && error.name === "DeferredSessionError") return;
+            queued = false;
             queryClient.clear();
             clearPrivateAssetCache();
             clearSharedVaultReads();
