@@ -553,11 +553,17 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                                   sorted ? activeSort.direction : "not currently sorted"
                                 }`}
                               >
-                                {/* A narrowed column truncates the name and the type; the sort icon stays. */}
+                                {/* A narrowed column truncates the name and the type; the sort
+                                    icon stays. A cut name shows in full on hover, portaled so
+                                    the tooltip never lands inside the sort button. */}
                                 <span className="min-w-0">
-                                  <span className="block truncate whitespace-nowrap font-mono text-xs font-medium text-foreground">
+                                  <TooltipText
+                                    tip={columnName}
+                                    portal
+                                    className="block truncate whitespace-nowrap font-mono text-xs font-medium text-foreground"
+                                  >
                                     {columnName}
-                                  </span>
+                                  </TooltipText>
                                   {columnByName.get(columnName)?.type && (
                                     <span className="mt-0.5 block truncate whitespace-nowrap text-xs font-normal text-foreground-muted">
                                       {columnByName.get(columnName)?.type}

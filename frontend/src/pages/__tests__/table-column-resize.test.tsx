@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -153,6 +153,28 @@ function headerRect(cell: HTMLTableCellElement): DOMRect {
     height: 44,
     toJSON: () => ({}),
   } as DOMRect;
+}
+
+/** The element whose text is `text` is wider than its box; every other element fits. */
+function stubOverflowingText(text: string) {
+  const sizes = { scrollWidth: 320, clientWidth: 120 };
+  const originals = Object.keys(sizes).map(
+    (name) => [name, Object.getOwnPropertyDescriptor(HTMLElement.prototype, name)] as const,
+  );
+  for (const [name, size] of Object.entries(sizes)) {
+    Object.defineProperty(HTMLElement.prototype, name, {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.textContent === text ? size : 0;
+      },
+    });
+  }
+  return () => {
+    for (const [name, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, name, descriptor);
+      else Reflect.deleteProperty(HTMLElement.prototype, name);
+    }
+  };
 }
 
 /** The records region, given a visible width and a horizontal scroll position. */
@@ -574,6 +596,34 @@ describe("table column resizing", () => {
     }
     expect(screen.getByRole("columnheader", { name: "#" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Row actions" })).toBeInTheDocument();
+  });
+
+  it("shows a column name cut by a narrow column in full on hover", async () => {
+    const restore = stubOverflowingText("created_at");
+    try {
+      const user = userEvent.setup();
+      renderTable();
+      await gridReady();
+
+      // A name that fits shows nothing, even once its hover delay has passed.
+      const fits = within(headerCell("title")).getByText("title");
+      await user.hover(fits);
+      await waitFor(() => expect(fits.getAttribute("data-state")).toMatch(/open$/));
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+      const cut = within(headerCell("created_at")).getByText("created_at");
+      await user.hover(cut);
+      const tooltip = await screen.findByRole("tooltip");
+      expect(tooltip).toHaveTextContent("created_at");
+      // Portaled: never inside the sort button, whose name stays its own.
+      expect(headerCell("created_at")).not.toContainElement(tooltip);
+      expect(within(headerCell("created_at")).getByRole("button", { name: "Sort by created_at, desc" }))
+        .toBeInTheDocument();
+      // The type line is unchanged.
+      expect(within(headerCell("created_at")).getByText("timestamp")).toHaveClass("truncate");
+    } finally {
+      restore();
+    }
   });
 
   it("shows one guide on the column's border on hover and while dragging", async () => {
