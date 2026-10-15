@@ -625,6 +625,40 @@ describe("table cell expansion", () => {
     },
   );
 
+  it("expands a cut cell from a press anywhere in it, also where its box does not reach", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    const notesButton = await screen.findByRole("button", { name: CAPPED_NOTES });
+    // The box fills the cell through min-height; Firefox resolves a height of
+    // 100% against the cell's 1px instead, and would shrink it below its text.
+    for (const cell of dataCells()) {
+      expect(cell).toHaveClass("h-px");
+      expect(cellBox(cell)).toHaveClass("min-h-full");
+      expect(cellBox(cell)).not.toHaveClass("h-full");
+    }
+
+    // Where the box ends short of the cell, the press lands on the <td> itself.
+    const td = notesButton.closest("td")!;
+    expect(td).toHaveClass("cursor-pointer");
+    await user.click(td);
+    expect(valueRegion("notes")).toHaveFocus();
+    expect(td).toContainElement(valueRegion("notes"));
+    // An expanded cell's own <td> does not collapse it.
+    await user.click(td);
+    expect(valueRegion("notes")).toBeInTheDocument();
+
+    // A press on a cut cell's resize handle never expands it.
+    const stepsTd = screen.getByRole("button", { name: /^Drain the gateway/ }).closest("td")!;
+    await user.click(stepsTd.querySelector<HTMLElement>('[data-slot="table-column-resize-handle"]')!);
+    expect(queryValueRegion("steps")).not.toBeInTheDocument();
+
+    // A fully visible cell's own <td> stays plain.
+    const title = cellWithText("API outage");
+    expect(title).not.toHaveClass("cursor-pointer");
+    await user.click(title);
+    expect(queryValueRegion("title")).not.toBeInTheDocument();
+  });
+
   it("makes a short multi-line string a button, since one line hides its breaks", async () => {
     renderTable();
     const multiLine = await screen.findByRole("button", {

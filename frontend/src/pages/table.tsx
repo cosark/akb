@@ -1261,6 +1261,11 @@ function TableDataCell({
     }
   }, [expanded, collapseMeasurements, cutAtAnyWidth, focusRecords]);
 
+  function expand() {
+    focusAfterToggle.current = "value";
+    onExpand();
+  }
+
   if (expanded) {
     return (
       <td
@@ -1301,7 +1306,7 @@ function TableDataCell({
   // row aligns to the top, and the vertical padding moves to the box so a
   // clamped text box ends at its last shown line: padding inside it would
   // expose the top of the next, hidden line.
-  const box = cn("flex h-full w-full text-start", alignTop ? "items-start py-2" : "items-center");
+  const box = cn("flex min-h-full w-full text-start", alignTop ? "items-start py-2" : "items-center");
   const content = (
     <>
       <TooltipText
@@ -1326,12 +1331,22 @@ function TableDataCell({
     </>
   );
   return (
-    // h-px gives the cell a specified height, so the h-full box can fill a
+    // h-px gives the cell a specified height, so the min-h-full box can fill a
     // row made taller by another cell; without it the box keeps its own height.
+    // Firefox resolves the percentage against that 1px instead: there the box
+    // keeps its own height (h-full would shrink it below its text), and a press
+    // on the rest of a cut cell lands on the <td> itself, which therefore
+    // expands it too. Pointer only: the button stays the cell's one tab stop.
     <td
       data-wrap={wrap ? "true" : "false"}
       style={columnWidthStyle(width)}
-      className="relative h-px max-w-md border-b border-r border-border p-0 last:border-r-0"
+      onClick={(event) => {
+        if (truncated && event.target === event.currentTarget) expand();
+      }}
+      className={cn(
+        "relative h-px max-w-md border-b border-r border-border p-0 last:border-r-0",
+        truncated && "cursor-pointer",
+      )}
     >
       {truncated ? (
         <button
@@ -1339,10 +1354,7 @@ function TableDataCell({
           type="button"
           tabIndex={0}
           aria-expanded={false}
-          onClick={() => {
-            focusAfterToggle.current = "value";
-            onExpand();
-          }}
+          onClick={expand}
           className={cn(
             box,
             "cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
