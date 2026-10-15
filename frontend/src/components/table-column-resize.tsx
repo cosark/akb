@@ -27,10 +27,10 @@ const RESIZE_HINT = "Drag to resize · double-click to reset";
  * A column's handles cover its right border and run the full height of their
  * cells, bottom border included, so they join into one unbroken line. The hit
  * area is 8px: 4px before the 1px border, the border, and 3px after it. At the
- * end of a row nothing follows, so it stops at the cell's edge rather than
- * widen the scroll area. z-[1] lifts a handle over the cell content it
- * overlaps while keeping it below the sticky header and columns (--z-raised):
- * it never paints or takes the pointer over them.
+ * end of a row nothing follows and the cell has no right border, so all 8px
+ * lie inside the cell rather than widen the scroll area. z-[1] lifts a handle
+ * over the cell content it overlaps while keeping it below the sticky header
+ * and columns (--z-raised): it never paints or takes the pointer over them.
  */
 const HANDLE = "absolute top-0 -bottom-px z-[1] cursor-col-resize touch-none";
 
@@ -326,7 +326,7 @@ export function TableColumnResizeSeparator({
   column: string;
   /** The column's chosen width, or undefined while it sizes automatically. */
   width: number | undefined;
-  /** The cell ends its row: it has no right border, and the handle stays inside it. */
+  /** The cell ends its row: it has no right border, and all 8px stay inside it. */
   rowEnd?: boolean;
 }) {
   const controller = useColumnResize();
@@ -378,10 +378,11 @@ export function TableColumnResizeSeparator({
       onKeyDown={handleKeyDown}
       className={cn(
         HANDLE,
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
         // The border and the 4px before it. The next header cell paints over
-        // anything past the border, so it holds the rest of the line.
-        "w-[5px] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-        rowEnd ? "right-0" : "-right-px",
+        // anything past the border, so it holds the rest of the line. At the
+        // end of a row, the cell's last 8px.
+        rowEnd ? "right-0 w-2" : "-right-px w-[5px]",
       )}
     />
   );
@@ -402,7 +403,7 @@ export function TableColumnResizeHandle({
   /** The column this handle resizes. */
   column: string;
   edge: "start" | "end";
-  /** The cell ends its row: it has no right border, and the handle stays inside it. */
+  /** The cell ends its row: it has no right border, and all 8px stay inside it. */
   rowEnd?: boolean;
 }) {
   const controller = useColumnResize();
@@ -417,7 +418,7 @@ export function TableColumnResizeHandle({
       onDoubleClick={() => controller.reset(column)}
       className={cn(
         HANDLE,
-        edge === "start" ? "left-0 w-[3px]" : rowEnd ? "right-0 w-[5px]" : "-right-1 w-2",
+        edge === "start" ? "left-0 w-[3px]" : rowEnd ? "right-0 w-2" : "-right-1 w-2",
       )}
     />
   );

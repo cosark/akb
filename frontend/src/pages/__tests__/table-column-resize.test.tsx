@@ -495,22 +495,25 @@ describe("table column resizing", () => {
     expectColumnWidth("created_at", HEADER_WIDTH + 40);
   });
 
-  it("keeps the last column's handles inside the table when no row actions follow", async () => {
+  it("keeps the last column's full 8px handles inside the table when no row actions follow", async () => {
     renderTable();
     await gridReady();
     // Straddling the border would widen the grid's scroll area past the table.
-    expect(separator("created_at")).toHaveClass("right-0");
-    expect(bodyHandle("created_at")).toHaveClass("right-0");
-    expect(separator("steps")).toHaveClass("-right-px");
-    expect(bodyHandle("steps")).toHaveClass("-right-1");
+    for (const handle of [separator("created_at"), bodyHandle("created_at", 1), bodyHandle("created_at", 2)]) {
+      expect(handle).toHaveClass("right-0", "w-2");
+      expect(handle).not.toHaveClass("-right-px", "-right-1", "w-[5px]");
+    }
+    // Elsewhere the separator stops at the border: the next header cell holds the rest.
+    expect(separator("steps")).toHaveClass("-right-px", "w-[5px]");
+    expect(bodyHandle("steps")).toHaveClass("-right-1", "w-2");
   });
 
   it("straddles the last column's border when the row actions follow it", async () => {
     vaultInfoMock.mockResolvedValue(writer);
     renderTable();
     await screen.findByRole("button", { name: "Actions for row 1" });
-    expect(separator("created_at")).toHaveClass("-right-px");
-    expect(bodyHandle("created_at")).toHaveClass("-right-1");
+    expect(separator("created_at")).toHaveClass("-right-px", "w-[5px]");
+    expect(bodyHandle("created_at")).toHaveClass("-right-1", "w-2");
   });
 
   it("ends a drag without applying it when the handle loses the pointer capture", async () => {
