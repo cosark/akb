@@ -1,4 +1,4 @@
-import { forwardRef, type KeyboardEvent } from "react";
+import { forwardRef, useId, type KeyboardEvent } from "react";
 import { ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -23,6 +23,9 @@ export interface TableCellExpandedProps {
 export const TableCellExpanded = forwardRef<HTMLDivElement, TableCellExpandedProps>(
   function TableCellExpanded({ value, columnName, rowNumber, onCollapse }, ref) {
     const formatted = formatCellValue(value);
+    // Several cells can be open at once, each with the same two buttons: they
+    // are described by their value region, named after its column and row.
+    const valueId = useId();
 
     function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
       if (event.key !== "Escape") return;
@@ -37,6 +40,7 @@ export const TableCellExpanded = forwardRef<HTMLDivElement, TableCellExpandedPro
       <div className="flex flex-col" onKeyDown={handleKeyDown}>
         <div
           ref={ref}
+          id={valueId}
           role="region"
           aria-label={`${columnName}, row ${rowNumber}`}
           tabIndex={0}
@@ -52,6 +56,7 @@ export const TableCellExpanded = forwardRef<HTMLDivElement, TableCellExpandedPro
           <CopyButton
             value={formatted.text}
             label="Copy value"
+            aria-describedby={valueId}
             className="h-8 w-8 focus-visible:ring-offset-surface"
           />
           <Button
@@ -59,6 +64,7 @@ export const TableCellExpanded = forwardRef<HTMLDivElement, TableCellExpandedPro
             variant="ghost"
             size="sm"
             aria-expanded={true}
+            aria-describedby={valueId}
             onClick={onCollapse}
             className="gap-1.5 px-2 focus-visible:ring-offset-surface"
           >

@@ -91,6 +91,31 @@ describe("TableCellExpanded", () => {
     expect(onCollapse).not.toHaveBeenCalled();
   });
 
+  it("describes Copy value and Collapse by the value region they act on", () => {
+    render(
+      <>
+        <TableCellExpanded value="Ready" columnName="payload" rowNumber={12} onCollapse={vi.fn()} />
+        <TableCellExpanded value="Done" columnName="payload" rowNumber={13} onCollapse={vi.fn()} />
+      </>,
+    );
+    // Open cells repeat the same two buttons. Each keeps its short visible
+    // name and points its description at its own value region, whose name
+    // ("payload, row 12") browsers then read as the description. jsdom's
+    // accessible-description helper reads the region's text instead, so the
+    // reference itself is what this asserts.
+    const regions = [12, 13].map((row) => screen.getByRole("region", { name: `payload, row ${row}` }));
+    expect(regions[0].id).not.toBe("");
+    expect(regions[0].id).not.toBe(regions[1].id);
+    for (const name of ["Copy value", "Collapse"]) {
+      const buttons = screen.getAllByRole("button", { name });
+      expect(buttons).toHaveLength(2);
+      buttons.forEach((button, index) => {
+        expect(button).toHaveAccessibleName(name);
+        expect(button).toHaveAttribute("aria-describedby", regions[index].id);
+      });
+    }
+  });
+
   it("collapses from its Collapse button, which says the cell is expanded", async () => {
     const user = userEvent.setup();
     const { onCollapse } = renderExpanded("Ready");
