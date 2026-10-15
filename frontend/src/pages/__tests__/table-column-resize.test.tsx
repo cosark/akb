@@ -235,6 +235,7 @@ afterEach(() => {
   }
   document.body.style.cursor = "";
   document.body.style.userSelect = "";
+  document.body.style.removeProperty("-webkit-user-select");
 });
 
 describe("table column resizing", () => {
@@ -361,6 +362,8 @@ describe("table column resizing", () => {
     expect(setPointerCapture).toHaveBeenCalledWith(1);
     expect(document.body.style.cursor).toBe("col-resize");
     expect(document.body.style.userSelect).toBe("none");
+    // WebKit only honours the prefixed property.
+    expect(document.body.style.getPropertyValue("-webkit-user-select")).toBe("none");
 
     fireEvent.pointerMove(handle, { pointerId: 1, clientX: 140 });
     fireEvent.pointerMove(handle, { pointerId: 1, clientX: 180 });
@@ -374,6 +377,7 @@ describe("table column resizing", () => {
     expect(localStorage.getItem(KEY)).toBe('{"notes":280}');
     expect(document.body.style.cursor).toBe("");
     expect(document.body.style.userSelect).toBe("");
+    expect(document.body.style.getPropertyValue("-webkit-user-select")).toBe("");
     for (const column of ["id", "title", "steps", "created_at"]) expectColumnWidth(column, null);
   });
 

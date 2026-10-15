@@ -1355,6 +1355,9 @@ function TableDataCell({
       }}
       className={cn(
         "relative h-px max-w-md border-b border-r border-border p-0 last:border-r-0",
+        // In a row that grows, Firefox's box keeps its own height (see above),
+        // so the cell itself must sit at the top, level with the row number.
+        alignTop && "align-top",
         truncated && "cursor-pointer",
       )}
     >

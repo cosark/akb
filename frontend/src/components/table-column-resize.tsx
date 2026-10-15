@@ -48,6 +48,7 @@ interface ColumnDrag {
   /** The body's own cursor and text selection, restored when the drag ends. */
   cursor: string;
   userSelect: string;
+  webkitUserSelect: string;
 }
 
 /**
@@ -111,9 +112,12 @@ class ColumnResizeController {
       startEdge: this.toContentX(rect.right),
       cursor: body.cursor,
       userSelect: body.userSelect,
+      webkitUserSelect: body.getPropertyValue("-webkit-user-select"),
     };
     body.cursor = "col-resize";
     body.userSelect = "none";
+    // WebKit only honours the prefixed property, so lock selection there too.
+    body.setProperty("-webkit-user-select", "none");
     // On the window, so a handle that unmounts mid-drag cannot strand the
     // drag, the body cursor or the selection lock. Losing the pointer capture
     // ends the drag without applying it, since a release outside the page
@@ -185,6 +189,8 @@ class ColumnResizeController {
     const body = document.body.style;
     body.cursor = drag.cursor;
     body.userSelect = drag.userSelect;
+    if (drag.webkitUserSelect) body.setProperty("-webkit-user-select", drag.webkitUserSelect);
+    else body.removeProperty("-webkit-user-select");
     if (drag.target.hasPointerCapture(drag.pointerId)) {
       drag.target.releasePointerCapture(drag.pointerId);
     }

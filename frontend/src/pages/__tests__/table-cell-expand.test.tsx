@@ -413,6 +413,8 @@ describe("table cell expansion", () => {
     const collapsed = dataCells(bodyRow(1)).filter((cell) => !within(cell).queryByRole("region"));
     expect(collapsed).toHaveLength(5);
     for (const cell of collapsed) {
+      // The cell too: Firefox does not stretch the box to a taller row.
+      expect(cell).toHaveClass("align-top");
       expect(cellBox(cell)).toHaveClass("items-start", "py-2");
       expect(cellBox(cell)).not.toHaveClass("items-center");
     }
@@ -426,6 +428,7 @@ describe("table cell expansion", () => {
     expect(screen.getByRole("button", { name: "Actions for row 2" }).closest("td"))
       .toHaveClass("py-1");
     for (const cell of dataCells(bodyRow(2))) {
+      expect(cell).not.toHaveClass("align-top");
       expect(cellBox(cell)).toHaveClass("items-center");
       expect(cellBox(cell)).not.toHaveClass("items-start");
     }
@@ -468,6 +471,36 @@ describe("table cell expansion", () => {
       "incidents",
       expect.objectContaining({ order: "title.asc,id.asc" }),
     ));
+  });
+
+  it("collapses every expanded cell when the page changes", async () => {
+    // More records than one page holds, so the next page exists.
+    listRowsMock.mockResolvedValue({ ...rowsResponse(), total: 120 });
+    const user = userEvent.setup();
+    renderTable();
+    await user.click(await screen.findByRole("button", { name: CAPPED_NOTES }));
+    expect(valueRegion("notes")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Next page" }));
+
+    expect(queryValueRegion("notes")).not.toBeInTheDocument();
+    await waitFor(() => expect(listRowsMock.mock.lastCall?.[2]?.offset).toBeGreaterThan(0));
+    expect(await screen.findByRole("button", { name: CAPPED_NOTES })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("hides the expanded cell's width-holding copy from assistive technology", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    const cell = await screen.findByRole("button", { name: CAPPED_NOTES });
+    const td = cell.closest("td")!;
+    await user.click(cell);
+
+    // The collapsed text stays in the cell only to hold the column's width.
+    const holder = within(td).getByText(`${notes.slice(0, 120)}…`);
+    expect(holder).toHaveAttribute("aria-hidden", "true");
+    expect(holder).toHaveClass("invisible");
+    expect(valueRegion("notes")).not.toContainElement(holder);
+    expect(valueRegion("notes").textContent).toBe(notes);
   });
 
   it("keeps the Escape that collapses a cell from closing the schema panel", async () => {
