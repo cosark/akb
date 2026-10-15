@@ -1213,15 +1213,29 @@ function TableDataCell({
   const [overflow, setOverflow] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const valueRef = useRef<HTMLDivElement | null>(null);
-  // Set only by this cell's own controls, so a sort or page change that
-  // collapses every cell at once moves focus nowhere.
-  const focusAfterToggle = useRef<"value" | "cell" | null>(null);
+  // Where focus goes once this cell's own control has toggled it. Set only by
+  // those controls, so a sort or page change that collapses every cell at once
+  // moves focus nowhere. "cell" waits for the collapsed text to be measured;
+  // "measured cell" has been.
+  const focusAfterToggle = useRef<"value" | "cell" | "measured cell" | null>(null);
+  // Counts the measurements a waiting "cell" received, so the focus effect
+  // runs once the button or plain box that measurement leaves is in place,
+  // even when the measurement matches the last one.
+  const [collapseMeasurements, setCollapseMeasurements] = useState(0);
+  const reportOverflow = useCallback((next: boolean) => {
+    setOverflow(next);
+    if (focusAfterToggle.current !== "cell") return;
+    focusAfterToggle.current = "measured cell";
+    setCollapseMeasurements((count) => count + 1);
+  }, []);
   const full = formatCellFull(value);
   const limit = wrap ? CELL_WRAP_DISPLAY_LIMIT : CELL_DISPLAY_LIMIT;
   const capped = full.length > limit;
   const display = capped ? `${full.slice(0, limit)}…` : full;
   const collapsedLines = !wrap && typeof value === "string" && LINE_BREAK.test(value);
-  const truncated = capped || overflow || collapsedLines;
+  // Cut whatever the column's width: the cell is a button without measuring.
+  const cutAtAnyWidth = capped || collapsedLines;
+  const truncated = cutAtAnyWidth || overflow;
   const valueTypography = cn(
     numeric && "text-right tabular-nums",
     value !== null && typeof value === "object" && "font-mono text-xs",
@@ -1229,16 +1243,23 @@ function TableDataCell({
   );
 
   // The control the person used is replaced, so focus would fall to the page:
-  // expanding moves it to the value, collapsing back to the cell.
+  // expanding moves it to the value, collapsing back to the cell. Nothing is
+  // measured while the cell is expanded, so by the time it collapses the last
+  // measurement may be out of date (a refresh shortened the value, the column
+  // was widened). Unless the cell is cut at any width, collapsing therefore
+  // waits for the collapsed text's own measurement, then focuses the button it
+  // leaves, or the records region when the value now shows in full.
   useLayoutEffect(() => {
     const target = focusAfterToggle.current;
-    focusAfterToggle.current = null;
-    if (target === "value") valueRef.current?.focus({ preventScroll: true });
-    if (target === "cell") {
+    if (target === "value") {
+      focusAfterToggle.current = null;
+      valueRef.current?.focus({ preventScroll: true });
+    } else if (target === "measured cell" || (target === "cell" && cutAtAnyWidth)) {
+      focusAfterToggle.current = null;
       if (buttonRef.current) buttonRef.current.focus({ preventScroll: true });
       else focusRecords();
     }
-  }, [expanded, focusRecords]);
+  }, [expanded, collapseMeasurements, cutAtAnyWidth, focusRecords]);
 
   if (expanded) {
     return (
@@ -1285,7 +1306,7 @@ function TableDataCell({
     <>
       <TooltipText
         tip={full}
-        onOverflowChange={setOverflow}
+        onOverflowChange={reportOverflow}
         overflowAxis={wrap ? "both" : "x"}
         portal
         className={cn(

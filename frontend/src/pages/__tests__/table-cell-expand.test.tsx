@@ -185,6 +185,30 @@ function stubClipboard() {
   return writeText;
 }
 
+/** Every element that takes the focus while `action` runs, in order. */
+async function focusedDuring(action: () => Promise<void>) {
+  const focused: Element[] = [];
+  const record = (event: FocusEvent) => focused.push(event.target as Element);
+  document.addEventListener("focusin", record);
+  try {
+    await action();
+  } finally {
+    document.removeEventListener("focusin", record);
+  }
+  return focused;
+}
+
+/** A collapsed cell's button, named "… (show full value)". */
+function isCellButton(element: Element) {
+  return element.tagName === "BUTTON" && /\(show full value\)$/.test(element.textContent ?? "");
+}
+
+/** The two ways a person collapses an expanded cell, with the value region focused. */
+const COLLAPSE_WITH: [string, (user: ReturnType<typeof userEvent.setup>) => Promise<void>][] = [
+  ["Escape", (user) => user.keyboard("{Escape}")],
+  ["the Collapse button", (user) => user.click(screen.getByRole("button", { name: "Collapse" }))],
+];
+
 const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 
 beforeEach(() => {
@@ -535,6 +559,71 @@ describe("table cell expansion", () => {
       restore();
     }
   });
+
+  // Nothing measures an expanded cell's text, so by the time it collapses the
+  // last measurement can be out of date.
+  it.each(COLLAPSE_WITH)(
+    "after %s, measures the collapsed text before returning focus to the cell",
+    async (_how, collapse) => {
+      let restore = stubOverflowingText("API outage");
+      try {
+        const user = userEvent.setup();
+        renderTable();
+        const records = await screen.findByRole("region", { name: "Records for incidents" });
+        const title = () => screen.getByRole("button", { name: "API outage (show full value)" });
+
+        // Still cut by its column: focus returns to the cell's button.
+        await user.click(await screen.findByRole("button", { name: "API outage (show full value)" }));
+        expect(valueRegion("title")).toHaveFocus();
+        await collapse(user);
+        await waitFor(() => expect(title()).toHaveFocus());
+
+        // The column was widened while the cell was open, so the title now
+        // fits: focus goes to the records, never to a button the measurement
+        // is about to replace, and is not left on <body>.
+        await user.click(title());
+        expect(valueRegion("title")).toHaveFocus();
+        restore();
+        restore = () => {};
+        const focused = await focusedDuring(() => collapse(user));
+        await waitFor(() => expect(records).toHaveFocus());
+        expect(document.activeElement).not.toBe(document.body);
+        expect(within(cellWithText("API outage")).queryByRole("button")).not.toBeInTheDocument();
+        expect(focused.filter(isCellButton)).toEqual([]);
+        expect(focused.at(-1)).toBe(records);
+      } finally {
+        restore();
+      }
+    },
+  );
+
+  it.each(COLLAPSE_WITH)(
+    "after %s, focuses the button a refreshed value turns out to need",
+    async (_how, collapse) => {
+      // Short enough for the display limit, but wider than its column.
+      const restore = stubOverflowingText("Pool exhausted");
+      try {
+        const user = userEvent.setup();
+        renderTable();
+        await user.click(await screen.findByRole("button", { name: CAPPED_NOTES }));
+        const region = valueRegion("notes");
+        listRowsMock.mockResolvedValue(rowsResponse({ notes: "Pool exhausted" }));
+        await user.click(screen.getByRole("button", { name: "Refresh records" }));
+        await waitFor(() => expect(region).toHaveTextContent("Pool exhausted"));
+        // The refresh moved the focus to its button; the person returns to the value.
+        region.focus();
+
+        const focused = await focusedDuring(() => collapse(user));
+
+        const cell = await screen.findByRole("button", { name: "Pool exhausted (show full value)" });
+        await waitFor(() => expect(cell).toHaveFocus());
+        expect(focused.at(-1)).toBe(cell);
+        expect(focused).not.toContain(screen.getByRole("region", { name: "Records for incidents" }));
+      } finally {
+        restore();
+      }
+    },
+  );
 
   it("makes a short multi-line string a button, since one line hides its breaks", async () => {
     renderTable();
