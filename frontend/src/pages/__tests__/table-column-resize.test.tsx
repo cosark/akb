@@ -556,6 +556,26 @@ describe("table column resizing", () => {
     expect(localStorage.getItem(KEY)).toBe('{"steps":240}');
   });
 
+  it("names each data column header after its column alone", async () => {
+    vaultInfoMock.mockResolvedValue(writer);
+    renderTable();
+    await screen.findByRole("button", { name: "Actions for row 1" });
+
+    for (const column of COLUMNS) {
+      const header = screen.getByRole("columnheader", { name: column });
+      expect(header).toBe(headerCell(column));
+      // The sort state and the controls inside keep their own names.
+      const sorted = column === "created_at";
+      expect(header).toHaveAttribute("aria-sort", sorted ? "descending" : "none");
+      expect(within(header).getByRole("button", {
+        name: `Sort by ${column}, ${sorted ? "desc" : "not currently sorted"}`,
+      })).toBeInTheDocument();
+      expect(within(header).getByRole("separator", { name: `Resize ${column} column` })).toBeInTheDocument();
+    }
+    expect(screen.getByRole("columnheader", { name: "#" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Row actions" })).toBeInTheDocument();
+  });
+
   it("shows one guide on the column's border on hover and while dragging", async () => {
     const user = userEvent.setup();
     renderTable();

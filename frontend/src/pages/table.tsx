@@ -528,9 +528,13 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                             : ArrowUpDown;
                           const width = columnWidths.get(columnName);
                           return (
+                            // Named after the column alone. Named from its
+                            // content, the header would also read out its sort
+                            // button and resize separator, which have their own names.
                             <th
                               key={columnName}
                               scope="col"
+                              aria-label={columnName}
                               aria-sort={
                                 sorted
                                   ? activeSort.direction === "asc"

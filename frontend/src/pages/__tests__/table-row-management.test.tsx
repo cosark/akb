@@ -202,10 +202,11 @@ describe("table row management", () => {
     const user = userEvent.setup();
     const { beginAccessCheck, reverifyAccess } = renderTable();
     await user.click(await screen.findByRole("button", { name: "Add row" }));
-    await user.type(screen.getByLabelText("title"), "Draft to retain");
+    // In the dialog: the grid's title column header carries the same name.
+    await user.type(within(screen.getByRole("dialog", { name: "Add row" })).getByLabelText("title"), "Draft to retain");
     beginAccessCheck();
     expect(screen.getByTestId("resource-location")).toHaveTextContent("No resource");
-    expect(screen.getByLabelText("title")).toHaveValue("Draft to retain");
+    expect(within(screen.getByRole("dialog", { name: "Add row" })).getByLabelText("title")).toHaveValue("Draft to retain");
     reverifyAccess();
     const dialog = await screen.findByRole("dialog", { name: "Add row" });
     expect(within(dialog).getByLabelText("title")).toHaveValue("Draft to retain");
@@ -246,7 +247,7 @@ describe("table row management", () => {
     const user = userEvent.setup();
     const { beginAccessCheck, reverifyAccess } = renderTable();
     await user.click(await screen.findByRole("button", { name: "Add row" }));
-    await user.type(screen.getByLabelText("title"), "Draft to retain");
+    await user.type(within(screen.getByRole("dialog", { name: "Add row" })).getByLabelText("title"), "Draft to retain");
     beginAccessCheck();
     vaultInfoMock.mockRejectedValue(new Error("Access denied"));
     reverifyAccess();
