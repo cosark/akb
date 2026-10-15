@@ -513,6 +513,46 @@ describe("table column resizing", () => {
     expect(bodyHandle("created_at")).toHaveClass("-right-1");
   });
 
+  it("ends a drag without applying it when the handle loses the pointer capture", async () => {
+    renderTable();
+    await gridReady();
+    layOutRecords(2000);
+    const handle = bodyHandle("steps");
+
+    fireEvent.pointerDown(handle, { pointerId: 7, clientX: 100 });
+    fireEvent.pointerMove(handle, { pointerId: 7, clientX: 300 });
+    expect(guide().style.display).toBe("block");
+    // Another pointer's capture is not this drag's.
+    fireEvent.lostPointerCapture(handle, { pointerId: 8 });
+    expect(document.body.style.cursor).toBe("col-resize");
+
+    // A handle removed mid-drag loses the capture at the document.
+    fireEvent.lostPointerCapture(document, { pointerId: 7 });
+    expectColumnWidth("steps", null);
+    expect(document.body.style.cursor).toBe("");
+    expect(document.body.style.userSelect).toBe("");
+    expect(guide().style.display).toBe("");
+    // The drag is over: a later release applies nothing.
+    fireEvent.pointerUp(window, { pointerId: 7, clientX: 300 });
+    expectColumnWidth("steps", null);
+    expect(localStorage.getItem(KEY)).toBeNull();
+
+    // Lost at the handle itself, before any release.
+    fireEvent.pointerDown(handle, { pointerId: 9, clientX: 100 });
+    fireEvent.pointerMove(handle, { pointerId: 9, clientX: 180 });
+    fireEvent.lostPointerCapture(handle, { pointerId: 9 });
+    expect(document.body.style.cursor).toBe("");
+    fireEvent.pointerUp(handle, { pointerId: 9, clientX: 180 });
+    expectColumnWidth("steps", null);
+
+    // A release still applies: it comes before the capture is lost.
+    fireEvent.pointerDown(handle, { pointerId: 10, clientX: 100 });
+    fireEvent.pointerUp(handle, { pointerId: 10, clientX: 140 });
+    fireEvent.lostPointerCapture(handle, { pointerId: 10 });
+    expectColumnWidth("steps", HEADER_WIDTH + 40);
+    expect(localStorage.getItem(KEY)).toBe('{"steps":240}');
+  });
+
   it("shows one guide on the column's border on hover and while dragging", async () => {
     const user = userEvent.setup();
     renderTable();

@@ -115,10 +115,14 @@ class ColumnResizeController {
     body.cursor = "col-resize";
     body.userSelect = "none";
     // On the window, so a handle that unmounts mid-drag cannot strand the
-    // drag, the body cursor or the selection lock.
+    // drag, the body cursor or the selection lock. Losing the pointer capture
+    // ends the drag without applying it, since a release outside the page
+    // would no longer arrive; a removed handle loses it at the document,
+    // which the window still hears.
     window.addEventListener("pointermove", this.handlePointerMove);
     window.addEventListener("pointerup", this.handlePointerUp);
     window.addEventListener("pointercancel", this.handlePointerCancel);
+    window.addEventListener("lostpointercapture", this.handleLostPointerCapture);
     this.placeGuide(column, this.drag.startEdge);
   }
 
@@ -156,6 +160,14 @@ class ColumnResizeController {
     if (this.drag && event.pointerId === this.drag.pointerId) this.end();
   };
 
+  /**
+   * Ends the drag without applying it. A release never gets here: pointerup
+   * comes first, applies the width and stops listening.
+   */
+  private readonly handleLostPointerCapture = (event: PointerEvent) => {
+    if (this.drag && event.pointerId === this.drag.pointerId) this.end();
+  };
+
   /** The width the drag gives the column with the pointer at `event`. */
   private widthAt(drag: ColumnDrag, event: PointerEvent): number {
     const width = drag.startWidth + this.toContentX(event.clientX) - drag.startX;
@@ -169,6 +181,7 @@ class ColumnResizeController {
     window.removeEventListener("pointermove", this.handlePointerMove);
     window.removeEventListener("pointerup", this.handlePointerUp);
     window.removeEventListener("pointercancel", this.handlePointerCancel);
+    window.removeEventListener("lostpointercapture", this.handleLostPointerCapture);
     const body = document.body.style;
     body.cursor = drag.cursor;
     body.userSelect = drag.userSelect;
