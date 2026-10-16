@@ -17,9 +17,7 @@ import {
 } from "@/contexts/document-create-dialog-context";
 import { useColumnResize } from "@/hooks/use-column-resize";
 import { cn } from "@/lib/utils";
-import { VaultSectionNavigation } from "@/components/vault-navigation-menu";
-import { VaultHeaderActionsProvider } from "@/components/vault-header-actions";
-import { focusedVaultPageForPath, isDocumentWorkspacePath } from "@/lib/vault-workspace";
+import { focusedVaultPageForPath } from "@/lib/vault-workspace";
 
 const TREE_VISIBLE_KEY = "akb.treeVisible";
 const VAULT_COLLAPSED_KEY = "akb.vaultRailCollapsed";
@@ -30,8 +28,8 @@ export interface VaultNavigationControl {
 }
 
 /**
- * Content exploration retains Collections and section links. Vault-level tasks
- * omit both; their header page switcher owns navigation. Explicit rail choices
+ * Content exploration retains Collections; Vault-level tasks omit it. All named
+ * Vault routes share the same header menu. Explicit rail choices
  * survive the presentation change, including browser history and direct entry.
  */
 export function VaultShell() {
@@ -45,7 +43,6 @@ export function VaultShell() {
   } | null>();
   const focusedPage = focusedVaultPageForPath(location.pathname);
   const isFocusedWorkspace = focusedPage !== null;
-  const isDocumentReader = isDocumentWorkspacePath(location.pathname);
   const isGraph = focusedPage === "graph";
   const isDocument = location.pathname.includes("/doc/");
   const isTable = location.pathname.includes("/table/");
@@ -216,7 +213,9 @@ export function VaultShell() {
     const element = workspaceRef.current;
     if (!element) return;
     const measure = () => {
-      setWorkspaceWidth(element.getBoundingClientRect().width);
+      // Rail widths and header requirements are layout CSS pixels. A visual
+      // rect includes CSS zoom and would keep inline rails over a clipped header.
+      setWorkspaceWidth(element.clientWidth);
       setMinimumContentWidth(41 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16));
     };
     measure();
@@ -301,7 +300,6 @@ export function VaultShell() {
     : "calc(100vw - 10rem)";
 
   return (
-    <VaultHeaderActionsProvider>
     <VaultCreateDialogProvider openCreateVault={openCreateVault}>
       <DocumentCreateDialogProvider openCreateDocument={openCreateDocument}>
         <VaultRefreshProvider
@@ -415,8 +413,6 @@ export function VaultShell() {
               showBack={false}
             />}
 
-            {name && !isFocusedWorkspace && !isDocumentReader && <VaultSectionNavigation vault={name} />}
-
             {isGraph || isResourceViewer || isSearch ? (
               <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
                 <ErrorBoundary resetKeys={[location.pathname]}>
@@ -478,6 +474,5 @@ export function VaultShell() {
         </VaultRefreshProvider>
       </DocumentCreateDialogProvider>
     </VaultCreateDialogProvider>
-    </VaultHeaderActionsProvider>
   );
 }

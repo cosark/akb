@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams, type NavigateOptions } from "react-router-dom";
 import {
   AlertTriangle,
   Archive,
@@ -45,6 +45,8 @@ import { useOptionalSearchStatus } from "@/hooks/use-search-status";
 import { SearchStatusStages } from "@/components/search-status-stages";
 import { useVaultRefresh } from "@/contexts/vault-refresh-context";
 import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
+import { useResourceNavigationGuard } from "@/contexts/resource-navigation-context";
+import { useDocumentHistoryGuard } from "@/hooks/use-document-history-guard";
 
 interface TableMeta {
   name: string;
@@ -77,6 +79,7 @@ interface VaultInfo {
 type PublicAccess = "none" | "reader" | "writer";
 type SaveScope = "general" | "access";
 type SettingsSection = SaveScope | "skill" | "danger";
+type PendingExit = { kind: "navigation"; href: string; options?: NavigateOptions } | { kind: "history"; proceed: () => void };
 const SETTINGS_SECTIONS: Array<{ value: SettingsSection; label: string }> = [
   { value: "general", label: "General" },
   { value: "access", label: "Access" },
@@ -130,8 +133,13 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
   const [pendingUnarchive, setPendingUnarchive] = useState(false);
   const [pendingPublicWrite, setPendingPublicWrite] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [guideDraft, setGuideDraft] = useState({ dirty: false, saving: false });
+  const [pendingExit, setPendingExit] = useState<PendingExit | null>(null);
+  const confirmExitFocus = useRef<HTMLElement | null>(null);
+  const exitFromMenu = useRef(false);
   const generalStatusRef = useRef<HTMLSpanElement>(null);
   const accessStatusRef = useRef<HTMLSpanElement>(null);
+  const settingsTabsRef = useRef<HTMLDivElement>(null);
   const settingsMainRef = useRef<HTMLDivElement>(null);
   const generalErrorRef = useRef<HTMLDivElement>(null);
   const accessErrorRef = useRef<HTMLDivElement>(null);
@@ -237,16 +245,45 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
   const accessDirty = Boolean(info && publicAccess !== savedPublic);
   const dirty = descriptionDirty || accessDirty;
   const saving = savingScope !== null;
+  const hasDraft = dirty || guideDraft.dirty;
+  const busy = saving || guideDraft.saving;
+
+  function requestExit(exit: PendingExit) {
+    if (busy || (pendingExit && exit.kind !== "history")) return;
+    if (!pendingExit) {
+      confirmExitFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      exitFromMenu.current = !!confirmExitFocus.current?.closest('[role="menu"]');
+    }
+    setPendingExit(exit);
+  }
+
+  const continueNavigation = useResourceNavigationGuard(hasDraft || busy ? (href, options) => {
+    // All settings panels stay mounted across local tab and hash transitions.
+    if (new URL(href, window.location.origin).pathname === location.pathname) return true;
+    requestExit({ kind: "navigation", href, options });
+    return false;
+  } : null);
+  useDocumentHistoryGuard(hasDraft || busy,
+    proceed => requestExit({ kind: "history", proceed }),
+    destination => destination.pathname !== location.pathname);
+
+  function confirmExit() {
+    if (!pendingExit || busy) return;
+    // Leave drafts intact until navigation actually unmounts this workspace.
+    // A different active workspace guard may still cancel the departure.
+    if (pendingExit.kind === "history") pendingExit.proceed();
+    else continueNavigation(() => navigate(pendingExit.href, pendingExit.options));
+  }
 
   useEffect(() => {
-    if (!dirty || saving) return;
+    if (!hasDraft && !busy) return;
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty, saving]);
+  }, [hasDraft, busy]);
 
   function requestSave(scope: SaveScope) {
     if (!info) return;
@@ -383,6 +420,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
         <div className="shrink-0 border-b border-border sm:px-2 lg:px-3">
           <div className="rail-scroll overflow-x-auto">
             <TabsList
+              ref={settingsTabsRef}
               aria-label="Vault settings sections"
               className="h-12 gap-0 rounded-none bg-transparent p-0"
             >
@@ -417,6 +455,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
           className="rail-scroll min-w-0 flex-1 px-3 py-5 sm:px-5 lg:p-6 xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain"
         >
           <div className="min-w-0 w-full">
+            {verified && busy && <p role="status" className="mb-4 text-sm text-foreground-muted">Saving changes… Keep settings open until this finishes.</p>}
             {loadError && (
               <Alert variant="destructive">
                 {loadError}
@@ -697,6 +736,8 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                     isMirror={info.is_external_git}
                     canManage={canManageSkill}
                     queryKey={["document", name, VAULT_SKILL_PATH, user?.user_id, revision]}
+                    navigationManaged
+                    onDraftStateChange={setGuideDraft}
                   />
                 </TabsContent>
                 <TabsContent
@@ -849,6 +890,28 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
       </span>
 
       <ConfirmDialog
+        open={pendingExit !== null}
+        onOpenChange={open => {
+          if (open || !mountedRef.current) return;
+          if (exitFromMenu.current) {
+            confirmExitFocus.current = [...document.querySelectorAll<HTMLElement>('[data-slot="vault-page-switcher"]')]
+              .find(trigger => trigger.getClientRects().length > 0) ?? null;
+          }
+          if (!confirmExitFocus.current?.isConnected) {
+            confirmExitFocus.current = settingsTabsRef.current?.querySelector<HTMLElement>('[aria-selected="true"]') ?? null;
+          }
+          setPendingExit(null);
+        }}
+        returnFocusRef={confirmExitFocus}
+        title="Discard unsaved settings changes?"
+        description="Your unsaved description, public-access, and vault guide changes will be discarded when you leave."
+        confirmLabel="Discard changes and leave"
+        cancelLabel="Keep editing"
+        variant="destructive"
+        busy={busy}
+        onConfirm={confirmExit}
+      />
+      <ConfirmDialog
         open={verified && pendingArchive}
         onOpenChange={setPendingArchive}
         title={`Archive "${name}"?`}
@@ -895,7 +958,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
         onDeleted={() => {
           if (!mountedRef.current || !verified) return;
           refetchVaults();
-          navigate("/vault");
+          continueNavigation(() => navigate("/vault"));
         }}
       />
     </PageShell>

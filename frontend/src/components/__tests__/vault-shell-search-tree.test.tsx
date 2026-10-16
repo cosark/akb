@@ -117,12 +117,12 @@ describe("VaultShell search collection tree", () => {
     expect(screen.queryByText("Collection tree content")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Expand collections" }));
     expect(screen.getByText("Collection tree content")).toBeTruthy();
-    expect(screen.getByRole("navigation", { name: "Vault sections" })).toHaveTextContent("Public links");
+    expect(screen.queryByRole("navigation", { name: "Vault sections" })).not.toBeInTheDocument();
     expect(within(screen.getByRole("complementary", { name: "Collections" })).queryByRole("navigation")).not.toBeInTheDocument();
   });
 
   it.each(["activity"])(
-    "retains the Vault navigation on the %s tool view",
+    "retains Collections without a second navigation row on the %s tool view",
     async (route) => {
       render(
         <MemoryRouter initialEntries={[`/vault/demo/${route}`]}>
@@ -140,9 +140,7 @@ describe("VaultShell search collection tree", () => {
 
       const routeViewport = document.querySelector('[data-slot="vault-route-viewport"]');
       expect(routeViewport).not.toBeNull();
-      const navigation = screen.getByRole("navigation", { name: "Vault sections" });
-      expect(routeViewport?.previousElementSibling).toContainElement(navigation);
-      expect(routeViewport?.previousElementSibling).toContainElement(screen.getByRole("navigation", { name: "Vault sections" }));
+      expect(screen.queryByRole("navigation", { name: "Vault sections" })).not.toBeInTheDocument();
       expect(within(screen.getByRole("complementary", { name: "Collections" })).queryByRole("link")).not.toBeInTheDocument();
       if (route === "settings") {
         expect(routeViewport).toHaveClass("xl:overflow-hidden");
@@ -173,7 +171,7 @@ describe("VaultShell focused task presentation", () => {
       expect(localStorage.getItem("akb.treeWidth.v2")).toBe("300");
       await user.click(screen.getByRole("link", { name: "Open overview" }));
       expect(screen.getByText("Collection tree content")).toBeInTheDocument();
-      expect(screen.getByRole("navigation", { name: "Vault sections" })).toBeInTheDocument();
+      expect(screen.queryByRole("navigation", { name: "Vault sections" })).not.toBeInTheDocument();
     },
   );
 
@@ -199,7 +197,7 @@ describe("VaultShell focused task presentation", () => {
     expect(screen.getByRole("navigation", { name: "Vaults" })).toBeInTheDocument();
     expect(screen.queryByText("Collection tree content")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Expand collections" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Vault pages, current: Members" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Vault menu for demo" })).toBeInTheDocument();
     expect(localStorage.getItem("akb.treeVisible")).toBe("1");
   });
 });
@@ -229,7 +227,7 @@ describe("VaultShell resource navigation", () => {
       expect(screen.getByText("Collection tree content")).toBeInTheDocument();
     } else {
       expect(screen.getByRole("navigation", { name: "Resource location" })).toHaveTextContent("Resolved resource title");
-      expect(screen.getByRole("button", { name: "Vault pages for demo" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Vault menu for demo" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Open vault navigation" })).toBeInTheDocument();
       expect(screen.queryByText("a-private-url-ref")).not.toBeInTheDocument();
     }

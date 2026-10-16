@@ -40,6 +40,9 @@ interface Props {
   /** Owner-authorized management capability. Read surfaces remain visible. */
   canManage: boolean;
   queryKey?: readonly unknown[];
+  /** A containing workspace can protect all its drafts with one confirmation. */
+  navigationManaged?: boolean;
+  onDraftStateChange?: (state: { dirty: boolean; saving: boolean }) => void;
 }
 
 /**
@@ -62,6 +65,8 @@ export function SkillSection({
   isMirror,
   canManage,
   queryKey = ["document", vault, VAULT_SKILL_PATH],
+  navigationManaged = false,
+  onDraftStateChange,
 }: Props) {
   const { checking } = useAccessVerification();
   const user = useCurrentUser();
@@ -89,6 +94,7 @@ export function SkillSection({
     { kind: "cancel" } | { kind: "navigation"; href: string; options?: NavigateOptions } | { kind: "history"; proceed: () => void } | null
   >(null);
   const dirty = baseBody !== null && draft !== baseBody;
+  useEffect(() => { onDraftStateChange?.({ dirty, saving }); }, [dirty, saving, onDraftStateChange]);
   const changedElsewhere = dirty && baseCommit !== (doc?.current_commit || null);
   const guardNavigation = useCallback((href: string, options?: NavigateOptions) => {
     // Settings categories retain this mounted editor and its draft.
@@ -96,8 +102,8 @@ export function SkillSection({
     setPendingExit({ kind: "navigation", href, options });
     return false;
   }, [location.pathname]);
-  const continueNavigation = useResourceNavigationGuard(dirty || saving ? guardNavigation : null);
-  useDocumentHistoryGuard(dirty || saving, (proceed) => setPendingExit({ kind: "history", proceed }));
+  const continueNavigation = useResourceNavigationGuard(!navigationManaged && (dirty || saving) ? guardNavigation : null);
+  useDocumentHistoryGuard(!navigationManaged && (dirty || saving), (proceed) => setPendingExit({ kind: "history", proceed }));
   useEffect(() => {
     if (!dirty && !saving) return;
     const guard = (event: BeforeUnloadEvent) => {

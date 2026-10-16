@@ -32,27 +32,73 @@ async function fixture(page: Page, dark = false, treeVisible = "1") {
     if (path.endsWith("/auth/config")) json = { schema_version: 2, auth_mode: "local", local_auth: { enabled: true }, keycloak: { enabled: false, browser_session_ready: false }, providers: [], mcp_oauth: { enabled: false } };
     else if (path.endsWith("/auth/me")) json = { user_id: "document-header-owner", username: "fixture", display_name: "Reading reviewer", email: "reviewer@example.invalid", auth_method: "local", is_admin: false };
     else if (path.endsWith("/vaults")) json = { vaults: [{ id: "document-header-vault", name: "fixture", role: "owner" }] };
-    else if (path.endsWith("/info")) json = { name: "fixture", role: "owner", public_access: "none", is_archived: false, is_external_git: false, document_count: 1, collection_count: 1 };
+    else if (path.endsWith("/info")) json = { name: "fixture", role: "owner", description: "Shared reading decisions.", public_access: "none", is_archived: false, is_external_git: false, document_count: 1, collection_count: 1 };
     else if (path.endsWith("/members")) json = { members: [{ user_id: "document-header-owner", username: "fixture", display_name: "Reading reviewer", email: "reviewer@example.invalid", role: "owner", since: "2026-09-01T00:00:00Z" }] };
     else if (path.includes("/browse/")) json = { items: [{ type: "collection", path: "guides", name: "Guides", doc_count: 1 }, { type: "document", path: documentPath, name: title }] };
     else if (path.includes("/publications/")) json = { publications: [] };
     else if (path.endsWith("/graph/overview")) json = { nodes: [], edges: [], nodes_total: 0, edges_total: 0, returned: 0, truncated: false };
+    else if (decodeURIComponent(path).endsWith("/documents/fixture/overview/vault-skill.md")) json = { path: "overview/vault-skill.md", title: "Fixture vault guide", content: "# Fixture guide\n\nKeep shared decisions with their context.", status: "active", current_commit: "aaaaaaaaaaaaa", updated_at: "2026-09-01T00:00:00Z" };
     else if (path.includes("/documents/fixture/") && !path.endsWith("/history")) json = { uri: `akb://fixture/coll/guides/doc/reading.md`, path: documentPath, title, content: "# Reading context\n\nKeep decisions close to their source.", status: "active", current_commit: "aaaaaaaaaaaaa", updated_at: "2026-09-01T00:00:00Z" };
     return route.fulfill({ json });
   });
 }
+
+async function revealVaultNavigation(page: Page) {
+  const trigger = page.getByRole("button", { name: "Open vault navigation", exact: true });
+  const drawer = await trigger.isVisible();
+  if (drawer) await trigger.click();
+  return drawer;
+}
+
+for (const width of [375, 1440]) for (const [suffix, label, selected] of [
+  ["", "Overview", "Overview"],
+  ["/", "Overview", "Overview"],
+  ["/search", "Search", null],
+  ["/activity", "Activity", null],
+] as const) test(`Vault menu and passive location remain consistent on ${suffix || "Overview"} at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  await fixture(page);
+  await page.goto(`/vault/fixture${suffix}`);
+  const trigger = page.getByRole("button", { name: "Vault menu for fixture", exact: true });
+  const location = page.getByRole("navigation", { name: "Current page", exact: true });
+  await expect(trigger).toHaveCount(1);
+  await expect(trigger).toHaveText("Vault menu");
+  await expect(trigger).toBeInViewport({ ratio: 1 });
+  await expect(location.locator('[aria-current="page"]')).toHaveText(label);
+  await expect(location.getByRole("button")).toHaveCount(0);
+  await expect(location.getByRole("link", { name: "fixture", exact: true })).toHaveAttribute("href", "/vault/fixture");
+  await expect(page.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
+  const triggerBox = (await trigger.boundingBox())!;
+  const locationBox = (await location.boundingBox())!;
+  expect(triggerBox.x + triggerBox.width).toBeLessThanOrEqual(locationBox.x);
+  await trigger.click();
+  const menu = page.getByRole("menu", { name: "Vault pages", exact: true });
+  await expect(menu.getByRole("menuitem")).toHaveCount(5);
+  await expect(menu.locator('[aria-current="page"]')).toHaveCount(selected ? 1 : 0);
+  if (selected) await expect(menu.getByRole("menuitem", { name: selected, exact: true })).toHaveAttribute("aria-current", "page");
+  for (const [name, href] of destinations) await expect(menu.getByRole("menuitem", { name, exact: true })).toHaveAttribute("href", href);
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
+  const drawer = await revealVaultNavigation(page);
+  await expect(page.locator('[data-slot="vault-collections-sidebar"]').getByRole("tree", { name: "fixture explorer", exact: true })).toBeVisible();
+  if (drawer) await page.keyboard.press("Escape");
+  await location.getByRole("link", { name: "fixture", exact: true }).click();
+  await expect(page).toHaveURL(url => url.pathname === "/vault/fixture");
+  await expect(location.locator('[aria-current="page"]')).toHaveText("Overview");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
 
 for (const width of [375, 1440]) for (const dark of [false, true]) {
   test(`document header owns Vault links and reading tools at ${width}px ${dark ? "dark" : "light"}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     await fixture(page, dark);
     await page.goto(documentUrl);
-    const trigger = page.getByRole("button", { name: "Vault pages for fixture", exact: true });
+    const trigger = page.getByRole("button", { name: "Vault menu for fixture", exact: true });
     const location = page.getByRole("navigation", { name: "Resource location", exact: true });
     const tools = page.getByRole("group", { name: "Document reading tools", exact: true });
     await expect(page.getByRole("heading", { name: "Reading context", exact: true })).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
-    await expect(trigger).toHaveText("Vault");
+    await expect(trigger).toHaveText("Vault menu");
     await expect(trigger).toBeInViewport({ ratio: 1 });
     await expect(location).toContainText(title);
     await expect(location.getByRole("button", { name: title, exact: true })).toHaveCount(0);
@@ -81,8 +127,16 @@ for (const width of [375, 1440]) for (const dark of [false, true]) {
       await trigger.click();
       await menu.getByRole("menuitem", { name, exact: true }).click();
       await expect(page).toHaveURL(url => url.pathname === href);
-      if (name === "Overview") await expect(page.getByRole("navigation", { name: "Vault sections", exact: true })).toBeVisible();
-      else await expect(page.getByRole("button", { name: `Vault pages, current: ${name}`, exact: true })).toBeVisible();
+      await expect(trigger).toBeVisible();
+      await expect(trigger).toHaveText("Vault menu");
+      await expect(page.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
+      const currentPage = page.getByRole("navigation", { name: "Current page", exact: true });
+      await expect(currentPage.locator('[aria-current="page"]')).toHaveText(name);
+      await expect(currentPage.getByRole("button")).toHaveCount(0);
+      await trigger.click();
+      await expect(menu.locator('[aria-current="page"]')).toHaveCount(1);
+      await expect(menu.getByRole("menuitem", { name, exact: true })).toHaveAttribute("aria-current", "page");
+      await page.keyboard.press("Escape");
       await page.goBack();
       await expect(location).toContainText(title);
       await expect(trigger).toBeVisible();
@@ -103,15 +157,19 @@ for (const treeVisible of ["0", "1"]) test(`document header navigation preserves
   await fixture(page, false, treeVisible);
   await page.goto(documentUrl);
   const collections = page.locator('[data-slot="vault-collections-sidebar"]');
+  const initialDrawer = await revealVaultNavigation(page);
   if (treeVisible === "1") await expect(collections.getByRole("tree", { name: "fixture explorer", exact: true })).toBeVisible();
   else await expect(page.getByRole("button", { name: "Expand collections", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Vault pages for fixture", exact: true }).click();
+  if (initialDrawer) await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Vault menu for fixture", exact: true }).click();
   await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
   await expect(collections).toHaveCount(0);
   await page.goBack();
-  await expect(page.getByRole("button", { name: "Vault pages for fixture", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Vault menu for fixture", exact: true })).toBeVisible();
+  const restoredDrawer = await revealVaultNavigation(page);
   if (treeVisible === "1") await expect(collections.getByRole("tree", { name: "fixture explorer", exact: true })).toBeVisible();
   else await expect(page.getByRole("button", { name: "Expand collections", exact: true })).toBeVisible();
+  if (restoredDrawer) await page.keyboard.press("Escape");
   expect(await page.evaluate(() => [localStorage.getItem("akb.treeVisible"), localStorage.getItem("akb.treeWidth.v2")])).toEqual([treeVisible, "286"]);
 });
 
@@ -123,7 +181,7 @@ for (const width of [375, 1440]) test(`modified pointer header links preserve th
   const editor = page.getByRole("textbox", { name: "Document body (markdown)", exact: true });
   await editor.fill("Keep this draft in the original tab.");
   await expect(page.getByRole("group", { name: "Document publishing", exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "Vault pages for fixture", exact: true }).click();
+  await page.getByRole("button", { name: "Vault menu for fixture", exact: true }).click();
   const popupPromise = context.waitForEvent("page");
   await page.getByRole("menuitem", { name: "Settings", exact: true }).click({ modifiers: ["ControlOrMeta"] });
   const popup = await popupPromise;
@@ -153,7 +211,7 @@ for (const width of [375, 1440]) test(`header navigation waits for an active ima
     await page.getByRole("button", { name: "Insert image", exact: true }).click();
     await (await chooserPromise).setFiles({ name: "diagram.png", mimeType: "image/png", buffer: bytes });
     await expect(page.getByText("Uploading image…", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Vault pages for fixture", exact: true }).click();
+    await page.getByRole("button", { name: "Vault menu for fixture", exact: true }).click();
     await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
     const confirmation = page.getByRole("dialog", { name: "Leave this document?", exact: true });
     await expect(confirmation).toContainText("An image is still uploading");
@@ -163,11 +221,86 @@ for (const width of [375, 1440]) test(`header navigation waits for an active ima
     await expect(page.getByRole("button", { name: "Save changes", exact: true })).toBeDisabled();
     finishUpload();
     await expect(page.getByRole("button", { name: "Remove image: diagram", exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Vault pages for fixture", exact: true }).click();
+    await page.getByRole("button", { name: "Vault menu for fixture", exact: true }).click();
     await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
     await confirmation.getByRole("button", { name: "Leave document", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Vault pages, current: Settings", exact: true })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Current page", exact: true }).locator('[aria-current="page"]')).toHaveText("Settings");
   } finally {
     finishUpload();
   }
 });
+
+for (const width of [375, 1440]) for (const aggregate of [false, true]) {
+  test(`Vault menu protects ${aggregate ? "all settings drafts" : "the description draft"} while local history remains usable at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await fixture(page);
+    const mutations: string[] = [];
+    page.on("request", request => {
+      const pathname = new URL(request.url()).pathname;
+      if (!["GET", "HEAD", "OPTIONS"].includes(request.method())
+        && (pathname.startsWith("/api/v1/vaults/fixture") || pathname.startsWith("/api/v1/documents/fixture/"))) mutations.push(pathname);
+    });
+    await page.goto("/vault/fixture/members");
+    const trigger = page.getByRole("button", { name: "Vault menu for fixture", exact: true });
+    await trigger.click();
+    await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+    const description = page.getByRole("textbox", { name: "Description", exact: true });
+    const draft = "An unsaved description stays here until I choose to leave.";
+    const guideDraft = "# Unsaved guide\n\nKeep this guide with the other settings drafts.";
+    await expect(description).toHaveValue("Shared reading decisions.");
+    await description.fill(draft);
+    await page.getByRole("tab", { name: "Access", exact: true }).click();
+    await expect(page).toHaveURL(/\/settings#access$/);
+    if (aggregate) {
+      await page.getByRole("radio", { name: "Public · read", exact: true }).click();
+      await page.getByRole("tab", { name: "Vault guide", exact: true }).click();
+      await page.getByRole("tab", { name: "Edit", exact: true }).click();
+      await page.getByRole("textbox", { name: "Vault guide body", exact: true }).fill(guideDraft);
+      await page.goBack();
+      await expect(page.getByRole("tab", { name: "Access", exact: true })).toHaveAttribute("aria-selected", "true");
+    }
+    await page.goBack();
+    await expect(page.getByRole("tab", { name: "General", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(description).toHaveValue(draft);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    if (aggregate) {
+      await page.goForward();
+      await expect(page.getByRole("radio", { name: "Public · read", exact: true })).toBeChecked();
+      await page.goForward();
+      await expect(page.getByRole("textbox", { name: "Vault guide body", exact: true })).toHaveValue(guideDraft);
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+    }
+    await trigger.click();
+    await page.getByRole("menuitem", { name: "Members", exact: true }).click();
+    const confirmation = page.getByRole("dialog", { name: "Discard unsaved settings changes?", exact: true });
+    await expect(confirmation).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+    await expect(page.getByRole("menu", { name: "Vault pages", exact: true })).toHaveCount(0);
+    await expect(page).toHaveURL(url => url.pathname === "/vault/fixture/settings");
+    await confirmation.getByRole("button", { name: "Keep editing", exact: true }).click();
+    await expect(trigger).toBeFocused();
+    if (aggregate) {
+      await expect(page.getByRole("textbox", { name: "Vault guide body", exact: true })).toHaveValue(guideDraft);
+      await page.getByRole("tab", { name: "General", exact: true }).click();
+    }
+    await expect(description).toHaveValue(draft);
+    if (aggregate) {
+      await page.getByRole("tab", { name: "Access", exact: true }).click();
+      await expect(page.getByRole("radio", { name: "Public · read", exact: true })).toBeChecked();
+      await page.getByRole("tab", { name: "Vault guide", exact: true }).click();
+      await expect(page.getByRole("textbox", { name: "Vault guide body", exact: true })).toHaveValue(guideDraft);
+    }
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await trigger.click();
+    await page.getByRole("menuitem", { name: "Members", exact: true }).click();
+    await confirmation.getByRole("button", { name: "Discard changes and leave", exact: true }).click();
+    await expect(page).toHaveURL(/\/vault\/fixture\/members$/);
+    await expect(page.getByRole("navigation", { name: "Current page", exact: true }).locator('[aria-current="page"]')).toHaveText("Members");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(mutations).toEqual([]);
+    await page.goBack();
+    await page.getByRole("tab", { name: "General", exact: true }).click();
+    await expect(description).toHaveValue("Shared reading decisions.");
+    expect(mutations).toEqual([]);
+  });
+}

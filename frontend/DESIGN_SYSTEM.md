@@ -264,19 +264,23 @@ an `sr-only` summary, never the only signal.
   changes density. The desktop header's left side holds a compact 14px current
   page label on ordinary routes. Named Vault routes instead show the Vault /
   current-page breadcrumb; resources use the resolved Vault / Collection /
-  human-title trail. Focused Vault tasks (Settings, Members, Public links and
-  Graph) replace their passive current-page label with a compact, labelled
-  `Vault / Settings ▾` page switcher. Its nonmodal menu uses real links for
-  Overview, Graph, Public links, Members and Settings, marks the current page,
-  supports keyboard selection/Escape, and does not lock scrolling. The Vault
-  crumb still opens Overview. No menu is added to a resource's human title. An
+  human-title trail. Every named Vault route begins with the same independent
+  `Vault menu ▾` button before the breadcrumb, separated by one quiet hairline.
+  Its name, position and treatment never change with the destination. The
+  nonmodal menu uses real links for Overview, Graph, Public links, Members and
+  Settings; a divider separates content destinations from Members / Settings.
+  Only the actual current destination is checked inside the menu. Document,
+  File, Table, Search and Activity do not imply Overview is selected. The menu
+  supports keyboard selection/Escape and does not lock scrolling. Breadcrumbs
+  remain location-only: the Vault crumb opens Overview and the current page or
+  human title is passive text, never a page-switching control. An
   ordinary page label is preceded by a quiet 16px Lucide page icon, matching its sidebar entry;
   the adjacent text supplies its accessible name, so the glyph is decorative. It is
   location chrome, not another H1 or a card. Long names truncate without
-  displacing account actions. Content-exploration pages have one dedicated section-navigation
-  row below the header; File and Table readers retain this same row. Document
-  readers instead put an independent labelled `Vault` page menu before their
-  breadcrumb, keeping Collections but omitting the middle section row. All named
+  displacing account actions. No Vault route adds a middle section-navigation
+  row, including Overview, Search, Activity, File and Table. Content exploration
+  still keeps Collections; focused tasks omit that explorer independently of
+  the shared menu. All named
   Vault pages share `VaultBreadcrumb` with resource readers: one leading Box,
   text-only path and current label, matching separators, spacing and emphasis.
   Ordinary Vault sections do not repeat their tab icon in the trail; only
@@ -304,11 +308,11 @@ an `sr-only` summary, never the only signal.
   (white in light mode, slate in dark), with a bottom hairline separating each
   navigation level. Keep the global header's bottom
   hairline visible on every Vault route, including the unselected Vault index;
-  preserve the 56px header and full-height navigation rail alignment. Content
-  exploration retains its 40px section row; document readers and focused Vault tasks omit that row.
+  preserve the 56px header and full-height navigation rail alignment. The
+  shared Vault menu replaces the section row on every named Vault route.
   Home instead uses the common header's `paper`
-  variant to continue its `surface` canvas. Full Search routes also use `paper`
-  (including their Vault section row). They retain the common page identity,
+  variant to continue its `surface` canvas. Full Search routes also use `paper`.
+  They retain the common page identity,
   global quick-search trigger and profile; their editable query belongs to the
   page command row below. Legacy Account Settings deep links use Home behind
   the dialog, with a `paper` header (including session verification). The dialog's
@@ -317,6 +321,10 @@ an `sr-only` summary, never the only signal.
   token radii. The account trigger is a quiet avatar/name/chevron disclosure,
   not a raised outlined card; keep the name from `sm`, with full identity in the
   accessible name, tooltip and open menu. Do not add unrelated shortcut buttons.
+  In a Vault header narrower than 44rem of actual available width, including
+  zoomed layouts, keep the account avatar and hide its repeated name/chevron
+  before sacrificing the resource location. Its full accessible name, title
+  and opened account menu remain unchanged; ordinary widths keep the name.
   Loading chrome reserves the same rail width as the destination route.
   From `lg`, a compact passive `N indexing` badge immediately left of Search
   reports pending search chunks across accessible Vaults. It is not a button and
@@ -505,13 +513,12 @@ an `sr-only` summary, never the only signal.
   The app header begins after the combined
   navigation width and tracks both resize handles and collapsed states. The
   resource command row remains below it; desktop reading controls remain `h-8`.
-  Overview, Search, Activity, File and Table readers share one
-  flat section-navigation row above their working content and outside its scroll
-  region. Its real links begin with Overview / Graph / Public links.
-  Members / Settings immediately follow the content destinations, with a short
-  neutral divider before Members rather than a large gap across the workspace.
+  Overview, Search, Activity, File and Table readers share the same header-level
+  Vault menu as documents and focused tasks. No second navigation row consumes
+  working height. The menu order is Overview / Graph / Public links, then a
+  neutral divider before Members / Settings.
   The global header owns the only quick-search entry point; do not duplicate
-  it as a field, button, or Search destination in this section row. Named Vault
+  it as a field, button, or Search destination in the Vault menu. Named Vault
   routes default to that Vault each time the dialog opens; Home, account Settings,
   the Vault index and the creation route default to all accessible Vaults.
   A shared scope control sits inside the modal and full-page query fields.
@@ -539,37 +546,25 @@ an `sr-only` summary, never the only signal.
   query and resource kind to the existing full search route. Document results keep
   the preview-and-return flow; the app-level resource navigation guard protects
   unsaved edits for both scoped and all-Vault results.
-  All links and More follow the same left-to-right flow.
-  The divider's padding participates in overflow measurements, not unmeasured margins.
-  When links no longer fit, measure the actual label/icon widths and move the
-  trailing destinations into a labelled More disclosure. Keep Overview and the
-  actual current destination visible where both fit; at very narrow widths the
-  current destination takes priority. Preserve the original link order.
-  This is purpose-based grouping, not measured usage frequency or a permission gate.
-  Use 14px icon-and-label links, neutral hover, and a
-  teal underline plus stronger weight for the current destination. Desktop links
-  are 40px high; mobile links are 44px. The row never wraps or creates horizontal
-  page scroll. The nonmodal More menu uses real destination links, supports
-  keyboard navigation and Escape, and does not lock the page scrollbar.
-  Resizing must restore focus if a destination moves into overflow.
-  Overview owns a selected
-  state on the exact Vault root; Activity does not select it. Both the Vault list
-  and Vault breadcrumb also return there, including when reselecting the current
-  Vault. File and Table retain the same navigation without falsely
-  selecting Overview; their breadcrumb and tree identify the current resource.
-  Document readers replace this row with an independent `Vault` menu before
-  the breadcrumb, never on the document title or Vault-name link. The menu
-  exposes the same five real destinations with no falsely selected Overview,
-  remains nonmodal, and preserves modified-link, Escape and editor-leave behavior.
-  Collections and its stored visibility/width remain available on documents.
-  Creation and redirect routes omit the row. Previews do not mount it inside
-  their dialog; the launching workspace remains inactive until dismissal.
-  Focused Vault tasks have no section row or Collections tree, collapsed
+  The independent `Vault menu` trigger is non-shrinking, uses 14px medium text,
+  a quiet outline and a chevron, and retains its label on narrow screens.
+  Its height is 36px on desktop and 44px on mobile. Location text yields space
+  before the trigger or account tools. The bounded menu uses neutral hover,
+  explicit current-page check/text and visible keyboard focus in both themes.
+  Overview is current only at the exact Vault root (including a trailing slash),
+  never while reading resources or Activity. Both the Vault list and Vault
+  breadcrumb return to Overview, including when reselecting the current Vault.
+  The menu retains real new-tab links, Escape focus restoration and the same
+  unsaved-edit guard on every destination, including Settings. Choosing a new
+  destination closes the menu without restoring focus over a leave confirmation.
+  Collections and its stored visibility/width remain available on Overview and
+  resource readers. Previews do not mount a second Vault menu inside their
+  dialog; the launching workspace remains inactive until dismissal.
+  Focused Vault tasks have no Collections tree, collapsed
   Collections strip, tree resize handle, or Collections in their mobile drawer.
   Workspace and Vault selection remain available; the header's page switcher
-  provides the sole page-navigation menu there. Content exploration does not
-  duplicate its section row with this switcher. Document readers use that same
-  menu with the explicit `Vault` label rather than a current-section label.
+  provides the sole page-navigation menu, with exactly the same placement and
+  label as content routes. The current page label never becomes a menu.
   Route ownership, including
   direct links and trailing slashes, selects the mode synchronously; it never
   changes stored tree visibility or width. Returning to content restores the
@@ -581,7 +576,9 @@ an `sr-only` summary, never the only signal.
   navigator temporarily uses its existing drawer. The header exposes its toggle;
   Escape/backdrop dismiss it. This does not write saved widths or collapse
   preferences, and expanding the workspace restores inline rails. Do not oscillate
-  based on the drawer's own rendered width.
+  based on the drawer's own rendered width. Compare layout CSS pixels for the
+  workspace, rails and header controls, including the fixed Vault menu, so zoom
+  cannot keep an inline navigator while clipping the location trail.
   Mobile retains its existing drawer and `h-10` navigation headers.
   Content-oriented Vault routes retain the user's Collections preference. Focused
   task routes omit the explorer without overwriting that preference. The collapsed content rail leaves only
@@ -592,8 +589,8 @@ an `sr-only` summary, never the only signal.
   masthead: Overview alone uses the compact Vault identity header. Operational
   routes begin directly with the control or data surface that performs the task
   (search form, roster toolbar, publication list, settings local nav) and retain
-  an `sr-only` H1 for route orientation and heading hierarchy. The active Vault
-  tab and breadcrumb already provide visible location context; do not repeat it.
+  an `sr-only` H1 for route orientation and heading hierarchy. The shared
+  breadcrumb already provides visible location context; do not repeat it.
   Account Settings uses one global modal above the current route, not a page
   or extra workspace rail. Desktop width is capped at 1040px and height at
   760px with 24px viewport clearance. A 56px title row, 208px grouped navigation
@@ -645,6 +642,13 @@ an `sr-only` summary, never the only signal.
   measure; guide and operational panels can use 64rem. Keep one content scroll
   region below the tabs, with no nested navigation, statistics rail or filler
   cards. Only the tab row may scroll horizontally.
+  General, Access and Vault guide share one workspace-level leave confirmation.
+  Moving among local tabs, including Back/Forward between their hashes, retains
+  drafts without a warning. Leaving the workspace asks once for all unsaved
+  scopes; Keep editing retains every draft, while a pending save blocks departure.
+  A confirmed departure never clears one draft before another guard can cancel
+  navigation. Cancelling a menu-origin departure returns focus to the visible
+  Vault menu, with the selected settings tab as a fallback.
   The expanded Vaults rail and Collections explorer share `RailIdentity`,
   `RailManagement`, `RailCollapseButton`, `RailFilterToggle`, and `RailFilterField`.
   Their grammar is identity (56px desktop / 40px mobile), management (40px),
@@ -875,9 +879,9 @@ an `sr-only` summary, never the only signal.
   location trail (`Vault / Collection ancestry / human title (kind)`) and one
   `ResourceCommandRow`. Document metadata and reading tools share this row;
   all three readers use a flat full-width canvas. Desktop puts the
-  trail in the existing 56px app header. File and Table retain the shared Vault
-  section-navigation row below it. Documents omit that row and use a labelled
-  `Vault` page menu before the breadcrumb; a separate command row owns resource
+  trail in the existing 56px app header. All readers use the same independent
+  `Vault menu` before their breadcrumb, without a middle section-navigation row;
+  a separate command row owns resource
   actions and optional metadata. Do not add another Explore menu or menu on the title.
   Collections remains dedicated to browsing resources. The Vault crumb is a direct Overview
   link. Location never inherits metadata's small-screen hiding rules; mobile
@@ -900,6 +904,11 @@ an `sr-only` summary, never the only signal.
   decorative and the resource kind available to assistive technology without
   repeating it as a visible text suffix. Truncated Collection links reveal their
   complete name on hover/focus.
+  Below 20rem of actual resource-trail width, the leading Vault link keeps its
+  Box in a 36px-wide target with its full name available to assistive technology
+  and in its title. Hide only its visual text so the current resource title
+  receives space before ancestors. The direct Overview destination and ancestry
+  disclosure remain reachable; the global Vault menu keeps its explicit label.
   The current title is passive text, never a second navigation menu or an
   expansion control. Truncated titles reveal their full value on hover/focus;
   Document info also wraps the full title for touch access.
@@ -1382,8 +1391,8 @@ page; tables and files go directly to their native resource. The full Search rou
 an explicit advanced-search destination for Literal mode, Vault scope, and type
 filters; opening the search panel by itself never changes browser history.
 The app header is the quick-search entry; Collection overflow instead scopes
-the local sidebar name filter. The Vault section row has no
-duplicate search control. Header openings default to the route's Vault, or all accessible
+the local sidebar name filter. The Vault menu has no duplicate search control.
+Header openings default to the route's Vault, or all accessible
 Vaults outside a named Vault route. A manual scope change remains in effect while
 the panel is open and immediately invalidates old results; empty results never
 silently expand the scope. An explicit `Search all vaults instead` action does.

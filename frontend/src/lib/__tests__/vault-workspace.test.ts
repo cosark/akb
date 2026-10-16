@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { focusedVaultPageForPath, isDocumentWorkspacePath } from "../vault-workspace";
+import { focusedVaultPageForPath, vaultMenuPageForComponent } from "../vault-workspace";
 
 describe("focused Vault route ownership", () => {
   it.each([
@@ -15,13 +15,13 @@ describe("focused Vault route ownership", () => {
   });
 });
 
-describe("document reader route ownership", () => {
+describe("Vault menu current destination", () => {
   it.each([
-    ["/vault/team/doc/note", true], ["/vault/team/doc/note/", true],
-    ["/vault/team/doc/notes%2Fhello.md", true], ["/vault/team/doc/new", false],
-    ["/vault/team/file/doc", false], ["/vault/team/table/doc", false],
-    ["/vault/doc/settings", false], ["/vault/team", false], ["/search", false],
-  ])("resolves %s as a document reader: %s", (path, expected) => {
-    expect(isDocumentWorkspacePath(path)).toBe(expected);
+    ["VaultPage", "overview"], ["GraphPage", "graph"],
+    ["PublicationsPage", "publish"], ["VaultMembersPage", "members"], ["VaultSettingsPage", "settings"],
+    ["DocumentPage", null], ["DocumentNewPage", null], ["FilePage", null], ["TablePage", null],
+    ["SearchPage", null], ["VaultActivityPage", null], ["NotFoundPage", null],
+  ])("resolves %s as %s without selecting an unrelated page", (component, expected) => {
+    expect(vaultMenuPageForComponent(component)).toBe(expected);
   });
 });

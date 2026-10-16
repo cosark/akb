@@ -9,8 +9,6 @@ import DocumentPage from "@/pages/document";
 import { readRecentDocumentViews } from "@/lib/recent-document-views";
 import { listDocumentEditDrafts } from "@/lib/document-draft";
 import { ResourceNavigationProvider, useResourceNavigation } from "@/contexts/resource-navigation-context";
-import { VaultHeaderActionsProvider } from "@/components/vault-header-actions";
-import { VaultSectionNavigation } from "@/components/vault-navigation-menu";
 
 const editorAssetIds = vi.hoisted(() => ({ value: [] as readonly string[] }));
 const editorCallbacks = vi.hoisted(() => ({
@@ -269,13 +267,11 @@ function renderAt(url: string, withNavigation = false, initialState?: unknown) {
         <CurrentUserProvider user={access.user ?? CURRENT_USER} checking={access.checking} revision={access.revision}>
           <VaultRefreshProvider refetchVaults={vi.fn()} refetchTree={vi.fn()}>
             <ResourceNavigationProvider>
-            <VaultHeaderActionsProvider>
             {withNavigation && <><GuardedSearchLink /><Link to="/vault/v/doc/notes%2Fsecond.md">Second document</Link></>}
             <Routes>
-              <Route path="/vault/:name/doc/:id" element={<><VaultSectionNavigation vault="v" /><DocumentPage /></>} />
+              <Route path="/vault/:name/doc/:id" element={<DocumentPage />} />
               <Route path="/vault/:name/search" element={<div>Vault search destination</div>} />
             </Routes>
-            </VaultHeaderActionsProvider>
             </ResourceNavigationProvider>
           </VaultRefreshProvider>
         </CurrentUserProvider>

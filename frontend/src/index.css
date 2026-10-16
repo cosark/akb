@@ -276,7 +276,12 @@
 @container vault-toolbar (max-width: 700px) {
   #global-search-trigger { width: 2.25rem; padding-inline: 0; justify-content: center; }
   #global-search-trigger > span { display: none; }
-  [data-testid="header-indexing-status"] { width: 8rem; }
+  /* Indexing stays content-sized: an empty live region reserves no idle slot. */
+}
+/* At zoomed/narrow working widths, preserve location before repeated identity.
+   The avatar retains the complete account name in its label, title and menu. */
+@container vault-toolbar (max-width: 44rem) {
+  [data-slot="account-name"], [data-slot="account-chevron"] { display: none; }
 }
 .vault-app-header > div { overflow-x: auto; }
 

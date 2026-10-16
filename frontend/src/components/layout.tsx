@@ -206,18 +206,21 @@ export function Layout() {
     const search = searchControlsRef.current;
     const account = accountControlsRef.current;
     if (!wide || !search || !account) return;
+    const vaultMenu = search.parentElement?.querySelector<HTMLElement>('[data-slot="vault-page-switcher"]');
     const measure = () => {
       const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-      // Keep a readable location trail, measured search/indexing/
-      // identity controls, outer insets and the optional drawer trigger.
-      setMinimumVaultWorkspaceWidth(search.getBoundingClientRect().width + account.getBoundingClientRect().width + 21.25 * rem);
+      // Compare layout CSS pixels with the rail widths, not zoomed visual rects.
+      // Reserve the independent menu in addition to a readable trail, search /
+      // identity controls, insets, divider and optional navigator trigger.
+      setMinimumVaultWorkspaceWidth(search.offsetWidth + account.offsetWidth + (vaultMenu?.offsetWidth ?? 0) + 22.25 * rem);
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(search);
     observer.observe(account);
+    if (vaultMenu) observer.observe(vaultMenu);
     return () => observer.disconnect();
-  }, [wide, session.status]);
+  }, [wide, session.status, location.pathname]);
 
   function setSidebarCompact(compact: boolean) {
     if (wide) {

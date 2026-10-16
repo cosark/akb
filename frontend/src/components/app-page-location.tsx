@@ -3,7 +3,6 @@ import { useLayoutEffect, useRef } from "react";
 import { ResourceBreadcrumb } from "@/components/resource-breadcrumb";
 import { VaultBreadcrumb } from "@/components/vault-breadcrumb";
 import { VaultPageSwitcher } from "@/components/vault-page-switcher";
-import { focusedVaultPageForComponent } from "@/lib/vault-workspace";
 import { useResourceLocation } from "@/contexts/resource-location-context";
 import { appRouteContract } from "@/app-route-contract";
 import { settingsSection } from "@/lib/settings-sections";
@@ -46,22 +45,20 @@ export function AppPageLocation({ isAdmin = false, mobile = false }: { isAdmin?:
   const section = pathname === "/settings" ? settingsSection(new URLSearchParams(search).get("tab"), isAdmin) : null;
   const [label, Icon] = section ? [section.label, section.icon] : PAGE_IDENTITY[match?.route.component ?? ""] ?? ["Page not found", CircleHelp];
   const vault = match?.route.boundary === "vault-shell" ? match.params.name : undefined;
-  const isDocument = match?.route.component === "DocumentPage";
   const className = `${mobile ? "flex lg:hidden" : "hidden lg:flex"} min-w-0 flex-1 items-center gap-2 overflow-hidden ${mobile ? "" : "pr-4"} text-sm`;
-  const documentMenu = vault && isDocument ? <VaultPageSwitcher vault={vault}
-    onNavigateIntent={() => { focusPageAfterNavigation.current = true; }} /> : null;
+  const vaultMenu = vault ? <>
+    <VaultPageSwitcher vault={vault} onNavigateIntent={() => { focusPageAfterNavigation.current = true; }} />
+    <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
+  </> : null;
   if (vault && resource?.vault === vault) return <div ref={locationElement} data-slot="app-page-location" className={className}>
-    {documentMenu}
+    {vaultMenu}
     <ResourceBreadcrumb location={resource} className="flex-1" />
   </div>;
   if (vault) {
     const isResource = ["DocumentPage", "FilePage", "TablePage"].includes(match?.route.component ?? "");
-    const focusedPage = focusedVaultPageForComponent(match?.route.component ?? "");
     return <div ref={locationElement} data-slot="app-page-location" className={className}>
-      {documentMenu}
+      {vaultMenu}
       <VaultBreadcrumb vault={vault} title={label} className="flex-1"
-        current={focusedPage ? <VaultPageSwitcher vault={vault} page={focusedPage}
-          onNavigateIntent={() => { focusPageAfterNavigation.current = true; }} /> : undefined}
         icon={isResource ? Icon : undefined} kind={isResource ? label : undefined} />
     </div>;
   }

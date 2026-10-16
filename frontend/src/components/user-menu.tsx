@@ -108,10 +108,10 @@ export function UserMenu({ initialUser }: { initialUser?: CurrentUser | null }) 
         >
           {initials}
         </span>
-        <span className="hidden min-w-0 truncate text-sm font-medium normal-case text-foreground sm:block">
+        <span data-slot="account-name" className="hidden min-w-0 truncate text-sm font-medium normal-case text-foreground sm:block">
           {label}
         </span>
-        <ChevronDown className="hidden h-3.5 w-3.5 shrink-0 text-foreground-muted transition-token group-data-[state=open]:rotate-180 sm:block" aria-hidden />
+        <ChevronDown data-slot="account-chevron" className="hidden h-3.5 w-3.5 shrink-0 text-foreground-muted transition-token group-data-[state=open]:rotate-180 sm:block" aria-hidden />
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content

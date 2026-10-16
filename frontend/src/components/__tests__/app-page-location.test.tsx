@@ -19,6 +19,7 @@ describe("App page location", () => {
     expect(within(location).getByText(label)).toHaveAttribute("aria-current", "page");
     expect(location.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
     expect(within(location).queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Vault menu for/ })).not.toBeInTheDocument();
   });
 
   it.each([
@@ -35,14 +36,12 @@ describe("App page location", () => {
     const current = within(location).getByText(label);
     expect(current).toHaveAttribute("aria-current", "page");
     const resourceGlyph = ({ Document: ".lucide-file-text", File: ".lucide-file", Table: ".lucide-table-2" } as Record<string, string>)[label];
-    const focused = ["Members", "Settings", "Public links", "Graph"].includes(label);
-    expect(location.querySelectorAll("svg")).toHaveLength(resourceGlyph || focused ? 2 : 1);
-    if (focused) expect(within(location).getByRole("button", { name: `Vault pages, current: ${label}` })).toBeInTheDocument();
-    if (label === "Document") {
-      expect(screen.getByRole("button", { name: "Vault pages for 팀 Vault" })).toHaveTextContent("Vault");
-      expect(within(location).queryByRole("button", { name: "Vault pages for 팀 Vault" })).not.toBeInTheDocument();
-      expect(current.closest("button")).toBeNull();
-    }
+    expect(location.querySelectorAll("svg")).toHaveLength(resourceGlyph ? 2 : 1);
+    const trigger = screen.getByRole("button", { name: "Vault menu for 팀 Vault" });
+    expect(trigger).toHaveTextContent("Vault menu");
+    expect(location).not.toContainElement(trigger);
+    expect(trigger.compareDocumentPosition(location) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(current.closest("button")).toBeNull();
     if (resourceGlyph) {
       expect(current.compareDocumentPosition(location.querySelector(resourceGlyph)!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     }
@@ -53,7 +52,7 @@ describe("App page location", () => {
   it("offers real scoped links in a nonmodal page menu and restores focus on Escape", async () => {
     const user = userEvent.setup();
     render(<MemoryRouter initialEntries={["/vault/engineering/settings"]}><AppPageLocation /></MemoryRouter>);
-    const trigger = screen.getByRole("button", { name: "Vault pages, current: Settings" });
+    const trigger = screen.getByRole("button", { name: "Vault menu for engineering" });
     await user.click(trigger);
     const menu = screen.getByRole("menu", { name: "Vault pages" });
     expect(within(menu).getAllByRole("menuitem")).toHaveLength(5);
@@ -66,13 +65,14 @@ describe("App page location", () => {
     expect(trigger).toHaveFocus();
     await user.click(trigger);
     await user.click(screen.getByRole("menuitem", { name: "Members" }));
-    expect(await screen.findByRole("button", { name: "Vault pages, current: Members" })).toHaveFocus();
+    expect(await screen.findByRole("button", { name: "Vault menu for engineering" })).toHaveFocus();
+    expect(within(screen.getByRole("navigation", { name: "Current page" })).getByText("Members")).toHaveAttribute("aria-current", "page");
   });
 
   it("gives documents an independent Vault menu without selecting Overview or turning the title into a menu", async () => {
     const user = userEvent.setup();
     render(<MemoryRouter initialEntries={["/vault/%ED%8C%80%20Vault/doc/notes%2Fhello.md"]}><AppPageLocation /></MemoryRouter>);
-    const trigger = screen.getByRole("button", { name: "Vault pages for 팀 Vault" });
+    const trigger = screen.getByRole("button", { name: "Vault menu for 팀 Vault" });
     const trail = screen.getByRole("navigation", { name: "Current page" });
     expect(trail).not.toContainElement(trigger);
     expect(within(trail).getByRole("link", { name: "팀 Vault" })).toHaveAttribute("href", "/vault/%ED%8C%80%20Vault");
@@ -89,6 +89,7 @@ describe("App page location", () => {
     expect(trigger).toHaveFocus();
     await user.click(trigger);
     await user.click(screen.getByRole("menuitem", { name: "Settings" }));
-    expect(await screen.findByRole("button", { name: "Vault pages, current: Settings" })).toHaveFocus();
+    expect(await screen.findByRole("button", { name: "Vault menu for 팀 Vault" })).toHaveFocus();
+    expect(within(screen.getByRole("navigation", { name: "Current page" })).getByText("Settings")).toHaveAttribute("aria-current", "page");
   });
 });
