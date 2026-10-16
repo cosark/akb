@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
@@ -7,7 +8,7 @@ import { VaultRefreshProvider } from "@/contexts/vault-refresh-context";
 import { CurrentUserProvider } from "@/contexts/current-user-context";
 import DocumentPage from "@/pages/document";
 import { readRecentDocumentViews } from "@/lib/recent-document-views";
-import { listDocumentEditDrafts } from "@/lib/document-draft";
+import { documentEditDraftStorageKey, listDocumentEditDrafts } from "@/lib/document-draft";
 import { ResourceNavigationProvider, useResourceNavigation } from "@/contexts/resource-navigation-context";
 
 const editorAssetIds = vi.hoisted(() => ({ value: [] as readonly string[] }));
@@ -309,12 +310,14 @@ function renderPreviewAt(url: string) {
       >
         <CurrentUserProvider user={CURRENT_USER}>
           <VaultRefreshProvider refetchVaults={vi.fn()} refetchTree={vi.fn()}>
+            <ResourceNavigationProvider>
             <Routes>
               <Route
                 path="/vault/:name/doc/:id"
                 element={<DocumentPage presentation="preview" />}
               />
             </Routes>
+            </ResourceNavigationProvider>
           </VaultRefreshProvider>
         </CurrentUserProvider>
         <LocationProbe />
@@ -932,6 +935,93 @@ describe("DocumentPage view toggle", () => {
     expect(screen.getByRole("menuitemradio", { name: "Wide" })).toHaveAttribute("aria-checked", "true");
     await user.click(screen.getByRole("menuitemradio", { name: "Standard" }));
     expect(document.querySelector(".document-reading-wide")).not.toBeInTheDocument();
+  });
+
+  it("autosaves new edits after explicitly discarding an expired recovered draft", async () => {
+    const user = userEvent.setup();
+    getVaultInfoMock.mockResolvedValue({ role: "writer" });
+    const first = renderAt("/vault/v/doc/notes%2Fhello.md?view=edit");
+    await user.type(await screen.findByRole("textbox", { name: "Document title" }), " expired edit");
+    await screen.findByText("Draft saved locally");
+    first.unmount();
+    const draft = listDocumentEditDrafts(CURRENT_USER.user_id, "v", "v:notes/hello.md")[0];
+    localStorage.setItem(documentEditDraftStorageKey(draft.userId, draft.vault, draft.document, draft.tabId, draft.draftId), JSON.stringify({
+      ...draft, expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    }));
+    renderAt("/vault/v/doc/notes%2Fhello.md?view=edit");
+    await screen.findByText("This draft has expired");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    const confirmation = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
+    await user.click(within(confirmation).getByRole("button", { name: "Discard changes" }));
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    await user.clear(screen.getByRole("textbox", { name: "Document title" }));
+    await user.type(screen.getByRole("textbox", { name: "Document title" }), "Fresh title after discard");
+    await screen.findByText("Draft saved locally");
+    expect(listDocumentEditDrafts(CURRENT_USER.user_id, "v", "v:notes/hello.md")[0]).toEqual(
+      expect.objectContaining({ title: "Fresh title after discard" }),
+    );
+  });
+
+  it("retains a recovered draft when StrictMode replays hydration with a cached document", async () => {
+    const user = userEvent.setup();
+    getVaultInfoMock.mockResolvedValue({ role: "writer" });
+    const first = renderAt("/vault/v/doc/notes%2Fhello.md?view=edit");
+    const title = await screen.findByRole("textbox", { name: "Document title" });
+    await user.clear(title);
+    await user.type(title, "Recovered cached title");
+    await user.clear(screen.getByRole("textbox", { name: "Document body (markdown)" }));
+    await user.type(screen.getByRole("textbox", { name: "Document body (markdown)" }), "Recovered cached body");
+    await user.type(screen.getByRole("textbox", { name: "Summary" }), "Recovered summary");
+    await screen.findByText("Draft saved locally");
+    first.unmount();
+
+    render(<StrictMode>
+      <QueryClientProvider client={first.queryClient}>
+        <MemoryRouter initialEntries={["/vault/v/doc/notes%2Fhello.md?view=edit"]}>
+          <CurrentUserProvider user={CURRENT_USER}>
+            <VaultRefreshProvider refetchVaults={vi.fn()} refetchTree={vi.fn()}>
+              <ResourceNavigationProvider>
+                <Routes><Route path="/vault/:name/doc/:id" element={<DocumentPage />} /></Routes>
+              </ResourceNavigationProvider>
+            </VaultRefreshProvider>
+          </CurrentUserProvider>
+        </MemoryRouter>
+      </QueryClientProvider>
+    </StrictMode>);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Document title" })).toHaveValue("Recovered cached title"));
+    expect(screen.getByRole("textbox", { name: "Document body (markdown)" })).toHaveValue("Recovered cached body");
+    expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue("Recovered summary");
+    expect(listDocumentEditDrafts(CURRENT_USER.user_id, "v", "v:notes/hello.md")[0]).toEqual(
+      expect.objectContaining({ title: "Recovered cached title" }),
+    );
+  });
+
+  it("promotes a dirty preview only after confirmation without intercepting the approved replacement again", async () => {
+    const user = userEvent.setup();
+    getVaultInfoMock.mockResolvedValue({ role: "writer" });
+    renderPreviewAt("/vault/v/doc/notes%2Fhello.md");
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    const title = screen.getByRole("textbox", { name: "Document title" });
+    await user.clear(title);
+    await user.type(title, "Unsaved preview title");
+
+    await user.click(screen.getByRole("button", { name: "Open document in vault" }));
+    let confirmation = await screen.findByRole("dialog", { name: "Leave this document?" });
+    await user.click(within(confirmation).getByRole("button", { name: "Keep editing" }));
+    expect(title).toHaveValue("Unsaved preview title");
+    expect(screen.getByTestId("location-state")).toHaveTextContent('"documentPreview":true');
+
+    await user.click(screen.getByRole("button", { name: "Open document in vault" }));
+    confirmation = await screen.findByRole("dialog", { name: "Leave this document?" });
+    await user.click(within(confirmation).getByRole("button", { name: "Leave document" }));
+    await waitFor(() => expect(screen.getByTestId("location-state")).toHaveTextContent("null"));
+    expect(screen.getByTestId("location-search")).toHaveTextContent("view=edit");
+    expect(screen.queryByRole("dialog", { name: "Leave this document?" })).not.toBeInTheDocument();
+    expect(updateDocumentMock).not.toHaveBeenCalled();
+    expect(discardAssetMock).not.toHaveBeenCalled();
+    expect(listDocumentEditDrafts(CURRENT_USER.user_id, "v", "v:notes/hello.md")[0]).toEqual(
+      expect.objectContaining({ title: "Unsaved preview title" }),
+    );
   });
 
   it("keeps preview history state across view tabs and clears it for full-page reading", async () => {

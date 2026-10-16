@@ -273,6 +273,7 @@ function DocumentPageContent({
   const hydratedKey = useRef<number | null>(null);
   const editorHydrationModeRef = useRef<"server" | "draft">("server");
   const documentIdentityRef = useRef<string | null>(null);
+  const hydratedDocumentSnapshotRef = useRef<unknown>(null);
   const editBaseCommitRef = useRef<string | null>(null);
   const draftHydratedForRef = useRef<string | null>(null);
   const draftSessionRef = useRef<StoredDocumentEditDraft | null>(null);
@@ -709,7 +710,10 @@ function DocumentPageContent({
 
   useEffect(() => {
     const d = docQuery.data;
-    if (!d?.path || !name) return;
+    if (!d?.path || !name || hydratedDocumentSnapshotRef.current === d) return;
+    // Effect replay must not replace a recovered draft with the same cached
+    // server snapshot before the restored state has committed.
+    hydratedDocumentSnapshotRef.current = d;
 
     const identity = documentIdentity(name, d);
     const identityChanged = documentIdentityRef.current !== identity;
@@ -727,6 +731,7 @@ function DocumentPageContent({
       documentIdentityRef.current = identity;
       draftHydratedForRef.current = null;
       draftSessionRef.current = null;
+      skipNextDraftSaveRef.current = false;
       draftTabIdRef.current = currentUserId ? documentEditDraftTabId() : null;
       setDocOverride(null);
       setBodyError("");
@@ -879,7 +884,9 @@ function DocumentPageContent({
       (draftStatus === "restored" &&
         draftRevisionRef.current === restoredDraftRevisionRef.current)
     ) {
-      skipNextDraftSaveRef.current = false;
+      // A replay still has the initial clean render's state. Consume this
+      // marker only once the recovered draft has reached a committed render.
+      if (draftStatus === "restored") skipNextDraftSaveRef.current = false;
       return;
     }
     if (!isDirty) {
@@ -1334,6 +1341,7 @@ function DocumentPageContent({
     const draft = draftSessionRef.current;
     const protectedAssets = protectedDraftAssetIds(draft?.draftId);
     latestDraftInputRef.current = null;
+    skipNextDraftSaveRef.current = false;
     const assets = new Set<string>([
       ...(draft?.assetIds || []),
       ...editingAssetIds,
@@ -1393,8 +1401,12 @@ function DocumentPageContent({
           // Direct close also uses Back. Once explicitly confirmed, let that
           // traversal pass; a guarded POP already owns its single-use replay.
           if (!("history" in destination && destination.history)) flushSync(() => setLeavingEditor(true));
-          if ("proceed" in destination) destination.proceed();
-          else continueNavigation(() => navigate(destination.href, destination.options));
+          if ("proceed" in destination) {
+            // Indexed history owns its replay. Router callbacks (such as
+            // preview promotion) must bypass this editor's confirmed guard.
+            if (destination.history) destination.proceed();
+            else continueNavigation(destination.proceed);
+          } else continueNavigation(() => navigate(destination.href, destination.options));
         }
       }}
     />

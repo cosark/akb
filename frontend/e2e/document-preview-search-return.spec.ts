@@ -85,3 +85,28 @@ test("Open in vault promotes the document without reopening global Search", asyn
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page).toHaveURL(/\/vault\/fixture\/doc\//);
 });
+
+for (const dismissal of ["close control", "browser Back"] as const) {
+  test(`dirty preview confirms ${dismissal} once and restores the search session`, async ({ page }) => {
+    const { search, preview } = await openGlobalSearchPreview(page);
+    await preview.getByRole("button", { name: "Edit", exact: true }).click();
+    await preview.getByRole("textbox", { name: "Document title", exact: true }).fill("Unsaved preview title");
+    const exit = async () => {
+      if (dismissal === "close control") await preview.getByRole("button", { name: "Close dialog", exact: true }).click();
+      else await page.evaluate(() => history.back());
+    };
+    const confirmation = page.getByRole("dialog", { name: "Leave this document?", exact: true });
+    await exit();
+    await confirmation.getByRole("button", { name: "Keep editing", exact: true }).click();
+    await expect(preview.getByRole("textbox", { name: "Document title", exact: true })).toHaveValue("Unsaved preview title");
+    await expect(search).toHaveCount(0);
+    await exit();
+    await confirmation.getByRole("button", { name: "Leave document", exact: true }).click();
+    await expect(preview).toHaveCount(0);
+    await expect(confirmation).toHaveCount(0);
+    await expect(search).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+    await expect(page).toHaveURL(/\/search$/);
+    await expect(search.getByRole("combobox", { name: "Search in fixture, handbook" })).toHaveValue("reading");
+  });
+}

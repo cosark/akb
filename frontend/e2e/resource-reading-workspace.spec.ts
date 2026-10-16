@@ -2027,6 +2027,40 @@ for (const scenario of [
   }
 });
 
+for (const entry of ["page", "modal"] as const) test(`dirty preview promotion resumes once after confirmation from ${entry} search`, async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await fixture(page);
+  let writes = 0;
+  page.on("request", request => {
+    if (new URL(request.url()).pathname.includes("/api/") && request.method() !== "GET") writes += 1;
+  });
+  await page.goto("/search?q=reading&source=document");
+  if (entry === "modal") {
+    await page.getByRole("button", { name: "Search knowledge", exact: true }).click();
+    const search = page.getByTestId("global-search-dialog");
+    await search.getByRole("combobox").fill("reading");
+    await search.getByRole("option", { name: /문서 읽기 작업공간/ }).click();
+  } else {
+    await page.getByRole("link", { name: /문서 읽기 작업공간/ }).first().click();
+  }
+  const preview = page.getByTestId("document-preview-dialog");
+  await preview.getByRole("button", { name: "Edit", exact: true }).click();
+  await preview.getByRole("textbox", { name: "Document title", exact: true }).fill("Unsaved preview title");
+  await preview.getByRole("button", { name: "Open document in vault", exact: true }).click();
+  const confirmation = page.getByRole("dialog", { name: "Leave this document?", exact: true });
+  await confirmation.getByRole("button", { name: "Keep editing", exact: true }).click();
+  await expect(preview.getByRole("textbox", { name: "Document title", exact: true })).toHaveValue("Unsaved preview title");
+  await preview.getByRole("button", { name: "Open document in vault", exact: true }).click();
+  await confirmation.getByRole("button", { name: "Leave document", exact: true }).click();
+  await expect(preview).toHaveCount(0);
+  await expect(confirmation).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Document workspace", exact: true })).toHaveAttribute("data-presentation", "page");
+  await expect(page).toHaveURL(url => url.pathname === `/vault/fixture/doc/${encodeURIComponent(path)}` && url.searchParams.get("view") === "edit");
+  await expect(page.getByRole("textbox", { name: "Document title", exact: true })).toHaveValue("Unsaved preview title");
+  expect(await page.evaluate(() => history.state.usr)).toBeNull();
+  expect(writes).toBe(0);
+});
+
 test("preview keeps location and full-page promotion together without section navigation", async ({ page }, testInfo) => {
   await fixture(page);
   await page.goto("/search?q=reading&source=document");
