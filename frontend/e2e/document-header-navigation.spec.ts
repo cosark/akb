@@ -45,6 +45,7 @@ async function fixture(page: Page, dark = false, treeVisible = "1") {
 
 async function revealVaultNavigation(page: Page) {
   const trigger = page.getByRole("button", { name: "Open vault navigation", exact: true });
+  await expect(page.locator("#vault-workspace-navigation:visible").or(trigger)).toBeVisible();
   const drawer = await trigger.isVisible();
   if (drawer) await trigger.click();
   return drawer;
@@ -155,9 +156,21 @@ for (const width of [375, 1440]) for (const dark of [false, true]) {
 for (const treeVisible of ["0", "1"]) test(`document header navigation preserves Collections preference ${treeVisible}`, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await fixture(page, false, treeVisible);
+  let finishIdentity = () => {};
+  const identityPending = new Promise<void>(resolve => { finishIdentity = resolve; });
+  await page.route("**/api/v1/auth/me", async route => {
+    await identityPending;
+    await route.fallback();
+  });
   await page.goto(documentUrl);
   const collections = page.locator('[data-slot="vault-collections-sidebar"]');
-  const initialDrawer = await revealVaultNavigation(page);
+  await expect(page.getByRole("status", { name: "Verifying session", exact: true })).toBeVisible();
+  // Start the navigation helper while identity is pending, before either
+  // the inline rails or responsive drawer trigger can be rendered.
+  const initialNavigation = revealVaultNavigation(page);
+  await expect(page.getByRole("button", { name: "Navigate in fixture", exact: true })).toHaveCount(0);
+  finishIdentity();
+  const initialDrawer = await initialNavigation;
   if (treeVisible === "1") await expect(collections.getByRole("tree", { name: "fixture explorer", exact: true })).toBeVisible();
   else await expect(page.getByRole("button", { name: "Expand collections", exact: true })).toBeVisible();
   if (initialDrawer) await page.keyboard.press("Escape");
