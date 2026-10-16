@@ -624,24 +624,37 @@ an `sr-only` summary, never the only signal.
   and section changes guard unsaved edits or newly generated secrets; pending
   writes block those actions. Nested confirmations close before their parent.
   Restore focus to the invoking control and never persist token secrets.
-  Vault Settings uses one task-focused content column, not another pair of
-  navigation and context rails inside the existing Vault workspace. Four
+  Vault Settings uses a full-working-width settings sheet, not another pair of
+  permanent navigation and context rails inside the Vault workspace. Four
   horizontal underline tabs—General, Access, Vault guide, Advanced—share a
   neutral full-width bottom hairline. Keep only the selected panel visible;
   preserve all in-progress form and guide state when switching. Existing
   `#general`, `#access`, `#skill`, and `#danger` links and browser history select
   the corresponding panel. Tabs span the workspace and start at its left edge
-  with a small inset, never inside a centered max-width container. Keep forms
-  left-aligned at a 64rem maximum reading width and 12/20/24px responsive side
+  with a small inset, never inside a centered max-width container. Every selected
+  category fills the available content width with 12/20/24px responsive side
   padding; tab labels share this content baseline. The tab row
   remains outside the desktop content scroll; use `rail-scroll` inside it.
   Do not reserve a permanent Vault details/inventory column. General owns the
   copyable address, ownership, viewer role/state and available dates alongside
-  the description. Inventory belongs to Overview, public policy to Access,
-  and Operations/lifecycle to Advanced. General and Access use a 48rem form
-  measure; guide and operational panels can use 64rem. Keep one content scroll
-  region below the tabs, with no nested navigation, statistics rail or filler
-  cards. Only the tab row may scroll horizontally.
+  the description. At 56rem of actual content width, General and Access use a
+  connected 3:2 task-local grid: description editing beside immutable Vault
+  identity, or public-policy choices beside member/public-link context. A neutral
+  hairline and `background` surface separate read-only context from `surface`
+  inputs; each save bar belongs only to its editable scope. Below that threshold
+  the same DOM order stacks, with a horizontal divider instead of a vertical rail.
+  Public-access radios include each policy's explanation and an explicit selected
+  check, stacking until their own editor container reaches 42rem rather than
+  borrowing the workspace's width. Preserve short accessible names, arrow-key
+  selection, owner-only writes and public-write confirmation. Inventory stays in
+  Overview. At 64rem, Advanced
+  places processing observations and the separately bounded danger zone beside
+  each other; lifecycle buttons adapt to their own container width. Guide chrome
+  fills the sheet while Preview, Agent view and Edit retain a centered 64rem
+  reading measure. Loading mirrors the expanded task sheet. Keep one content
+  scroll region below the tabs, with no nested navigation, statistics rail,
+  forced viewport-height cards or filler information. Only the tab row may scroll
+  horizontally; long document/table content retains its existing local overflow.
   General, Access and Vault guide share one workspace-level leave confirmation.
   Moving among local tabs, including Back/Forward between their hashes, retains
   drafts without a warning. Leaving the workspace asks once for all unsaved

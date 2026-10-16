@@ -301,7 +301,7 @@ export function SkillSection({
                   {canManage && <TabsTrigger value="edit">Edit</TabsTrigger>}
                 </TabsList>
 
-                <TabsContent value="preview">
+                <TabsContent value="preview" className="mx-auto w-full max-w-5xl">
                   <div className="min-w-0 bg-surface py-4">
                     <MarkdownRender
                       markdown={doc.content || ""}
@@ -315,7 +315,7 @@ export function SkillSection({
                   </div>
                 </TabsContent>
 
-                <TabsContent value="agent">
+                <TabsContent value="agent" className="mx-auto w-full max-w-5xl">
                   <p className="mb-3 max-w-prose text-xs leading-relaxed text-foreground-muted">
                     This is the server-composed payload an agent receives, not
                     merely the stored markdown document.
@@ -324,7 +324,7 @@ export function SkillSection({
                 </TabsContent>
 
                 {canManage && (
-                  <TabsContent value="edit">
+                  <TabsContent value="edit" className="mx-auto w-full max-w-5xl">
                     <Textarea
                       aria-label="Vault guide body"
                       value={draft}
