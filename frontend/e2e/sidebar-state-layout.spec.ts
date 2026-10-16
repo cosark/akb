@@ -56,7 +56,7 @@ test("Vault expansion survives internal routes and history, then resets across t
   const sidebar = page.getByTestId("app-sidebar");
   await expectCompact(page, true);
   const sections = page.getByRole("navigation", { name: "Vault sections" });
-  const vaultMenu = page.getByRole("button", { name: "Vault menu for team", exact: true });
+  const vaultMenu = page.getByRole("button", { name: "Navigate in team", exact: true });
   const currentPage = page.getByRole("navigation", { name: "Current page", exact: true }).locator('[aria-current="page"]');
   await sidebar.getByRole("button", { name: "Expand sidebar", exact: true }).click();
   await vaultMenu.click();

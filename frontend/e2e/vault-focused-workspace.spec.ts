@@ -41,9 +41,9 @@ for (const width of [375, 1920]) for (const dark of [false, true]) for (const [r
     await page.setViewportSize({ width, height: 1000 });
     await fixture(page, dark);
     await page.goto(`/vault/fixture/${route}`);
-    const switcher = page.getByRole("button", { name: "Vault menu for fixture", exact: true });
+    const switcher = page.getByRole("button", { name: "Navigate in fixture", exact: true });
     await expect(switcher).toBeVisible();
-    await expect(switcher).toHaveText("Vault menu");
+    await expect(switcher).toHaveText("Navigate");
     const trail = page.getByRole("navigation", { name: "Current page", exact: true });
     await expect(trail.locator('[aria-current="page"]')).toHaveText(label);
     await expect(trail.getByRole("button")).toHaveCount(0);
@@ -91,7 +91,7 @@ for (const treeVisible of ["0", "1"]) test(`page switching and history preserve 
   await page.setViewportSize({ width: 1920, height: 1000 });
   await fixture(page, false, treeVisible);
   await page.goto("/vault/fixture/settings");
-  const switcher = page.getByRole("button", { name: "Vault menu for fixture", exact: true });
+  const switcher = page.getByRole("button", { name: "Navigate in fixture", exact: true });
   const trail = page.getByRole("navigation", { name: "Current page", exact: true });
   await switcher.focus();
   await page.keyboard.press("Enter");

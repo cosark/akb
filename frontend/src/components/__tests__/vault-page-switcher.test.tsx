@@ -16,8 +16,8 @@ describe("Vault page menu", () => {
   ])("keeps a stable trigger and marks only the actual destination on %s", async (suffix, label) => {
     const user = userEvent.setup();
     renderMenu(`/vault/team${suffix}?filter=anything`);
-    const trigger = screen.getByRole("button", { name: "Vault menu for team" });
-    expect(trigger).toHaveTextContent("Vault menu");
+    const trigger = screen.getByRole("button", { name: "Navigate in team" });
+    expect(trigger).toHaveTextContent("Navigate");
     expect(trigger.querySelector("[aria-current]")).toBeNull();
     await user.click(trigger);
     const menu = screen.getByRole("menu", { name: "Vault pages" });
@@ -37,7 +37,7 @@ describe("Vault page menu", () => {
     "never implies Overview or another section is current on %s", async suffix => {
       const user = userEvent.setup();
       renderMenu(`/vault/team/${suffix}`);
-      await user.click(screen.getByRole("button", { name: "Vault menu for team" }));
+      await user.click(screen.getByRole("button", { name: "Navigate in team" }));
       expect(screen.getByRole("menu", { name: "Vault pages" }).querySelector("[aria-current]")).toBeNull();
     },
   );
@@ -45,7 +45,7 @@ describe("Vault page menu", () => {
   it.each(["/vault", "/search", "/vault/other/members", "/vault/team/unknown", "/vault/new"])(
     "does not render a stale or unselected Vault menu on %s", route => {
       renderMenu(route);
-      expect(screen.queryByRole("button", { name: /Vault menu/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Navigate/ })).not.toBeInTheDocument();
     },
   );
 
@@ -53,7 +53,7 @@ describe("Vault page menu", () => {
     const user = userEvent.setup();
     renderMenu("/vault/%ED%8C%80%20Vault", "팀 Vault");
     await user.tab();
-    const trigger = screen.getByRole("button", { name: "Vault menu for 팀 Vault" });
+    const trigger = screen.getByRole("button", { name: "Navigate in 팀 Vault" });
     expect(trigger).toHaveFocus();
     await user.keyboard("{Enter}");
     const overview = screen.getByRole("menuitem", { name: "Overview" });
@@ -76,7 +76,7 @@ describe("Vault page menu", () => {
       return <VaultPageSwitcher vault="team" />;
     }
     render(<MemoryRouter initialEntries={[route]}><ResourceNavigationProvider><GuardedMenu /></ResourceNavigationProvider></MemoryRouter>);
-    await user.click(screen.getByRole("button", { name: "Vault menu for team" }));
+    await user.click(screen.getByRole("button", { name: "Navigate in team" }));
     await user.click(screen.getByRole("menuitem", { name: "Members" }));
     expect(guard).toHaveBeenCalledExactlyOnceWith("/vault/team/members");
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();

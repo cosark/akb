@@ -47,7 +47,7 @@ for (const dark of [false, true]) for (const width of [375, 1440, 1920, 2560]) {
     const summary = page.getByRole("region", { name: "Vault summary", exact: true });
     const contents = summary.getByRole("region", { name: "Contents", exact: true });
     await expect(contents).toBeVisible();
-    await expect(page.getByRole("button", { name: "Vault menu for fixture", exact: true })).toHaveText("Vault menu");
+    await expect(page.getByRole("button", { name: "Navigate in fixture", exact: true })).toHaveText("Navigate");
     await expect(page.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
     await expect(summary.getByRole("button", { name: "Copy akb://fixture" })).toBeVisible();
     await expect(summary.getByText("owner", { exact: true })).toBeVisible();

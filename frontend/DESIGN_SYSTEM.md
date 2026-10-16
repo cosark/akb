@@ -265,7 +265,7 @@ an `sr-only` summary, never the only signal.
   page label on ordinary routes. Named Vault routes instead show the Vault /
   current-page breadcrumb; resources use the resolved Vault / Collection /
   human-title trail. Every named Vault route begins with the same independent
-  `Vault menu ▾` button before the breadcrumb, separated by one quiet hairline.
+  `Navigate ▾` button before the breadcrumb, separated by one quiet hairline.
   Its name, position and treatment never change with the destination. The
   nonmodal menu uses real links for Overview, Graph, Public links, Members and
   Settings; a divider separates content destinations from Members / Settings.
@@ -546,7 +546,7 @@ an `sr-only` summary, never the only signal.
   query and resource kind to the existing full search route. Document results keep
   the preview-and-return flow; the app-level resource navigation guard protects
   unsaved edits for both scoped and all-Vault results.
-  The independent `Vault menu` trigger is non-shrinking, uses 14px medium text,
+  The independent `Navigate` trigger is non-shrinking, uses 14px medium text,
   a quiet outline and a chevron, and retains its label on narrow screens.
   Its height is 36px on desktop and 44px on mobile. Location text yields space
   before the trigger or account tools. The bounded menu uses neutral hover,
@@ -880,7 +880,7 @@ an `sr-only` summary, never the only signal.
   `ResourceCommandRow`. Document metadata and reading tools share this row;
   all three readers use a flat full-width canvas. Desktop puts the
   trail in the existing 56px app header. All readers use the same independent
-  `Vault menu` before their breadcrumb, without a middle section-navigation row;
+  `Navigate` before their breadcrumb, without a middle section-navigation row;
   a separate command row owns resource
   actions and optional metadata. Do not add another Explore menu or menu on the title.
   Collections remains dedicated to browsing resources. The Vault crumb is a direct Overview

@@ -123,7 +123,7 @@ describe("Vault Settings redesign", () => {
     const { rerender } = render(view());
     fireEvent.change(await screen.findByLabelText("Description"), { target: { value: "Private unsaved description" } });
     rerender(view(true));
-    await user.click(screen.getByRole("button", { name: "Vault menu for platform-docs" }));
+    await user.click(screen.getByRole("button", { name: "Navigate in platform-docs" }));
     await user.click(screen.getByRole("menuitem", { name: "Members" }));
     expect(screen.getByRole("dialog", { name: "Discard unsaved settings changes?" })).not.toHaveTextContent("Private unsaved description");
     await user.click(screen.getByRole("button", { name: "Keep editing" }));
@@ -131,11 +131,11 @@ describe("Vault Settings redesign", () => {
     getVaultInfoMock.mockRejectedValueOnce(new Error("Access could not be verified"));
     rerender(view(false, 1));
     expect(await screen.findByRole("alert")).toHaveTextContent("Access could not be verified");
-    await user.click(screen.getByRole("button", { name: "Vault menu for platform-docs" }));
+    await user.click(screen.getByRole("button", { name: "Navigate in platform-docs" }));
     await user.click(screen.getByRole("menuitem", { name: "Members" }));
     await user.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(screen.getByLabelText("Description")).toHaveValue("Private unsaved description");
-    await user.click(screen.getByRole("button", { name: "Vault menu for platform-docs" }));
+    await user.click(screen.getByRole("button", { name: "Navigate in platform-docs" }));
     await user.click(screen.getByRole("menuitem", { name: "Members" }));
     await user.click(screen.getByRole("button", { name: "Discard changes and leave" }));
     expect(await screen.findByRole("heading", { name: "Vault members" })).toBeVisible();
@@ -211,16 +211,16 @@ describe("Vault Settings redesign", () => {
     } else {
       await user.click(await screen.findByRole("radio", { name: "Public · read" }));
     }
-    await user.click(screen.getByRole("button", { name: "Vault menu for platform-docs" }));
+    await user.click(screen.getByRole("button", { name: "Navigate in platform-docs" }));
     await user.click(screen.getByRole("menuitem", { name: "Members" }));
     const confirmation = screen.getByRole("dialog", { name: "Discard unsaved settings changes?" });
     expect(screen.queryByRole("menu", { name: "Vault pages" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Vault members" })).not.toBeInTheDocument();
     await user.click(within(confirmation).getByRole("button", { name: "Keep editing" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Vault menu for platform-docs" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Navigate in platform-docs" })).toHaveFocus());
     if (scope === "general") expect(screen.getByLabelText("Description")).toHaveValue("Unsaved description");
     else expect(screen.getByRole("radio", { name: "Public · read" })).toBeChecked();
-    await user.click(screen.getByRole("button", { name: "Vault menu for platform-docs" }));
+    await user.click(screen.getByRole("button", { name: "Navigate in platform-docs" }));
     await user.click(screen.getByRole("menuitem", { name: "Members" }));
     await user.click(screen.getByRole("button", { name: "Discard changes and leave" }));
     expect(await screen.findByRole("heading", { name: "Vault members" })).toBeVisible();
@@ -255,7 +255,7 @@ describe("Vault Settings redesign", () => {
     await user.click(screen.getByRole("tab", { name: "Vault guide" }));
     await user.click(await screen.findByRole("tab", { name: "Edit" }));
     fireEvent.change(screen.getByLabelText("Vault guide body"), { target: { value: "Unsaved guide" } });
-    await user.click(screen.getByRole("button", { name: "Vault menu for platform-docs" }));
+    await user.click(screen.getByRole("button", { name: "Navigate in platform-docs" }));
     await user.click(screen.getByRole("menuitem", { name: "Members" }));
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "Keep editing" }));
@@ -325,12 +325,12 @@ describe("Vault Settings redesign", () => {
     fireEvent.change(await screen.findByLabelText("Description"), { target: { value: "Saved description" } });
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await user.click(screen.getByRole("tab", { name: "Access" }));
-    await user.click(screen.getByRole("button", { name: "Vault menu for platform-docs" }));
+    await user.click(screen.getByRole("button", { name: "Navigate in platform-docs" }));
     await user.click(screen.getByRole("menuitem", { name: "Members" }));
     expect(screen.queryByRole("heading", { name: "Vault members" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Access", selected: true })).toBeVisible();
     await act(async () => { finishSave({ ok: true }); });
-    await user.click(screen.getByRole("button", { name: "Vault menu for platform-docs" }));
+    await user.click(screen.getByRole("button", { name: "Navigate in platform-docs" }));
     await user.click(screen.getByRole("menuitem", { name: "Members" }));
     expect(await screen.findByRole("heading", { name: "Vault members" })).toBeVisible();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();

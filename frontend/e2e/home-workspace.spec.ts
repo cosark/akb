@@ -262,7 +262,7 @@ for (const width of [2560, 1440, 768, 375]) for (const dark of [false, true]) {
       await expect.poll(async () => (await page.getByRole("separator", { name: "Resize tree panel" }).boundingBox())!.x).toBeGreaterThan(handle.x + 20);
       await page.screenshot({ path: testInfo.outputPath("vault-full-height-navigation.png"), fullPage: true });
       await expect(page.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "Vault menu for platform", exact: true })).toHaveText("Vault menu");
+      await expect(page.getByRole("button", { name: "Navigate in platform", exact: true })).toHaveText("Navigate");
       const managementBottoms: number[] = [];
       for (const selector of ['[data-slot="vault-management-row"]', '[data-slot="collection-management-row"]']) {
         const row = (await page.locator(selector).boundingBox())!;

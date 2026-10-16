@@ -197,7 +197,7 @@ describe("VaultShell focused task presentation", () => {
     expect(screen.getByRole("navigation", { name: "Vaults" })).toBeInTheDocument();
     expect(screen.queryByText("Collection tree content")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Expand collections" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Vault menu for demo" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Navigate in demo" })).toBeInTheDocument();
     expect(localStorage.getItem("akb.treeVisible")).toBe("1");
   });
 });
@@ -227,7 +227,7 @@ describe("VaultShell resource navigation", () => {
       expect(screen.getByText("Collection tree content")).toBeInTheDocument();
     } else {
       expect(screen.getByRole("navigation", { name: "Resource location" })).toHaveTextContent("Resolved resource title");
-      expect(screen.getByRole("button", { name: "Vault menu for demo" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Navigate in demo" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Open vault navigation" })).toBeInTheDocument();
       expect(screen.queryByText("a-private-url-ref")).not.toBeInTheDocument();
     }

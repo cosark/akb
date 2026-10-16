@@ -25,9 +25,9 @@ export function VaultPageSwitcher({ vault, onNavigateIntent }: { vault: string; 
     setOpen(value);
   }}>
     <DropdownMenu.Trigger asChild>
-      <Button type="button" variant="ghost" data-slot="vault-page-switcher" aria-label={`Vault menu for ${vault}`}
+      <Button type="button" variant="ghost" data-slot="vault-page-switcher" aria-label={`Navigate in ${vault}`}
         className="h-9 shrink-0 gap-1.5 rounded-[var(--radius-sm)] border border-border px-2.5 text-sm font-medium text-foreground focus-visible:ring-inset focus-visible:ring-offset-0 data-[state=open]:bg-surface-selected data-[state=open]:text-surface-selected-foreground max-lg:h-11">
-        <span>Vault menu</span>
+        <span>Navigate</span>
         <ChevronDown className="h-4 w-4 shrink-0 text-foreground-muted" aria-hidden />
       </Button>
     </DropdownMenu.Trigger>

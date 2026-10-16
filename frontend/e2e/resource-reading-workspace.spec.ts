@@ -29,7 +29,7 @@ for (const scenario of [
   if (scenario.preview) {
     await expect(tools.getByRole("button", { name: /Publish|Public link/ })).toHaveCount(0);
     expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(toolsBox.y + 1);
-    await expect(page.getByTestId("document-preview-dialog").getByRole("button", { name: "Vault menu for fixture", exact: true })).toHaveCount(0);
+    await expect(page.getByTestId("document-preview-dialog").getByRole("button", { name: "Navigate in fixture", exact: true })).toHaveCount(0);
   } else {
     await expect(page.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
     await expect(tools.getByRole("button", { name: "Public link", exact: true })).toHaveCount(1);
@@ -139,8 +139,8 @@ async function expectQuietVaultTrail(page: Page, label: string) {
   await expect(vault).toHaveAttribute("href", "/vault/fixture");
   await expect(vault.locator(".lucide-box")).toBeVisible();
   await expect(trail.getByRole("button")).toHaveCount(0);
-  const switcher = page.getByRole("button", { name: "Vault menu for fixture", exact: true });
-  await expect(switcher).toHaveText("Vault menu");
+  const switcher = page.getByRole("button", { name: "Navigate in fixture", exact: true });
+  await expect(switcher).toHaveText("Navigate");
   await expect(switcher).toBeInViewport({ ratio: 1 });
   const switcherBounds = (await switcher.boundingBox())!;
   const trailBounds = (await trail.boundingBox())!;
@@ -173,7 +173,7 @@ for (const width of [375, 1440, 2560]) for (const dark of [false, true]) {
     await expect(trigger).toBeInViewport({ ratio: 1 });
     await expect(navigation).toHaveCount(0);
     await expect(page.getByRole("banner").getByRole("button", { name: "Search knowledge", exact: true })).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Vault menu for fixture", exact: true })).toBeInViewport();
+    await expect(page.getByRole("button", { name: "Navigate in fixture", exact: true })).toBeInViewport();
     const searchBox = (await trigger.boundingBox())!;
     expect(searchBox.x + searchBox.width).toBeLessThanOrEqual(width);
     await expect(trigger).toHaveCSS("border-top-width", "1px");
@@ -465,14 +465,14 @@ for (const scope of ["vault", "all"] as const) for (const destination of ["resul
 });
 
 async function openVaultDestination(page: Page, name: string) {
-  await page.getByRole("button", { name: "Vault menu for fixture", exact: true }).click();
+  await page.getByRole("button", { name: "Navigate in fixture", exact: true }).click();
   await page.getByRole("menu", { name: "Vault pages", exact: true }).getByRole("menuitem", { name, exact: true }).click();
 }
 
 async function expectVaultDestinationsReachable(page: Page, current?: string) {
-  const headerMenu = page.getByRole("button", { name: "Vault menu for fixture", exact: true });
+  const headerMenu = page.getByRole("button", { name: "Navigate in fixture", exact: true });
   await expect(headerMenu).toHaveCount(1);
-  await expect(headerMenu).toHaveText("Vault menu");
+  await expect(headerMenu).toHaveText("Navigate");
   await expect(headerMenu).toBeInViewport({ ratio: 1 });
   await expect(page.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
   await headerMenu.click();
@@ -550,7 +550,7 @@ test("document Vault destinations share one header menu without selecting Overvi
   await page.goto(`/vault/fixture/doc/${encodeURIComponent(path)}`);
   const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
   await expect(navigation).toHaveCount(0);
-  await page.getByRole("button", { name: "Vault menu for fixture", exact: true }).click();
+  await page.getByRole("button", { name: "Navigate in fixture", exact: true }).click();
   const menu = page.getByRole("menu", { name: "Vault pages", exact: true });
   await expect(menu.getByRole("menuitem")).toHaveCount(5);
   await expect(menu.locator('[aria-current="page"]')).toHaveCount(0);
@@ -671,7 +671,7 @@ for (const width of [375, 768, 1440, 2560]) for (const dark of [false, true]) {
     const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
     await expectVaultDestinationsReachable(page);
     await expect(navigation).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Vault menu for fixture", exact: true })).toBeInViewport();
+    await expect(page.getByRole("button", { name: "Navigate in fixture", exact: true })).toBeInViewport();
     await expect(page.getByRole("navigation", { name: "Vault management", exact: true })).toHaveCount(0);
     await expect(page.getByText("In this vault", { exact: true })).toHaveCount(0);
     await expect(page.locator('[data-slot="resource-command-row"]').getByRole("navigation", { name: "Resource location", exact: true })).toHaveCount(0);
@@ -873,7 +873,7 @@ test("a deep document reader opens every Vault page directly and browser Back re
   await page.goto(`/vault/fixture/doc/${encodeURIComponent(path)}`);
   await expect(page.getByRole("heading", { name: "Authored heading", exact: true })).toBeVisible();
   const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
-  const switcher = page.getByRole("button", { name: "Vault menu for fixture", exact: true });
+  const switcher = page.getByRole("button", { name: "Navigate in fixture", exact: true });
   await expect(navigation).toHaveCount(0);
   await expect(switcher).toBeVisible();
   for (const [name, href] of vaultDestinations) {
@@ -968,7 +968,7 @@ for (const dark of [false, true]) test(`Vault menu stays outside content scrolli
   const tree = collections.getByRole("tree", { name: "fixture explorer", exact: true });
   await expect(tree).toBeVisible();
   const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
-  const trigger = page.getByRole("button", { name: "Vault menu for fixture", exact: true });
+  const trigger = page.getByRole("button", { name: "Navigate in fixture", exact: true });
   await expect(navigation).toHaveCount(0);
   const position = (await trigger.boundingBox())!;
   expect(position.height).toBe(36);
@@ -1030,7 +1030,7 @@ test("Vault menu remains stable when only working content width changes", async 
   await page.setViewportSize({ width: 1920, height: 1000 });
   await fixture(page);
   await page.goto("/vault/fixture");
-  const trigger = page.getByRole("button", { name: "Vault menu for fixture", exact: true });
+  const trigger = page.getByRole("button", { name: "Navigate in fixture", exact: true });
   const content = page.locator('[data-slot="vault-route-viewport"]');
   await expect(page.locator('[data-navigation-mode="inline"]')).toBeVisible();
   const original = (await trigger.boundingBox())!;
@@ -1101,7 +1101,7 @@ test("Vault menu preserves keyboard selection while its mobile header resizes", 
   await page.emulateMedia({ reducedMotion: "reduce" });
   await fixture(page);
   await page.goto("/vault/fixture");
-  const trigger = page.getByRole("button", { name: "Vault menu for fixture", exact: true });
+  const trigger = page.getByRole("button", { name: "Navigate in fixture", exact: true });
   const menu = page.getByRole("menu", { name: "Vault pages", exact: true });
   await trigger.focus();
   await page.keyboard.press("Enter");
@@ -1128,7 +1128,7 @@ test("Vault navigation adapts to enlarged text and a short landscape viewport", 
   await page.emulateMedia({ reducedMotion: "reduce" });
   await fixture(page);
   await page.goto("/vault/fixture");
-  const trigger = page.getByRole("button", { name: "Vault menu for fixture", exact: true });
+  const trigger = page.getByRole("button", { name: "Navigate in fixture", exact: true });
   await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
   await expectVaultDestinationsReachable(page, "Overview");
   await expect(trigger).toBeInViewport({ ratio: 1 });
@@ -1148,7 +1148,7 @@ for (const width of [375, 768]) {
     await fixture(page);
     await page.goto("/vault/fixture");
     const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
-    const trigger = page.getByRole("button", { name: "Vault menu for fixture", exact: true });
+    const trigger = page.getByRole("button", { name: "Navigate in fixture", exact: true });
     await expectVaultDestinationsReachable(page, "Overview");
     await expectQuietVaultTrail(page, "Overview");
     const triggerBox = (await trigger.boundingBox())!;
@@ -1268,7 +1268,7 @@ test("Vault Search preview suspends its Vault menu and restores it on close", as
   await page.setViewportSize({ width: 1440, height: 1000 });
   await fixture(page);
   await page.goto("/vault/fixture/search?q=reading&source=document");
-  const navigation = page.getByRole("button", { name: "Vault menu for fixture", exact: true });
+  const navigation = page.getByRole("button", { name: "Navigate in fixture", exact: true });
   await expectVaultDestinationsReachable(page);
   await expect(page.getByRole("button", { name: "Search knowledge", exact: true })).toBeVisible();
   const initialPosition = await navigation.boundingBox();
@@ -1276,7 +1276,7 @@ test("Vault Search preview suspends its Vault menu and restores it on close", as
   await result.click();
   const preview = page.getByTestId("document-preview-dialog");
   await expect(preview).toBeVisible();
-  await expect(preview.getByRole("button", { name: "Vault menu for fixture", exact: true })).toHaveCount(0);
+  await expect(preview.getByRole("button", { name: "Navigate in fixture", exact: true })).toHaveCount(0);
   await expect(navigation).toHaveCount(0);
   await preview.getByRole("tab", { name: "Raw", exact: true }).click();
   await expect(navigation).toHaveCount(0);
@@ -1327,7 +1327,7 @@ for (const width of [375, 1440]) test(`modified keyboard Vault links keep a dirt
   const editor = page.getByRole("textbox", { name: "Document body (markdown)" });
   await editor.fill("Keep editing here while checking Vault settings in another tab.");
   await expect(page.getByText("Draft saved locally", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Vault menu for fixture", exact: true }).click();
+  await page.getByRole("button", { name: "Navigate in fixture", exact: true }).click();
   const destination = page.getByRole("menuitem", { name: "Settings", exact: true });
   await destination.focus();
   // Browser-native new-tab gestures do not necessarily retain a JS opener.
@@ -2259,7 +2259,7 @@ test("wide tables stay locally scrollable at 200 percent CSS zoom", async ({ pag
     contentType: "application/json",
   });
   await expect(currentTitle).toBeInViewport({ ratio: 1 });
-  await expect(page.getByRole("button", { name: "Vault menu for fixture", exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(page.getByRole("button", { name: "Navigate in fixture", exact: true })).toBeInViewport({ ratio: 1 });
   await expect(page.getByRole("button", { name: /^(Open vault navigation|Expand collections)$/ })).toBeInViewport();
   await region.focus();
   await page.keyboard.press("ArrowRight");
