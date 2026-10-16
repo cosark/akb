@@ -200,9 +200,16 @@ test("Settings history approval does not bypass or obscure a dirty underlying do
   await page.getByRole("button", { name: "Search knowledge", exact: true }).click();
   await page.getByTestId("global-search-dialog").getByRole("combobox").fill("guide");
   await page.getByRole("option", { name: /Operating guide/ }).click();
-  await page.getByRole("button", { name: "Open document in vault" }).click();
-  await page.getByRole("button", { name: "Edit", exact: true }).click();
-  await page.getByLabel("Document title", { exact: true }).fill("Underlying draft");
+  const preview = page.getByTestId("document-preview-dialog");
+  await preview.getByRole("button", { name: "Open document in vault" }).click();
+  // Both surfaces expose Edit. Wait for promotion so the outgoing preview
+  // cannot replace the route again with its own preview history state.
+  await expect(preview).toHaveCount(0);
+  const document = page.getByRole("region", { name: "Document workspace", exact: true });
+  await expect(document).toHaveAttribute("data-presentation", "page");
+  await document.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(document.getByRole("textbox", { name: "Document body (markdown)", exact: true })).toBeVisible();
+  await document.getByLabel("Document title", { exact: true }).fill("Underlying draft");
   await openSettings(page);
   await settings(page).getByLabel("Display name").fill("Settings draft");
   await page.goBack();

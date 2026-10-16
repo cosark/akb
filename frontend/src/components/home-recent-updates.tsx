@@ -7,6 +7,7 @@ import { documentPreviewState } from "@/lib/document-preview-navigation";
 import { recentIcon } from "@/lib/recent";
 import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
 import { INVENTORY_CHANGED_EVENT } from "@/lib/inventory-refresh";
+import { isModalOpen } from "@/lib/modal-visibility";
 import { Panel } from "@/components/ui/panel";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
@@ -57,6 +58,15 @@ function RecentUpdates({ userId, accessChecking, fixedScope }: { userId: string;
   const [legacyLimit, setLegacyLimit] = useState(PAGE_SIZE);
   const [legacyMore, setLegacyMore] = useState(false);
   const generation = useRef(0);
+  const restoreRemovedRowFocus = useCallback((row: HTMLLIElement | null) => {
+    if (!row) return;
+    // A delayed refresh can remove the preview's source after focus has already
+    // returned to it. Ref cleanup runs before removal, while focus is knowable.
+    return () => {
+      if (isModalOpen() || !row.contains(document.activeElement)) return;
+      document.getElementById(fixedScope ? `home-updates-heading-${scope}` : `home-updates-${scope}`)?.focus({ preventScroll: true });
+    };
+  }, [fixedScope, scope]);
 
   const load = useCallback(async (more = false, next?: string, limit = PAGE_SIZE) => {
     if (accessChecking || !userId) return;
@@ -145,7 +155,7 @@ function RecentUpdates({ userId, accessChecking, fixedScope }: { userId: string;
               const preview = row.excerpt?.trim() || row.summary?.trim();
               const id = `home-recent-${scope}-${row.resource_id ?? row.doc_id}`;
               const href = `/vault/${encodeURIComponent(row.vault)}/doc/${encodeURIComponent(row.doc_id)}`;
-              return <li key={row.resource_id ?? `${row.vault}:${row.doc_id}`} className="group relative flex flex-col bg-surface transition-token hover:bg-surface-hover focus-within:bg-surface-hover"><Link id={id}
+              return <li key={row.resource_id ?? `${row.vault}:${row.doc_id}`} ref={restoreRemovedRowFocus} className="group relative flex flex-col bg-surface transition-token hover:bg-surface-hover focus-within:bg-surface-hover"><Link id={id}
                 to={href}
                 aria-label={`Preview ${row.title}`}
                 state={documentPreviewState(location, id, fixedScope ? `home-updates-heading-${scope}` : `home-updates-${scope}`)}
