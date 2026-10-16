@@ -15,7 +15,6 @@ import asyncpg
 from fastapi import FastAPI
 import pytest
 
-from app import main
 from app.exceptions import TransientDependencyError
 from app.http_middleware import CancelDisconnectedReadMiddleware, NoStorePublicSurfacesMiddleware
 from app.services.user_sql_executor import UserSqlExecutor, user_role_name
@@ -125,7 +124,7 @@ async def test_actual_connection_loss_returns_transient_and_reconnects():
 async def test_http_read_disconnect_cancels_actual_query_and_drains_pool():
     async with _runtime() as (admin, pool, database, execute):
         marker = "read_disconnect_probe"
-        app = FastAPI(exception_handlers=dict(main.app.exception_handlers))
+        app = FastAPI()
 
         @app.get("/api/v1/tables/fixture/items/rows")
         async def read():
@@ -163,7 +162,7 @@ async def test_http_write_disconnect_does_not_replay_or_pretend_to_abort():
     async with _runtime() as (admin, pool, database, execute):
         marker = "write_completion_probe"
         calls = []
-        app = FastAPI(exception_handlers=dict(main.app.exception_handlers))
+        app = FastAPI()
 
         @app.post("/api/v1/tables/fixture/sql")
         async def write():
