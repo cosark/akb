@@ -11,6 +11,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Textarea } from "@/components/ui/textarea";
+import { SettingRow, SettingsSection } from "@/components/ui/settings-section";
 import { authSessionSnapshot, getSkillTemplate, isCurrentAuthSession, updateDocument } from "@/lib/api";
 import { VAULT_SKILL_PATH } from "@/lib/skill";
 import { timeAgo } from "@/lib/utils";
@@ -245,14 +246,11 @@ export function SkillSection({
   }
 
   return (
-    <section ref={sectionRef} id="skill" role="region" aria-labelledby="skill-h" className="scroll-mt-4">
-      <h2 id="skill-h" className="border-b border-border pb-3 text-sm font-semibold text-foreground">Vault guide</h2>
-      <div data-slot="settings-row" className="grid min-w-0 gap-3 py-4 @[48rem]/vault-settings:grid-cols-[11rem_minmax(0,1fr)] @[48rem]/vault-settings:gap-6">
-        <div className="pt-1.5 text-sm font-medium text-foreground">
+    <SettingsSection ref={sectionRef} id="skill" title="Vault guide">
+      <SettingRow label={<>
           Instructions
           {doc?.updated_at && <p className="mt-1 text-xs font-normal text-foreground-muted">Updated {timeAgo(doc.updated_at)}</p>}
-        </div>
-        <div className="min-w-0 w-full max-w-4xl">
+        </>}>
           {error && !isMirror && (
             <Alert variant="destructive" title="Couldn't load the vault guide">
               <p>{error}</p>
@@ -268,14 +266,16 @@ export function SkillSection({
           ) : (
             <>
               {!expanded && (
-                <p className="line-clamp-2 text-sm leading-relaxed text-foreground-muted">
-                  {guideExcerpt(doc.content) || "No instructions yet."}
-                </p>
+                <div className="mb-3 rounded-[var(--radius-sm)] border border-border bg-background px-3 py-2.5">
+                  <p className="line-clamp-2 text-sm leading-relaxed text-foreground-muted">
+                    {guideExcerpt(doc.content) || "No instructions yet."}
+                  </p>
+                </div>
               )}
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   variant="ghost" size="sm" aria-expanded={expanded && tab === "preview"} aria-controls="guide-reading-view"
-                  className="min-h-10 sm:min-h-8"
+                  className="min-h-10 text-link sm:min-h-8"
                   onClick={() => {
                     if (expanded && tab === "preview") { setExpanded(false); return; }
                     selectTab("preview");
@@ -287,7 +287,7 @@ export function SkillSection({
                 )}
                 <DropdownMenu.Root modal={false}>
                   <DropdownMenu.Trigger asChild>
-                    <Button variant="ghost" size="icon" aria-label="Guide options" className="h-10 w-10 sm:h-8 sm:w-8" disabled={busy || saving}>
+                    <Button variant="outline" size="icon" aria-label="Guide options" className="h-10 w-10 sm:h-8 sm:w-8" disabled={busy || saving}>
                       <MoreHorizontal className="h-4 w-4" aria-hidden />
                     </Button>
                   </DropdownMenu.Trigger>
@@ -325,7 +325,7 @@ export function SkillSection({
                 </div>
               )}
               {expanded && tab === "agent" && (
-                <div role="region" aria-label="Agent view" className="mt-3 space-y-3">
+                <div role="region" aria-label="Agent view" className="mt-3 space-y-3 rounded-[var(--radius-sm)] border border-border bg-background p-3">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-sm font-medium">Agent context</p>
                     <Button variant="ghost" size="sm" onClick={() => { setExpanded(false); setTab("preview"); }}>Close agent view</Button>
@@ -356,8 +356,7 @@ export function SkillSection({
               )}
             </>
           )}
-        </div>
-      </div>
+      </SettingRow>
 
       <ConfirmDialog
         open={!checking && pendingExit !== null}
@@ -380,6 +379,6 @@ export function SkillSection({
         variant="destructive"
         onConfirm={handleReset}
       />
-    </section>
+    </SettingsSection>
   );
 }

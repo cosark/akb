@@ -252,7 +252,7 @@ for (const width of [375, 1440]) for (const aggregate of [false, true]) {
     await page.evaluate(() => { location.hash = "access"; });
     await expect(page).toHaveURL(/\/settings#access$/);
     if (aggregate) {
-      await page.getByRole("radio", { name: "Signed-in users can read", exact: true }).click();
+      await page.getByRole("radio", { name: "Everyone can view", exact: true }).click();
       await page.evaluate(() => { location.hash = "skill"; });
       await page.getByRole("button", { name: "Edit guide", exact: true }).click();
       await page.getByRole("textbox", { name: "Vault guide body", exact: true }).fill(guideDraft);
@@ -265,7 +265,7 @@ for (const width of [375, 1440]) for (const aggregate of [false, true]) {
     await expect(page.getByRole("dialog")).toHaveCount(0);
     if (aggregate) {
       await page.goForward();
-      await expect(page.getByRole("radio", { name: "Signed-in users can read", exact: true })).toBeChecked();
+      await expect(page.getByRole("radio", { name: "Everyone can view", exact: true })).toBeChecked();
       await page.goForward();
       await expect(page.getByRole("textbox", { name: "Vault guide body", exact: true })).toHaveValue(guideDraft);
       await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -284,7 +284,7 @@ for (const width of [375, 1440]) for (const aggregate of [false, true]) {
     }
     await expect(description).toHaveValue(draft);
     if (aggregate) {
-      await expect(page.getByRole("radio", { name: "Signed-in users can read", exact: true })).toBeChecked();
+      await expect(page.getByRole("radio", { name: "Everyone can view", exact: true })).toBeChecked();
       await expect(page.getByRole("textbox", { name: "Vault guide body", exact: true })).toHaveValue(guideDraft);
     }
     await expect(page.getByRole("dialog")).toHaveCount(0);

@@ -103,6 +103,13 @@ for (const width of [375, 1440, 2560]) for (const dark of [false, true]) {
     for (const [region, id] of [[general, "general"], [access, "access"], [guide, "skill"], [danger, "danger"]] as const) {
       await expect(region).toBeVisible();
       await expect(region).toHaveAttribute("id", id);
+      const group = region.locator('[data-slot="settings-group"]');
+      await expect(group).toHaveCount(1);
+      await expect(group).toHaveCSS("border-top-width", "1px");
+      const firstRow = group.locator('[data-slot="settings-row"]').first();
+      const labelSurface = firstRow.locator('[data-slot="settings-label"]');
+      const valueSurface = firstRow.locator('[data-slot="settings-value"]');
+      expect(await labelSurface.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe(await valueSurface.evaluate(node => getComputedStyle(node).backgroundColor));
       expect(await region.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
     }
     await expect(page.getByRole("tablist")).toHaveCount(0);
@@ -119,18 +126,20 @@ for (const width of [375, 1440, 2560]) for (const dark of [false, true]) {
     const descriptionBox = (await description.boundingBox())!;
     expect(descriptionBox.height).toBeLessThanOrEqual(150);
     await description.fill("A draft description that must survive working across the settings sheet.");
-    const policy = page.getByRole("radiogroup", { name: "Default access", exact: true });
-    const firstChoice = policy.getByRole("radio", { name: "Members only", exact: true });
-    const lastChoice = policy.getByRole("radio", { name: "Signed-in users can edit", exact: true });
+    const policy = page.getByRole("radiogroup", { name: "Who can access", exact: true });
+    const firstChoice = policy.getByRole("radio", { name: "Invited members only", exact: true });
+    const lastChoice = policy.getByRole("radio", { name: "Everyone can edit", exact: true });
     await expect(firstChoice).toBeChecked();
-    await expect(policy).toHaveAccessibleDescription("Only invited members can access this vault.");
+    await expect(firstChoice.locator("..")).toHaveCSS("border-top-width", "1px");
+    await expect(lastChoice.locator("..")).toHaveCSS("border-top-width", "1px");
+    await expect(policy).toHaveAccessibleDescription("Only people you add as members can open this vault.");
     await expect(lastChoice).toBeVisible();
     await firstChoice.focus();
     await page.keyboard.press("ArrowDown");
-    const readingChoice = policy.getByRole("radio", { name: "Signed-in users can read", exact: true });
+    const readingChoice = policy.getByRole("radio", { name: "Everyone can view", exact: true });
     await expect(readingChoice).toBeFocused();
     await expect(readingChoice).toBeChecked();
-    await expect(policy).toHaveAccessibleDescription("Any signed-in user can read. Writing still requires an invitation.");
+    await expect(policy).toHaveAccessibleDescription("Anyone signed in to this AKB can view content without an invitation. Editing still requires permission.");
     await expect(general.getByRole("button", { name: "Save changes", exact: true })).toBeEnabled();
     await expect(access.getByRole("button", { name: "Save changes", exact: true })).toBeEnabled();
     await expect(access.getByRole("link", { name: "Manage members", exact: true })).toHaveAttribute("href", "/vault/fixture/members");

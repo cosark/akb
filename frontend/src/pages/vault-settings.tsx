@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { Link, useLocation, useNavigate, useParams, type NavigateOptions } from "react-router-dom";
 import {
   AlertTriangle,
@@ -28,6 +28,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CopyButton } from "@/components/ui/copy-button";
 import { Label } from "@/components/ui/label";
 import { PageShell } from "@/components/ui/page-shell";
+import { SettingRow, SettingsSection } from "@/components/ui/settings-section";
 import { Textarea } from "@/components/ui/textarea";
 import { DeleteVaultDialog } from "@/components/delete-vault-dialog";
 import { useVaultRefresh } from "@/contexts/vault-refresh-context";
@@ -75,16 +76,16 @@ const SETTINGS_SECTIONS: Array<{ value: SettingsSection; label: string }> = [
 ];
 
 const PUBLIC_LABELS: Record<PublicAccess, string> = {
-  none: "Members only",
-  reader: "Signed-in users can read",
-  writer: "Signed-in users can edit",
+  none: "Invited members only",
+  reader: "Everyone can view",
+  writer: "Everyone can edit",
 };
 const PUBLIC_DESCRIPTIONS: Record<PublicAccess, string> = {
-  none: "Only invited members can access this vault.",
+  none: "Only people you add as members can open this vault.",
   reader:
-    "Any signed-in user can read. Writing still requires an invitation.",
+    "Anyone signed in to this AKB can view content without an invitation. Editing still requires permission.",
   writer:
-    "Any signed-in user can create, edit, and delete content.",
+    "Anyone signed in to this AKB can add, edit, and delete content, even without an invitation.",
 };
 const PUBLIC_ORDER: PublicAccess[] = ["none", "reader", "writer"];
 
@@ -415,12 +416,12 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
               </SettingsSection>
 
               <SettingsSection id="access" title="Access">
-                <SettingRow label="Default access">
+                <SettingRow label={<>Who can access<p className="mt-1 text-xs font-normal text-foreground-muted">Sign-in required</p></>}>
                   <div data-testid="settings-access-editor">
-                    <fieldset role="radiogroup" aria-label="Default access" aria-describedby="vault-access-help" disabled={!canEdit || busy} className="grid max-w-2xl gap-1">
+                    <fieldset role="radiogroup" aria-label="Who can access" aria-describedby="vault-access-help" disabled={!canEdit || busy} className="grid max-w-2xl gap-2">
                       {PUBLIC_ORDER.map(value => {
                         return (
-                          <label key={value} className={`flex min-h-11 items-center gap-3 rounded-[var(--radius-sm)] px-3 py-2 text-sm ${publicAccess === value ? "bg-surface-selected text-surface-selected-foreground" : "text-foreground hover:bg-surface-hover"} ${canEdit && !busy ? "cursor-pointer" : ""}`}>
+                          <label key={value} className={`flex min-h-11 items-center gap-3 rounded-[var(--radius-sm)] border px-3 py-2 text-sm ${publicAccess === value ? "border-primary bg-surface-selected text-surface-selected-foreground" : "border-border bg-surface text-foreground hover:border-border-strong hover:bg-surface-hover"} ${canEdit && !busy ? "cursor-pointer" : ""}`}>
                             <input
                               type="radio" name="vault-default-access" value={value} checked={publicAccess === value}
                               onChange={() => { setPublicAccess(value); setSavedScope(null); }}
@@ -445,14 +446,14 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                       saved={savedScope === "access" && !accessDirty} statusRef={accessStatusRef}
                       onSave={() => requestSave("access")} onDiscard={() => handleDiscard("access")}
                     />}
-                    <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+                    <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border pt-3 text-sm">
                       <Link className="inline-flex min-h-10 items-center gap-1.5 rounded-[var(--radius-sm)] text-link hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" to={`/vault/${encodeURIComponent(name)}/members`}>
                         <Users className="h-3.5 w-3.5" aria-hidden />Manage members
                       </Link>
                       <Link className="inline-flex min-h-10 items-center gap-1.5 rounded-[var(--radius-sm)] text-link hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" to={`/vault/${encodeURIComponent(name)}/publications`}>
                         <Globe className="h-3.5 w-3.5" aria-hidden />Public links
                       </Link>
-                      <span className="text-xs text-foreground-muted">Anonymous sharing is managed separately.</span>
+                      <span className="text-xs text-foreground-muted">Share without sign-in using Public links.</span>
                     </div>
                   </div>
                 </SettingRow>
@@ -543,7 +544,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
       <ConfirmDialog
         open={verified && pendingPublicWrite}
         onOpenChange={setPendingPublicWrite}
-        title={`Make "${name}" world-writable?`}
+        title={`Let everyone edit "${name}"?`}
         variant="destructive"
         description={
           <span className="flex items-start gap-2">
@@ -552,13 +553,13 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
               aria-hidden
             />
             <span>
-              Any signed-in person with the link will be able to create, edit,
-              and delete content in this vault. You can lower access again
+              Anyone signed in to this AKB will be able to add, edit, and delete
+              content, even if they aren’t a member. You can change this setting
               later.
             </span>
           </span>
         }
-        confirmLabel="Make world-writable"
+        confirmLabel="Allow editing for everyone"
         onConfirm={() => doSave("access")}
       />
 
@@ -629,24 +630,6 @@ function SettingsActionBar({
           </span>
         ) : null}
       </span>
-    </div>
-  );
-}
-
-function SettingsSection({ id, title, children }: { id: string; title: string; children: ReactNode }) {
-  return (
-    <section id={id} role="region" aria-labelledby={`settings-${id}-heading`} className="scroll-mt-4">
-      <h2 id={`settings-${id}-heading`} className="border-b border-border pb-3 text-sm font-semibold text-foreground">{title}</h2>
-      <div className="divide-y divide-border">{children}</div>
-    </section>
-  );
-}
-
-function SettingRow({ label, children }: { label: ReactNode; children: ReactNode }) {
-  return (
-    <div data-slot="settings-row" className="grid min-w-0 gap-3 py-4 @[48rem]/vault-settings:grid-cols-[11rem_minmax(0,1fr)] @[48rem]/vault-settings:gap-6">
-      <div className="pt-1.5 text-sm font-medium text-foreground">{label}</div>
-      <div className="min-w-0 w-full max-w-4xl">{children}</div>
     </div>
   );
 }

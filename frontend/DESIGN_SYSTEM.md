@@ -630,14 +630,25 @@ an `sr-only` summary, never the only signal.
   explanatory filler cards. Existing `#general`, `#access`, `#skill`, and
   `#danger` links scroll only the active content scroll surface to their section;
   they never hide or remount other forms. Use 12/20/24px responsive side padding,
-  plain 14px section headings and neutral bottom hairlines. At 48rem of actual
+  16px semibold section headings outside one quiet outlined group per section.
+  Use the shared SettingsSection/SettingRow primitives: a shadow-free workspace
+  Panel, neutral strong border and subtle background label cells beside white
+  surface value cells. Separate rows with hairlines; on narrow screens labels
+  stack above values with a horizontal divider. Danger uses a restrained red
+  outline/title, never a red-filled content slab. At 48rem of actual
   sheet width, align each setting's label in an 11rem column and its value in a
   shrinkable column; keep the value/editor at no more than 56rem, with related
   actions nearby. Stack labels above controls on narrow screens.
   General has a labelled three-line description input and a copyable permanent
   address row. Ownership, dates and inventory belong to Overview. Access uses
-  native radio rows labelled Members only / Signed-in users can read / Signed-in
-  users can edit, not oversized choice cards. Keep the selected policy's effect
+  native radio rows under Who can access, labelled Invited members only /
+  Everyone can view / Everyone can edit, not oversized choice cards. The selected
+  option's help names the actual audience: people signed in to this AKB, not
+  anonymous visitors. Avoid technical labels such as world-writable in the
+  confirmation; explicitly retain the ability to delete content. Each compact choice has a small
+  radius and visible border; selection adds teal emphasis without removing the
+  native radio indicator. A footer divider separates member/sharing shortcuts
+  from policy controls. Keep the selected policy's effect
   visible, explicitly warn that public writing includes deletion, and preserve
   owner-only writes plus public-write confirmation. Members/Public links are
   compact guarded links with one short anonymous-sharing distinction.
@@ -645,7 +656,8 @@ an `sr-only` summary, never the only signal.
   by a polite saved status; do not reserve disabled action footers. Serialize
   Description, Access and Guide writes. Saving must not overwrite another scope's
   saved snapshot or pull focus away from another field on completion.
-  Guide starts as a two-line excerpt with Preview guide and owner-only Edit
+  Guide starts as a two-line excerpt on a quiet inset surface, visually separate
+  from Preview guide, owner-only Edit
   guide. Expand reading/editing inline without inner tabs. History, Agent view
   and Reset to template live in the labelled Guide options menu; resetting still
   requires confirmation. Preserve Guide drafts and their original OCC revision
