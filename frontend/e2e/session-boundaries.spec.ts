@@ -56,15 +56,15 @@ test("Settings protects indexed browser Back and Forward, then replays each appr
 test("Guide draft protects a global sidebar link and approved leave does not ask twice", async ({ page }) => {
   await fixture(page);
   await page.goto("/vault/fixture/settings#skill");
-  await page.getByRole("tab", { name: "Edit", exact: true }).click();
+  await page.getByRole("button", { name: "Edit guide", exact: true }).click();
   await page.getByRole("textbox", { name: "Vault guide body" }).fill("Keep this guide draft");
   await page.getByRole("link", { name: "AKB home — Agent Knowledgebase" }).click();
-  const prompt = page.getByRole("dialog", { name: "Discard unsaved guide changes?" });
+  const prompt = page.getByRole("dialog", { name: "Discard unsaved settings changes?" });
   await expect(prompt).toBeVisible();
   await prompt.getByRole("button", { name: "Keep editing" }).click();
   await expect(page.getByRole("textbox", { name: "Vault guide body" })).toHaveValue("Keep this guide draft");
   await page.getByRole("link", { name: "AKB home — Agent Knowledgebase" }).click();
-  await prompt.getByRole("button", { name: "Discard changes" }).click();
+  await prompt.getByRole("button", { name: "Discard changes and leave" }).click();
   await expect(page).toHaveURL(/\/$/);
   await expect(prompt).toHaveCount(0);
 });
@@ -125,6 +125,41 @@ test("nested preview edit protects close, keeps its draft, and approved close re
   await expect(preview).toHaveCount(0);
   await expect(page).toHaveURL(/\/search\?q=guide$/);
   await expect(search).toBeVisible();
+});
+
+test("routed preview shares shell proof, retains same-account edits, and clears them on account switch", async ({ page }) => {
+  await fixture(page);
+  await page.route("**/api/v1/search**", route => route.fulfill({ json: { total: 1, results: [{ title: "Operating guide", uri: "akb://fixture/coll/guides/doc/reading.md", path: "guides/reading.md", vault: "fixture", source_type: "document", score: 1 }] } }));
+  await page.goto("/search?q=guide");
+  await page.getByRole("button", { name: "Search knowledge", exact: true }).click();
+  const search = page.getByTestId("global-search-dialog");
+  await search.getByRole("combobox").fill("guide");
+  await search.getByRole("option", { name: /Operating guide/ }).click();
+  const preview = page.getByTestId("document-preview-dialog");
+  await preview.getByRole("button", { name: "Edit", exact: true }).click();
+  const title = preview.getByLabel("Document title", { exact: true });
+  await title.fill("Alice private draft");
+
+  let finishProof!: () => Promise<void>;
+  let requested!: () => void;
+  const proofRequested = new Promise<void>(resolve => { requested = resolve; });
+  await page.route("**/api/v1/auth/me", route => {
+    finishProof = () => route.fulfill({ json: { user_id: "boundary-a", username: "alice", display_name: "Alice", email: "alice@example.test", auth_method: "local", is_admin: false } });
+    requested();
+  });
+  await page.evaluate(() => window.dispatchEvent(new Event("akb:revalidate-access")));
+  await proofRequested;
+  await expect(title).toBeHidden();
+  await expect(preview).toBeVisible();
+  await page.unroute("**/api/v1/auth/me");
+  await finishProof();
+  await expect(title).toBeVisible();
+  await expect(title).toHaveValue("Alice private draft");
+
+  await page.route("**/api/v1/auth/me", route => route.fulfill({ json: { user_id: "boundary-b", username: "bob", display_name: "Bob", email: "bob@example.test", auth_method: "local", is_admin: false } }));
+  await page.evaluate(() => window.dispatchEvent(new Event("akb:revalidate-access")));
+  await expect(title).toHaveValue("Operating guide");
+  await expect(title).not.toHaveValue("Alice private draft");
 });
 
 test("Settings proof hides private drafts, restores the same account, and destroys them on account switch", async ({ page }) => {

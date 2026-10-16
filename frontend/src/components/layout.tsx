@@ -1,5 +1,5 @@
 import { Link, Outlet, Navigate, matchPath, useLocation } from "react-router-dom";
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Boxes, House, PanelLeftOpen, PanelLeftClose, type LucideIcon } from "lucide-react";
 import {
@@ -54,7 +54,7 @@ function isExpiredIdentityProof(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401 && error.name !== "DeferredSessionError";
 }
 
-export function Layout() {
+export function Layout({ routeOverlay }: { routeOverlay?: ReactNode }) {
   const queryClient = useQueryClient();
   const location = useLocation();
   const wide = appRouteBoundaryForPath(location.pathname) === "vault-shell";
@@ -410,6 +410,10 @@ export function Layout() {
     </SettingsDialogProvider>
     </ResourceNavigationProvider>
     </ResourceLocationProvider>
+    {/* Route-backed previews share the shell's identity/access proof, but keep
+        their own location and navigation scope. The inactive background must
+        not intercept a preview's mode changes after an approved departure. */}
+    {routeOverlay}
     </CurrentUserProvider>
     </SearchStatusProvider>
   );
