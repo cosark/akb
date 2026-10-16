@@ -8,7 +8,8 @@ scanned and sorted their entire posting lists. Keep the exact path as a
 correctness fallback; do not create the avoidable short page in the first
 place. Respect enable_prefilter=off, as the sealed scan already does.
 
-Offered under the upstream extension's licensing terms.
+License: this patch modifies vchord_bm25 and is offered under the same terms
+as vchord_bm25 itself: AGPL-3.0-only or Elastic-2.0, at the recipient's option.
 
 --- a/src/index/scan.rs
 +++ b/src/index/scan.rs
