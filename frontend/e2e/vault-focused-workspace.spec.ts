@@ -57,7 +57,11 @@ for (const width of [375, 1920]) for (const dark of [false, true]) for (const [r
     await expect(page.getByRole("separator", { name: "Resize tree panel" })).toHaveCount(0);
     await expect(page.getByRole("navigation", { name: "Vault sections" })).toHaveCount(0);
     if (route === "settings") {
-      await expect(page.getByRole("tablist", { name: "Vault settings sections" })).toBeVisible();
+      await expect(page.getByRole("region", { name: "General", exact: true })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Access", exact: true })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Vault guide", exact: true })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Danger zone", exact: true })).toBeVisible();
+      await expect(page.getByRole("tablist")).toHaveCount(0);
       await expect(page.getByRole("complementary", { name: "Vault details" })).toHaveCount(0);
     } else if (route === "members") await expect(page.getByRole("table", { name: "Vault members" })).toBeVisible();
     else if (route === "publications") await expect(page.getByText("No public links yet", { exact: true })).toBeVisible();

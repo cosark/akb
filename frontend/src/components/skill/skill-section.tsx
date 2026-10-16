@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, type NavigateOptions } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { BookOpen, History, RotateCcw, Save } from "lucide-react";
+import { History, MoreHorizontal, RotateCcw, Save } from "lucide-react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { AgentPreview } from "./agent-preview";
 import { MarkdownRender } from "@/components/markdown-render";
 import { Alert } from "@/components/ui/alert";
@@ -9,10 +10,6 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LoadingState } from "@/components/ui/loading-state";
-import { SkillBadge } from "@/components/ui/skill-badge";
-import { Panel } from "@/components/ui/panel";
-import { WorkspaceSectionHeader } from "@/components/ui/workspace-section-header";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { authSessionSnapshot, getSkillTemplate, isCurrentAuthSession, updateDocument } from "@/lib/api";
 import { VAULT_SKILL_PATH } from "@/lib/skill";
@@ -27,6 +24,13 @@ interface SkillDoc {
   current_commit?: string | null;
 }
 
+function guideExcerpt(content = "") {
+  return content.slice(0, 2000)
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/[#>*_`]/g, "")
+    .replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
 interface Props {
   vault: string;
   /** The canonical doc from the settings page's skillQuery. */
@@ -39,6 +43,8 @@ interface Props {
   isMirror?: boolean;
   /** Owner-authorized management capability. Read surfaces remain visible. */
   canManage: boolean;
+  /** Another setting scope is writing; serialize writes without hiding drafts. */
+  busy?: boolean;
   queryKey?: readonly unknown[];
   /** A containing workspace can protect all its drafts with one confirmation. */
   navigationManaged?: boolean;
@@ -64,6 +70,7 @@ export function SkillSection({
   onRetry,
   isMirror,
   canManage,
+  busy = false,
   queryKey = ["document", vault, VAULT_SKILL_PATH],
   navigationManaged = false,
   onDraftStateChange,
@@ -82,10 +89,14 @@ export function SkillSection({
   const location = useLocation();
   const { requestNavigation } = useResourceNavigation();
   const [tab, setTab] = useState("preview");
+  const [expanded, setExpanded] = useState(false);
+  const sectionRef = useRef<HTMLElement>(null);
+  const editButtonRef = useRef<HTMLButtonElement>(null);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveConflict, setSaveConflict] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [baseCommit, setBaseCommit] = useState<string | null>(null);
   const [baseBody, setBaseBody] = useState<string | null>(null);
@@ -97,7 +108,7 @@ export function SkillSection({
   useEffect(() => { onDraftStateChange?.({ dirty, saving }); }, [dirty, saving, onDraftStateChange]);
   const changedElsewhere = dirty && baseCommit !== (doc?.current_commit || null);
   const guardNavigation = useCallback((href: string, options?: NavigateOptions) => {
-    // Settings categories retain this mounted editor and its draft.
+    // Settings anchors retain this mounted editor and its draft.
     if (new URL(href, window.location.origin).pathname === location.pathname) return true;
     setPendingExit({ kind: "navigation", href, options });
     return false;
@@ -121,7 +132,7 @@ export function SkillSection({
     queryClient.invalidateQueries({ queryKey: ["vault-skill-preview", vault] });
   }
 
-  // Read tabs do not own the draft. A dirty buffer keeps its original revision
+  // Read views do not own the draft. A dirty buffer keeps its original revision
   // pin even when a background read discovers another writer's changes.
   function selectTab(next: string) {
     if (next === "edit" && !dirty && !saving) {
@@ -130,8 +141,10 @@ export function SkillSection({
       setBaseCommit(doc?.current_commit || null);
       setSaveError("");
       setSaveConflict(false);
+      setSaved(false);
     }
     setTab(next);
+    setExpanded(true);
   }
 
   function discardDraft() {
@@ -146,12 +159,19 @@ export function SkillSection({
     if (!pendingExit || saving) return;
     discardDraft();
     setTab("preview");
+    setExpanded(false);
     if (pendingExit.kind === "navigation") continueNavigation(() => navigate(pendingExit.href, pendingExit.options));
     else if (pendingExit.kind === "history") pendingExit.proceed();
+    else restoreEditFocus();
+  }
+
+  function restoreEditFocus() {
+    // The edit trigger is disabled until the new collapsed view commits.
+    requestAnimationFrame(() => { if (mounted.current) editButtonRef.current?.focus(); });
   }
 
   async function handleSave() {
-    if (!canManage || checking) return;
+    if (!canManage || checking || busy) return;
     const scope = ownerScope;
     const session = authSessionSnapshot();
     const currentOperation = () => mounted.current && latestScope.current === scope && isCurrentAuthSession(session);
@@ -172,6 +192,9 @@ export function SkillSection({
       discardDraft();
       invalidate();
       setTab("preview");
+      setExpanded(false);
+      setSaved(true);
+      if (sectionRef.current?.contains(document.activeElement)) restoreEditFocus();
     } catch (e: unknown) {
       if (!currentOperation()) return;
       const message = e instanceof Error ? e.message : "Save failed";
@@ -196,184 +219,145 @@ export function SkillSection({
   // error inside the open dialog (one place), so the section keeps no error
   // state of its own for this path.
   async function handleReset() {
-    if (!canManage || checking) return;
+    if (!canManage || checking || busy) return;
     const scope = ownerScope;
     const session = authSessionSnapshot();
     const currentOperation = () => mounted.current && latestScope.current === scope && isCurrentAuthSession(session);
-    const template = await getSkillTemplate();
-    if (!currentOperation() || latestChecking.current) return;
-    const content = template.replaceAll("{vault}", vault);
-    await updateDocument(vault, VAULT_SKILL_PATH, {
-      content,
-      expected_commit: resetBaseCommit || undefined,
-    });
-    if (!currentOperation()) return;
-    discardDraft();
-    setTab("preview");
-    queryClient.invalidateQueries({
-      queryKey: ["document", vault, VAULT_SKILL_PATH],
-    });
-    queryClient.invalidateQueries({ queryKey: ["vault-skill-preview", vault] });
+    setSaving(true);
+    try {
+      const template = await getSkillTemplate();
+      if (!currentOperation() || latestChecking.current) return;
+      const content = template.replaceAll("{vault}", vault);
+      await updateDocument(vault, VAULT_SKILL_PATH, {
+        content,
+        expected_commit: resetBaseCommit || undefined,
+      });
+      if (!currentOperation()) return;
+      discardDraft();
+      setTab("preview");
+      setExpanded(false);
+      setSaved(true);
+      queryClient.invalidateQueries({ queryKey: ["document", vault, VAULT_SKILL_PATH] });
+      queryClient.invalidateQueries({ queryKey: ["vault-skill-preview", vault] });
+    } finally {
+      if (mounted.current) setSaving(false);
+    }
   }
 
   return (
-    <section id="skill" aria-labelledby="skill-h" className="scroll-mt-6">
-      <WorkspaceSectionHeader
-        id="skill-h"
-        icon={BookOpen}
-        title="Vault guide"
-        description="The operating instructions injected into every agent session for this vault."
-        tone="guide"
-      />
-
-      <Panel variant="workspace" className="border-border-strong">
-        <div className="p-4">
+    <section ref={sectionRef} id="skill" role="region" aria-labelledby="skill-h" className="scroll-mt-4">
+      <h2 id="skill-h" className="border-b border-border pb-3 text-sm font-semibold text-foreground">Vault guide</h2>
+      <div data-slot="settings-row" className="grid min-w-0 gap-3 py-4 @[48rem]/vault-settings:grid-cols-[11rem_minmax(0,1fr)] @[48rem]/vault-settings:gap-6">
+        <div className="pt-1.5 text-sm font-medium text-foreground">
+          Instructions
+          {doc?.updated_at && <p className="mt-1 text-xs font-normal text-foreground-muted">Updated {timeAgo(doc.updated_at)}</p>}
+        </div>
+        <div className="min-w-0 w-full max-w-4xl">
           {error && !isMirror && (
-            <Alert variant="destructive" title="Couldn't load the vault guide" className="mb-4">
+            <Alert variant="destructive" title="Couldn't load the vault guide">
               <p>{error}</p>
               {onRetry && <Button variant="outline" size="sm" className="mt-2" onClick={onRetry}>Retry</Button>}
             </Alert>
           )}
           {isMirror ? (
-            <Alert variant="info">
-              Read-only mirror vaults don't carry a vault guide. Edit the guide
-              in the external git repository that owns this content instead.
-            </Alert>
+            <p className="text-sm leading-relaxed text-foreground-muted">This mirror uses instructions from its external git repository.</p>
           ) : loading ? (
-            <LoadingState label="Loading vault guide">
-              <Skeleton className="h-40 w-full rounded-[var(--radius-lg)]" />
-            </LoadingState>
+            <LoadingState label="Loading vault guide"><Skeleton className="h-16 w-full rounded-[var(--radius-sm)]" /></LoadingState>
           ) : !doc && error ? null : !doc ? (
-            <Alert variant="warning">
-              The vault guide is missing. It is restored automatically by the
-              system backfill; contact an administrator if this persists.
-            </Alert>
+            <Alert variant="warning">The vault guide is missing. It is restored automatically by the system backfill; contact an administrator if this persists.</Alert>
           ) : (
             <>
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
-                <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
-                  <SkillBadge defined />
-                  <span className="text-foreground-muted">
-                    {doc.updated_at
-                      ? `Updated ${timeAgo(doc.updated_at)}`
-                      : "Update time unavailable"}
-                  </span>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {doc.current_commit && (
-                    <Button asChild variant="ghost" size="sm">
-                      <Link
-                        to={`/vault/${vault}/doc/${encodeURIComponent(VAULT_SKILL_PATH)}?commit=${doc.current_commit}`}
-                        onClick={(event) => {
-                          if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                          if (!requestNavigation(`/vault/${vault}/doc/${encodeURIComponent(VAULT_SKILL_PATH)}?commit=${doc.current_commit}`)) event.preventDefault();
-                        }}
-                      >
-                        <History className="h-3.5 w-3.5" aria-hidden />
-                        History
-                      </Link>
+              {!expanded && (
+                <p className="line-clamp-2 text-sm leading-relaxed text-foreground-muted">
+                  {guideExcerpt(doc.content) || "No instructions yet."}
+                </p>
+              )}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="ghost" size="sm" aria-expanded={expanded && tab === "preview"} aria-controls="guide-reading-view"
+                  className="min-h-10 sm:min-h-8"
+                  onClick={() => {
+                    if (expanded && tab === "preview") { setExpanded(false); return; }
+                    selectTab("preview");
+                  }}
+                >{expanded && tab === "preview" ? "Close guide preview" : "Preview guide"}</Button>
+                {canManage && (
+                  <Button ref={editButtonRef} variant="outline" size="sm" className="min-h-10 sm:min-h-8"
+                    disabled={busy || (expanded && tab === "edit")} onClick={() => selectTab("edit")}>Edit guide</Button>
+                )}
+                <DropdownMenu.Root modal={false}>
+                  <DropdownMenu.Trigger asChild>
+                    <Button variant="ghost" size="icon" aria-label="Guide options" className="h-10 w-10 sm:h-8 sm:w-8" disabled={busy || saving}>
+                      <MoreHorizontal className="h-4 w-4" aria-hidden />
                     </Button>
-                  )}
-                  {canManage && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="border-destructive text-destructive hover:bg-destructive-soft"
-                      disabled={saving}
-                      onClick={() => {
-                        setResetBaseCommit(doc.current_commit || null);
-                        setResetOpen(true);
-                      }}
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" aria-hidden />
-                      Reset to template
-                    </Button>
-                  )}
-                </div>
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.Content align="end" sideOffset={6} collisionPadding={12} aria-label="Guide options"
+                      className="z-[var(--z-popover)] min-w-48 rounded-[var(--radius-md)] border border-border bg-surface p-1 shadow-md">
+                      <DropdownMenu.Item onSelect={() => selectTab("agent")} className="flex min-h-10 cursor-pointer items-center rounded-[var(--radius-sm)] px-3 text-sm text-foreground outline-none data-[highlighted]:bg-surface-hover">Agent view</DropdownMenu.Item>
+                      {doc.current_commit && <DropdownMenu.Item asChild>
+                        <Link
+                          className="flex min-h-10 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm text-foreground outline-none data-[highlighted]:bg-surface-hover"
+                          to={`/vault/${encodeURIComponent(vault)}/doc/${encodeURIComponent(VAULT_SKILL_PATH)}?commit=${doc.current_commit}`}
+                          onClick={event => {
+                            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                            if (!requestNavigation(`/vault/${encodeURIComponent(vault)}/doc/${encodeURIComponent(VAULT_SKILL_PATH)}?commit=${doc.current_commit}`)) event.preventDefault();
+                          }}
+                        ><History className="h-3.5 w-3.5" aria-hidden />History</Link>
+                      </DropdownMenu.Item>}
+                      {canManage && <>
+                        <DropdownMenu.Separator className="my-1 h-px bg-border" />
+                        <DropdownMenu.Item onSelect={() => { setResetBaseCommit(doc.current_commit || null); setResetOpen(true); }}
+                          className="flex min-h-10 cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm text-destructive outline-none data-[highlighted]:bg-destructive-soft">
+                          <RotateCcw className="h-3.5 w-3.5" aria-hidden />Reset to template
+                        </DropdownMenu.Item>
+                      </>}
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Portal>
+                </DropdownMenu.Root>
+                {dirty && <span role="status" className="text-xs text-foreground-muted">Unsaved guide changes</span>}
+                {saved && !dirty && <span role="status" className="text-xs text-success">Guide saved</span>}
               </div>
 
-              {dirty && <p role="status" className="mb-3 text-sm text-foreground-muted">Unsaved guide changes are kept while you switch views.</p>}
-
-              <Tabs value={tab} onValueChange={selectTab}>
-                <TabsList className="max-w-full overflow-x-auto">
-                  <TabsTrigger value="preview">Preview</TabsTrigger>
-                  <TabsTrigger value="agent">Agent view</TabsTrigger>
-                  {canManage && <TabsTrigger value="edit">Edit</TabsTrigger>}
-                </TabsList>
-
-                <TabsContent value="preview" className="mx-auto w-full max-w-5xl">
-                  <div className="min-w-0 bg-surface py-4">
-                    <MarkdownRender
-                      markdown={doc.content || ""}
-                      assetContext={{
-                        mode: "authenticated",
-                        vault,
-                        document: VAULT_SKILL_PATH,
-                        commit: doc.current_commit || undefined,
-                      }}
-                    />
+              {expanded && tab === "preview" && (
+                <div id="guide-reading-view" role="region" aria-label="Guide preview" className="mt-3 rounded-[var(--radius-sm)] border border-border bg-surface py-3">
+                  <MarkdownRender markdown={doc.content || ""} assetContext={{ mode: "authenticated", vault, document: VAULT_SKILL_PATH, commit: doc.current_commit || undefined }} />
+                </div>
+              )}
+              {expanded && tab === "agent" && (
+                <div role="region" aria-label="Agent view" className="mt-3 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-medium">Agent context</p>
+                    <Button variant="ghost" size="sm" onClick={() => { setExpanded(false); setTab("preview"); }}>Close agent view</Button>
                   </div>
-                </TabsContent>
-
-                <TabsContent value="agent" className="mx-auto w-full max-w-5xl">
-                  <p className="mb-3 max-w-prose text-xs leading-relaxed text-foreground-muted">
-                    This is the server-composed payload an agent receives, not
-                    merely the stored markdown document.
-                  </p>
                   <AgentPreview vault={vault} />
-                </TabsContent>
-
-                {canManage && (
-                  <TabsContent value="edit" className="mx-auto w-full max-w-5xl">
-                    <Textarea
-                      aria-label="Vault guide body"
-                      value={draft}
-                      onChange={(event) => setDraft(event.target.value)}
-                      disabled={saving}
-                      rows={20}
-                      placeholder="Markdown body of the vault guide."
-                      className="resize-y font-mono text-xs leading-relaxed"
-                      spellCheck={false}
-                    />
-                    {(saveError || changedElsewhere) && (
-                      <Alert
-                        variant={saveConflict || changedElsewhere ? "warning" : "destructive"}
-                        title={
-                          saveConflict || changedElsewhere ? "Guide changed elsewhere" : undefined
-                        }
-                        className="mt-3"
-                      >
-                        {saveError || "The saved guide changed while you were editing. Your draft and original revision are preserved; compare with History before saving."}
-                      </Alert>
-                    )}
-                    <div className="mt-3 flex items-center gap-3">
-                      <Button
-                        variant="accent"
-                        onClick={handleSave}
-                        loading={saving}
-                        disabled={!dirty}
-                      >
-                        {!saving && <Save className="h-4 w-4" aria-hidden />}
-                        {saving ? "Saving…" : "Save guide"}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          if (dirty) setPendingExit({ kind: "cancel" });
-                          else { discardDraft(); setTab("preview"); }
-                        }}
-                        disabled={saving}
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                  </TabsContent>
-                )}
-              </Tabs>
+                </div>
+              )}
+              {expanded && tab === "edit" && canManage && (
+                <div className="mt-3">
+                  <Textarea aria-label="Vault guide body" value={draft} onChange={event => setDraft(event.target.value)}
+                    disabled={saving || busy} rows={16} placeholder="Instructions for agents using this vault."
+                    className="resize-y font-mono text-sm leading-relaxed" spellCheck={false} />
+                  {(saveError || changedElsewhere) && <Alert
+                    variant={saveConflict || changedElsewhere ? "warning" : "destructive"}
+                    title={saveConflict || changedElsewhere ? "Guide changed elsewhere" : undefined} className="mt-3">
+                    {saveError || "The saved guide changed while you were editing. Your draft and original revision are preserved; compare with History before saving."}
+                  </Alert>}
+                  <div className="mt-3 flex items-center gap-2">
+                    <Button size="sm" className="min-h-10 sm:min-h-8" onClick={handleSave} loading={saving} disabled={!dirty || busy}>
+                      {!saving && <Save className="h-3.5 w-3.5" aria-hidden />}{saving ? "Saving…" : "Save guide"}
+                    </Button>
+                    <Button variant="outline" size="sm" className="min-h-10 sm:min-h-8" disabled={saving || busy} onClick={() => {
+                      if (dirty) setPendingExit({ kind: "cancel" });
+                      else { discardDraft(); setTab("preview"); setExpanded(false); restoreEditFocus(); }
+                    }}>Cancel</Button>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
-      </Panel>
+      </div>
 
       <ConfirmDialog
         open={!checking && pendingExit !== null}

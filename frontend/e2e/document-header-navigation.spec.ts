@@ -249,23 +249,23 @@ for (const width of [375, 1440]) for (const aggregate of [false, true]) {
     const guideDraft = "# Unsaved guide\n\nKeep this guide with the other settings drafts.";
     await expect(description).toHaveValue("Shared reading decisions.");
     await description.fill(draft);
-    await page.getByRole("tab", { name: "Access", exact: true }).click();
+    await page.evaluate(() => { location.hash = "access"; });
     await expect(page).toHaveURL(/\/settings#access$/);
     if (aggregate) {
-      await page.getByRole("radio", { name: "Public · read", exact: true }).click();
-      await page.getByRole("tab", { name: "Vault guide", exact: true }).click();
-      await page.getByRole("tab", { name: "Edit", exact: true }).click();
+      await page.getByRole("radio", { name: "Signed-in users can read", exact: true }).click();
+      await page.evaluate(() => { location.hash = "skill"; });
+      await page.getByRole("button", { name: "Edit guide", exact: true }).click();
       await page.getByRole("textbox", { name: "Vault guide body", exact: true }).fill(guideDraft);
       await page.goBack();
-      await expect(page.getByRole("tab", { name: "Access", exact: true })).toHaveAttribute("aria-selected", "true");
+      await expect(page).toHaveURL(/\/settings#access$/);
     }
     await page.goBack();
-    await expect(page.getByRole("tab", { name: "General", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page).toHaveURL(/\/vault\/fixture\/settings$/);
     await expect(description).toHaveValue(draft);
     await expect(page.getByRole("dialog")).toHaveCount(0);
     if (aggregate) {
       await page.goForward();
-      await expect(page.getByRole("radio", { name: "Public · read", exact: true })).toBeChecked();
+      await expect(page.getByRole("radio", { name: "Signed-in users can read", exact: true })).toBeChecked();
       await page.goForward();
       await expect(page.getByRole("textbox", { name: "Vault guide body", exact: true })).toHaveValue(guideDraft);
       await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -281,13 +281,10 @@ for (const width of [375, 1440]) for (const aggregate of [false, true]) {
     await expect(trigger).toBeFocused();
     if (aggregate) {
       await expect(page.getByRole("textbox", { name: "Vault guide body", exact: true })).toHaveValue(guideDraft);
-      await page.getByRole("tab", { name: "General", exact: true }).click();
     }
     await expect(description).toHaveValue(draft);
     if (aggregate) {
-      await page.getByRole("tab", { name: "Access", exact: true }).click();
-      await expect(page.getByRole("radio", { name: "Public · read", exact: true })).toBeChecked();
-      await page.getByRole("tab", { name: "Vault guide", exact: true }).click();
+      await expect(page.getByRole("radio", { name: "Signed-in users can read", exact: true })).toBeChecked();
       await expect(page.getByRole("textbox", { name: "Vault guide body", exact: true })).toHaveValue(guideDraft);
     }
     await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -299,7 +296,6 @@ for (const width of [375, 1440]) for (const aggregate of [false, true]) {
     await expect(page.getByRole("dialog")).toHaveCount(0);
     expect(mutations).toEqual([]);
     await page.goBack();
-    await page.getByRole("tab", { name: "General", exact: true }).click();
     await expect(description).toHaveValue("Shared reading decisions.");
     expect(mutations).toEqual([]);
   });

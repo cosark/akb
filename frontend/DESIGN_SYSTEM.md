@@ -624,44 +624,43 @@ an `sr-only` summary, never the only signal.
   and section changes guard unsaved edits or newly generated secrets; pending
   writes block those actions. Nested confirmations close before their parent.
   Restore focus to the invoking control and never persist token secrets.
-  Vault Settings uses a full-working-width settings sheet, not another pair of
-  permanent navigation and context rails inside the Vault workspace. Four
-  horizontal underline tabs—General, Access, Vault guide, Advanced—share a
-  neutral full-width bottom hairline. Keep only the selected panel visible;
-  preserve all in-progress form and guide state when switching. Existing
-  `#general`, `#access`, `#skill`, and `#danger` links and browser history select
-  the corresponding panel. Tabs span the workspace and start at its left edge
-  with a small inset, never inside a centered max-width container. Every selected
-  category fills the available content width with 12/20/24px responsive side
-  padding; tab labels share this content baseline. The tab row
-  remains outside the desktop content scroll; use `rail-scroll` inside it.
-  Do not reserve a permanent Vault details/inventory column. General owns the
-  copyable address, ownership, viewer role/state and available dates alongside
-  the description. At 56rem of actual content width, General and Access use a
-  connected 3:2 task-local grid: description editing beside immutable Vault
-  identity, or public-policy choices beside member/public-link context. A neutral
-  hairline and `background` surface separate read-only context from `surface`
-  inputs; each save bar belongs only to its editable scope. Below that threshold
-  the same DOM order stacks, with a horizontal divider instead of a vertical rail.
-  Public-access radios include each policy's explanation and an explicit selected
-  check, stacking until their own editor container reaches 42rem rather than
-  borrowing the workspace's width. Preserve short accessible names, arrow-key
-  selection, owner-only writes and public-write confirmation. Inventory stays in
-  Overview. At 64rem, Advanced
-  places processing observations and the separately bounded danger zone beside
-  each other; lifecycle buttons adapt to their own container width. Guide chrome
-  fills the sheet while Preview, Agent view and Edit retain a centered 64rem
-  reading measure. Loading mirrors the expanded task sheet. Keep one content
-  scroll region below the tabs, with no nested navigation, statistics rail,
-  forced viewport-height cards or filler information. Only the tab row may scroll
-  horizontally; long document/table content retains its existing local overflow.
-  General, Access and Vault guide share one workspace-level leave confirmation.
-  Moving among local tabs, including Back/Forward between their hashes, retains
-  drafts without a warning. Leaving the workspace asks once for all unsaved
-  scopes; Keep editing retains every draft, while a pending save blocks departure.
-  A confirmed departure never clears one draft before another guard can cancel
-  navigation. Cancelling a menu-origin departure returns focus to the visible
-  Vault menu, with the selected settings tab as a fallback.
+  Vault Settings is one compact settings sheet: General, Access, Vault guide,
+  then owner-only Danger zone. Do not add category tabs, another navigation
+  sidebar, a permanent context column, repeated title/description blocks or
+  explanatory filler cards. Existing `#general`, `#access`, `#skill`, and
+  `#danger` links scroll only the active content scroll surface to their section;
+  they never hide or remount other forms. Use 12/20/24px responsive side padding,
+  plain 14px section headings and neutral bottom hairlines. At 48rem of actual
+  sheet width, align each setting's label in an 11rem column and its value in a
+  shrinkable column; keep the value/editor at no more than 56rem, with related
+  actions nearby. Stack labels above controls on narrow screens.
+  General has a labelled three-line description input and a copyable permanent
+  address row. Ownership, dates and inventory belong to Overview. Access uses
+  native radio rows labelled Members only / Signed-in users can read / Signed-in
+  users can edit, not oversized choice cards. Keep the selected policy's effect
+  visible, explicitly warn that public writing includes deletion, and preserve
+  owner-only writes plus public-write confirmation. Members/Public links are
+  compact guarded links with one short anonymous-sharing distinction.
+  Each editable scope shows Save/Discard only while changed or saving, followed
+  by a polite saved status; do not reserve disabled action footers. Serialize
+  Description, Access and Guide writes. Saving must not overwrite another scope's
+  saved snapshot or pull focus away from another field on completion.
+  Guide starts as a two-line excerpt with Preview guide and owner-only Edit
+  guide. Expand reading/editing inline without inner tabs. History, Agent view
+  and Reset to template live in the labelled Guide options menu; resetting still
+  requires confirmation. Preserve Guide drafts and their original OCC revision
+  across reading modes and failed writes. The danger area has two compact action
+  rows with short visible consequences, not a large red-filled banner.
+  Indexing observations remain available through Indexing details beside the
+  Overview queue badge; they are not editable settings. Unverified/stale/missing
+  status must never read as healthy. Keep one desktop sheet scroll surface, no
+  forced viewport-height cards or filler information, and match loading geometry.
+  All scopes share one workspace-level leave confirmation. Same-path hash history
+  retains drafts without a warning; actual departure asks once. Keep editing
+  retains every draft, and pending writes block departure. A confirmed departure
+  never clears one draft before another guard can cancel navigation. Cancelling a
+  menu-origin departure returns focus to the visible Vault menu, with Description
+  as a fallback. Account Settings is a separate dialog and is not changed here.
   The expanded Vaults rail and Collections explorer share `RailIdentity`,
   `RailManagement`, `RailCollapseButton`, `RailFilterToggle`, and `RailFilterField`.
   Their grammar is identity (56px desktop / 40px mobile), management (40px),

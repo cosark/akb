@@ -44,6 +44,7 @@ import { Panel } from "@/components/ui/panel";
 import { EmptyState } from "@/components/empty-state";
 import { RoleBadge, VaultStateBadge } from "@/components/status-badge";
 import { VaultIndexingStatus } from "@/components/pending-indexing-badge";
+import { VaultProcessingDetails } from "@/components/vault-processing-details";
 import { VAULT_SKILL_PATH } from "@/lib/skill";
 import { TooltipText } from "@/components/ui/tooltip-text";
 import { cn } from "@/lib/utils";
@@ -418,6 +419,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
                 publicAccess={info?.public_access}
               />
               <VaultIndexingStatus vaultName={name!} />
+              <VaultProcessingDetails vaultName={name!} />
             </>
           }
           className="min-h-0 rounded-none border-0 bg-transparent p-0 shadow-none [&>div:first-child]:max-w-full [&_h1]:whitespace-normal [&_h1]:break-words [&_h1]:[overflow-wrap:anywhere]"

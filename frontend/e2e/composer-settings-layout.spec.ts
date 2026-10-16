@@ -33,25 +33,6 @@ async function fixture(page: Page, dark: boolean) {
   });
 }
 
-async function expectTaskColumns(page: Page, firstId: string, secondId: string, threshold: number) {
-  await expect(page.getByTestId(firstId)).toBeVisible();
-  await expect(page.getByTestId(secondId)).toBeVisible();
-  const frame = page.getByTestId("settings-workspace-frame");
-  const available = await frame.evaluate(node => node.clientWidth - parseFloat(getComputedStyle(node).paddingLeft) - parseFloat(getComputedStyle(node).paddingRight));
-  const rem = await page.locator("html").evaluate(node => parseFloat(getComputedStyle(node).fontSize));
-  const first = (await page.getByTestId(firstId).boundingBox())!;
-  const second = (await page.getByTestId(secondId).boundingBox())!;
-  if (available >= threshold * rem) {
-    expect(second.x).toBeGreaterThanOrEqual(first.x + first.width - 1);
-    expect(Math.abs(first.y - second.y)).toBeLessThanOrEqual(1);
-    expect(first.width).toBeGreaterThan(320);
-    expect(second.width).toBeGreaterThan(280);
-  } else {
-    expect(second.y).toBeGreaterThanOrEqual(first.y + first.height - 1);
-    expect(Math.abs(first.x - second.x)).toBeLessThanOrEqual(1);
-  }
-}
-
 for (const width of [375, 1440, 2560]) for (const dark of [false, true]) {
   test(`composer separates writing from its details rail at ${width}px ${dark ? "dark" : "light"}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 1000 });
@@ -111,74 +92,70 @@ for (const width of [375, 1440, 2560]) for (const dark of [false, true]) {
     expect(await composer.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
   });
 
-  test(`settings shows one task without nested rails at ${width}px ${dark ? "dark" : "light"}`, async ({ page }, testInfo) => {
+  test(`settings presents a compact connected sheet without nested rails at ${width}px ${dark ? "dark" : "light"}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 1000 });
     await fixture(page, dark);
     await page.goto("/vault/fixture/settings");
-    const tabs = page.getByRole("tablist", { name: "Vault settings sections" });
-    await expect(tabs).toBeVisible();
-    const workspace = (await page.getByTestId("settings-workspace-shell").boundingBox())!;
-    const generalTab = (await page.getByRole("tab", { name: "General", exact: true }).boundingBox())!;
-    expect(generalTab.x - workspace.x).toBeLessThanOrEqual(16);
-    const panel = (await page.getByRole("tabpanel").boundingBox())!;
-    expect(panel.x - workspace.x).toBeLessThanOrEqual(24);
-    const frame = page.getByTestId("settings-workspace-frame");
-    const available = await frame.evaluate(node => node.clientWidth - parseFloat(getComputedStyle(node).paddingLeft) - parseFloat(getComputedStyle(node).paddingRight));
-    expect(panel.width).toBeCloseTo(available, 0);
-    await expectTaskColumns(page, "settings-general-editor", "settings-vault-identity", 56);
+    const general = page.getByRole("region", { name: "General", exact: true });
+    const access = page.getByRole("region", { name: "Access", exact: true });
+    const guide = page.getByRole("region", { name: "Vault guide", exact: true });
+    const danger = page.getByRole("region", { name: "Danger zone", exact: true });
+    for (const [region, id] of [[general, "general"], [access, "access"], [guide, "skill"], [danger, "danger"]] as const) {
+      await expect(region).toBeVisible();
+      await expect(region).toHaveAttribute("id", id);
+      expect(await region.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+    }
+    await expect(page.getByRole("tablist")).toHaveCount(0);
+    await expect(page.getByRole("tabpanel")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Save changes", exact: true })).toHaveCount(0);
     const details = page.getByRole("complementary", { name: "Vault details" });
     await expect(details).toHaveCount(0);
-    await expect(page.getByRole("tabpanel").getByText("Workspace reviewer", { exact: true })).toBeVisible();
+    await expect(general.getByRole("button", { name: "Copy vault address", exact: true })).toBeVisible();
+    await expect(page.getByLabel("Vault ownership and dates", { exact: true })).toHaveCount(0);
     await expect(page.locator('[data-slot="vault-collections-sidebar"]')).toHaveCount(0);
     await expect(page.getByRole("navigation", { name: "Vault sections" })).toHaveCount(0);
-    await expect(page.getByRole("tabpanel")).toHaveCount(1);
-    await expect(page.getByRole("tab", { name: "General", exact: true })).toHaveAttribute("aria-selected", "true");
     await page.screenshot({ path: testInfo.outputPath("settings-general.png"), animations: "disabled" });
     const description = page.getByLabel("Description", { exact: true });
-    await description.fill("A draft description that must survive switching sections.");
-    await page.getByRole("tab", { name: "Access", exact: true }).click();
-    await expect(page).toHaveURL(/#access$/);
-    await expect(page.getByRole("tabpanel")).toHaveCount(1);
-    const accessPanel = page.getByRole("tabpanel", { name: "Access", exact: true });
-    await expect(accessPanel).toBeVisible();
-    await expect.poll(async () => (await accessPanel.boundingBox())?.width).toBeCloseTo(available, 0);
-    await expectTaskColumns(page, "settings-access-editor", "settings-access-context", 56);
-    const policy = page.getByRole("radiogroup", { name: "Public access", exact: true });
-    await expect(policy.getByRole("radio", { name: "Public · write", exact: true })).toHaveAccessibleDescription(/Any signed-in person/);
-    const editorWidth = await page.getByTestId("settings-access-editor").evaluate(node => node.clientWidth);
-    const rem = await page.locator("html").evaluate(node => parseFloat(getComputedStyle(node).fontSize));
-    const firstChoice = (await policy.getByRole("radio", { name: "Private", exact: true }).boundingBox())!;
-    const lastChoice = (await policy.getByRole("radio", { name: "Public · write", exact: true }).boundingBox())!;
-    if (editorWidth >= 42 * rem) {
-      expect(Math.abs(lastChoice.y - firstChoice.y)).toBeLessThanOrEqual(1);
-      expect(lastChoice.x).toBeGreaterThan(firstChoice.x + firstChoice.width);
-    } else {
-      expect(lastChoice.y).toBeGreaterThan(firstChoice.y + firstChoice.height);
-      expect(Math.abs(lastChoice.x - firstChoice.x)).toBeLessThanOrEqual(1);
-    }
+    const descriptionBox = (await description.boundingBox())!;
+    expect(descriptionBox.height).toBeLessThanOrEqual(150);
+    await description.fill("A draft description that must survive working across the settings sheet.");
+    const policy = page.getByRole("radiogroup", { name: "Default access", exact: true });
+    const firstChoice = policy.getByRole("radio", { name: "Members only", exact: true });
+    const lastChoice = policy.getByRole("radio", { name: "Signed-in users can edit", exact: true });
+    await expect(firstChoice).toBeChecked();
+    await expect(policy).toHaveAccessibleDescription("Only invited members can access this vault.");
+    await expect(lastChoice).toBeVisible();
+    await firstChoice.focus();
+    await page.keyboard.press("ArrowDown");
+    const readingChoice = policy.getByRole("radio", { name: "Signed-in users can read", exact: true });
+    await expect(readingChoice).toBeFocused();
+    await expect(readingChoice).toBeChecked();
+    await expect(policy).toHaveAccessibleDescription("Any signed-in user can read. Writing still requires an invitation.");
+    await expect(general.getByRole("button", { name: "Save changes", exact: true })).toBeEnabled();
+    await expect(access.getByRole("button", { name: "Save changes", exact: true })).toBeEnabled();
+    await expect(access.getByRole("link", { name: "Manage members", exact: true })).toHaveAttribute("href", "/vault/fixture/members");
+    await expect(access.getByRole("link", { name: "Public links", exact: true })).toHaveAttribute("href", "/vault/fixture/publications");
     await page.screenshot({ path: testInfo.outputPath("settings-access.png"), animations: "disabled" });
-    await page.goBack();
-    await expect(page.getByRole("tab", { name: "General", exact: true })).toHaveAttribute("aria-selected", "true");
-    await expect(description).toHaveValue("A draft description that must survive switching sections.");
-    await page.getByRole("tab", { name: "Vault guide", exact: true }).click();
-    expect((await page.getByRole("tabpanel", { name: "Vault guide", exact: true }).boundingBox())!.width).toBeCloseTo(available, 0);
-    const guidePreview = page.getByRole("tabpanel", { name: "Preview", exact: true });
-    expect((await guidePreview.boundingBox())!.width).toBeLessThanOrEqual(1024);
+    await guide.getByRole("button", { name: "Edit guide", exact: true }).click();
+    const guideBody = guide.getByRole("textbox", { name: "Vault guide body", exact: true });
+    await guideBody.fill("# Draft guide\n\nKeep this draft while viewing a preview.");
+    await guide.getByRole("button", { name: "Preview guide", exact: true }).click();
+    await guide.getByRole("button", { name: "Edit guide", exact: true }).click();
+    await expect(guideBody).toHaveValue("# Draft guide\n\nKeep this draft while viewing a preview.");
+    await expect(description).toHaveValue("A draft description that must survive working across the settings sheet.");
     await page.screenshot({ path: testInfo.outputPath("settings-guide.png"), animations: "disabled" });
-    await page.getByRole("tab", { name: "Advanced", exact: true }).click();
-    await expect(page.getByRole("tab", { name: "Advanced", exact: true })).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByRole("heading", { name: "Operations", exact: true })).toBeVisible();
-    await expectTaskColumns(page, "settings-operations", "settings-lifecycle", 64);
+    await expect(danger.getByRole("button", { name: "Archive", exact: true })).toBeVisible();
+    await expect(danger.getByRole("button", { name: "Delete vault", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Operations", exact: true })).toHaveCount(0);
     await expect(details).toHaveCount(0);
-    await page.screenshot({ path: testInfo.outputPath("settings-advanced.png"), animations: "disabled" });
-    const bounds = (await tabs.boundingBox())!;
-    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+    await danger.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("settings-danger.png"), animations: "disabled" });
     await expect(page.getByRole("complementary", { name: "Vault settings context" })).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
 }
 
-test("wide Settings uses the same single scroll surface for a long Guide and keeps tabs reachable", async ({ page }) => {
+test("wide Settings keeps one scroll surface and a readable expanded Guide on short screens", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 600 });
   await fixture(page, false);
   const content = "# Working together\n\n" + Array.from({ length: 60 }, (_, index) => `## Decision ${index + 1}\n\nKeep decisions with their context. `.repeat(3)).join("\n\n");
@@ -188,13 +165,16 @@ test("wide Settings uses the same single scroll surface for a long Guide and kee
   } }));
   await page.goto("/vault/fixture/settings#skill");
   const frame = page.getByTestId("settings-workspace-frame");
-  await expect(page.getByRole("tabpanel", { name: "Preview", exact: true })).toBeVisible();
+  const guide = page.getByRole("region", { name: "Vault guide", exact: true });
+  await guide.getByRole("button", { name: "Preview guide", exact: true }).click();
+  const previewHeading = guide.getByRole("heading", { name: "Working together", exact: true });
+  await expect(previewHeading).toBeVisible();
+  const preview = guide.getByRole("region", { name: "Guide preview", exact: true });
+  expect((await preview.boundingBox())!.width).toBeLessThanOrEqual(1024);
   await expect.poll(() => frame.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
   await frame.evaluate(node => { node.scrollTop = node.scrollHeight; });
-  await expect(page.getByRole("tablist", { name: "Vault settings sections", exact: true })).toBeInViewport({ ratio: 1 });
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
-  await page.getByRole("tab", { name: "General", exact: true }).click();
-  await expect.poll(() => frame.evaluate(node => node.scrollTop)).toBe(0);
+  await frame.evaluate(node => { node.scrollTop = 0; });
   await expect(page.getByLabel("Description", { exact: true })).toBeInViewport();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
