@@ -1919,7 +1919,7 @@ export interface VaultTableInfo {
   name: string;
   description?: string;
   columns: VaultTableColumnInput[];
-  row_count: number;
+  row_count?: number;
   created_at?: string;
 }
 
@@ -1933,6 +1933,7 @@ export interface VaultTableQueryResult {
 }
 
 export interface VaultTableRowsQueryOptions {
+  countExact?: boolean;
   limit?: number;
   offset?: number;
   order?: string;
@@ -1967,8 +1968,8 @@ export const createVaultTable = (
     }),
   });
 
-export const listVaultTables = (vault: string) =>
-  api<{ items: VaultTableInfo[] }>(`/tables/${encodeURIComponent(vault)}`);
+export const listVaultTables = (vault: string, { includeRowCounts = true } = {}) =>
+  api<{ items: VaultTableInfo[] }>(`/tables/${encodeURIComponent(vault)}${includeRowCounts ? "" : "?include_row_counts=false"}`);
 
 export const listVaultTableRows = (
   vault: string,
@@ -1978,6 +1979,7 @@ export const listVaultTableRows = (
     offset = 0,
     order = "created_at.desc,id.desc",
     filters = [],
+    countExact = true,
     signal,
   }: VaultTableRowsQueryOptions = {},
 ) => {
@@ -1989,7 +1991,7 @@ export const listVaultTableRows = (
   for (const filter of filters) query.append(filter.column, filter.expression);
   return api<VaultTableQueryResult>(
     `/tables/${encodeURIComponent(vault)}/${encodeURIComponent(table)}/rows?${query}`,
-    { headers: { Prefer: "count=exact" }, signal },
+    { headers: countExact ? { Prefer: "count=exact" } : undefined, signal },
   );
 };
 
@@ -2000,6 +2002,7 @@ export async function getVaultTableRow(
   signal?: AbortSignal,
 ): Promise<Record<string, unknown> | null> {
   const result = await listVaultTableRows(vault, table, {
+    countExact: false,
     limit: 1,
     order: "id.asc",
     filters: [{ column: "id", expression: `eq.${rowId}` }],
