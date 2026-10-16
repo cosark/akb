@@ -101,7 +101,7 @@ async def test_unavailable_reservation_returns_503_before_password_verification(
     monkeypatch.setattr(public.publication_service, "resolve_publication", must_not_verify)
     with pytest.raises(HTTPException) as error:
         await public._attempt_password_resolve(
-            "slug", password="not-a-secret", ip="ip", increment_view=False,
+            "slug", password="not-a-secret", ip="ip", increment_view=False,  # pragma: allowlist secret -- synthetic rejected input
         )
     assert error.value.status_code == 503
     assert error.value.headers == {"Retry-After": "1"}

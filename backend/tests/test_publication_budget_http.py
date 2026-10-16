@@ -56,7 +56,7 @@ def _publication(owner):
 
 
 def _wrong(client, slug, ordinal):
-    return client.post(f"/api/v1/public/{slug}/auth", json={"password": "wrong-" + uuid.uuid4().hex},
+    return client.post(f"/api/v1/public/{slug}/auth", json={"password": "wrong-" + uuid.uuid4().hex},  # pragma: allowlist secret -- generated invalid test input
                        headers={"X-Forwarded-For": f"198.51.100.{ordinal}"})
 
 
