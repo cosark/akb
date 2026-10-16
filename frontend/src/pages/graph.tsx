@@ -159,7 +159,7 @@ function GraphWorkspace({ vault, mode, setMode }: { vault: string; mode: GraphDi
         onNavigate={query => navigate({ search: query })}
         nodes={displayed.nodes} resourceCounts={resourceCounts} hubs={hubs} onSelect={select} onReveal={uri => {
           setHidden(current => { if (!current.has(uri)) return current; const next = new Set(current); next.delete(uri); return next; });
-          setHideOrphans(false);
+          if (!displayed.nodes.some(node => node.uri === uri)) setHideOrphans(false);
         }}
         nodeCount={displayed.nodes.length} edgeCount={displayed.edges.length}
         focusTitle={focusTitle} displayMode={mode} onDisplayModeChange={next => {

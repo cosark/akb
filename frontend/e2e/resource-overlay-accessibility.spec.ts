@@ -89,13 +89,16 @@ test("Schema rapid toggles never shift the table and narrow workspaces trap focu
   expect(await canvas.boundingBox()).toEqual(before);
   await toggle.click();
   const inspector = page.getByRole("dialog", { name: "Table schema" });
+  const backdrop = page.locator('[data-slot="dialog-overlay"]');
   await expect(inspector).toBeVisible();
+  await expect(backdrop).toHaveCount(0);
   expect(await canvas.boundingBox()).toEqual(before);
   await page.screenshot({ path: testInfo.outputPath("schema-desktop.png") });
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 680, height: 700 });
   await toggle.click();
   await expect(inspector).toHaveAttribute("data-state", "open");
+  await expect(backdrop).toBeVisible();
   await expect(inspector.getByRole("button", { name: "Close table schema" })).toBeFocused();
   await page.keyboard.press("Tab");
   expect(await inspector.evaluate(el => el.contains(document.activeElement))).toBe(true);
@@ -104,10 +107,14 @@ test("Schema rapid toggles never shift the table and narrow workspaces trap focu
   await page.screenshot({ path: testInfo.outputPath("schema-narrow.png") });
   // Resizing an open inspector swaps Radix's modal/non-modal implementation,
   // but must not restore focus to the toggle as though it had been closed.
+  // Wait for the responsive mode: the old Close button can still be focused
+  // before the resize handler has mounted the replacement focus scope.
   await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(backdrop).toHaveCount(0);
   await expect(inspector.getByRole("button", { name: "Close table schema" })).toBeFocused();
   await expect(inspector).toBeVisible();
   await page.setViewportSize({ width: 680, height: 700 });
+  await expect(backdrop).toBeVisible();
   await expect(inspector.getByRole("button", { name: "Close table schema" })).toBeFocused();
   await page.keyboard.press("Tab");
   expect(await inspector.evaluate(el => el.contains(document.activeElement))).toBe(true);
