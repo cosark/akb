@@ -138,12 +138,9 @@ for (const viewport of [
       expect(submit.x + submit.width).toBeLessThan(queryEntry.x + queryEntry.width);
       expect(submit.y).toBeGreaterThanOrEqual(queryEntry.y);
       const commandFrame = (await page.getByTestId("search-command-header").boundingBox())!;
-      const resultFrame = (await page.getByRole("list", { name: "Semantic search results" }).boundingBox())!;
-      const countFrame = (await page.getByTestId("search-tool-row").locator(":scope > div").boundingBox())!;
-      for (const frame of [resultFrame, countFrame]) {
-        expect(Math.abs(frame.x - commandFrame.x)).toBeLessThanOrEqual(1);
-        expect(Math.abs(frame.x + frame.width - commandFrame.x - commandFrame.width)).toBeLessThanOrEqual(1);
-      }
+      const resultFrame = (await page.getByTestId("search-results-panel").boundingBox())!;
+      expect(Math.abs(resultFrame.x - commandFrame.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(resultFrame.x + resultFrame.width - commandFrame.x - commandFrame.width)).toBeLessThanOrEqual(1);
       await expect(page.getByRole("button", { name: "Filters", exact: true })).toBeInViewport();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await page.screenshot({ path: testInfo.outputPath("search-results.png"), animations: "disabled" });
@@ -224,7 +221,7 @@ for (const viewport of [
       await expect(page.getByRole("heading", { name: /No results/ })).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath("search-no-results.png"), animations: "disabled" });
       await page.getByRole("button", { name: "Clear search query" }).click();
-      await expect(page.getByRole("heading", { name: "Find your next starting point" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Suggested searches" })).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath("search-start.png"), animations: "disabled" });
     });
   }

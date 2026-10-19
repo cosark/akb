@@ -74,7 +74,6 @@
   --akb-font-display: "Pretendard Variable", "Pretendard", system-ui, sans-serif;
   --akb-spacing-document-preview-edge: clamp(1rem, 2vw, 3rem);
   --akb-spacing-document-reading-gutter: clamp(1rem, 2cqi, 2rem);
-  --akb-spacing-search-workspace-gutter: clamp(1rem, 3cqi, 2rem);
   --akb-radius: 0.875rem;
   --akb-radius-xs: 0.1875rem;
   --akb-radius-sm: 0.5rem;

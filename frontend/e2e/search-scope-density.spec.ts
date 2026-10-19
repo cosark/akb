@@ -17,18 +17,14 @@ async function mockWorkspace(page: Page) {
   });
 }
 
-async function assertQuerySpace(scope: Locator, query: Locator, count: number, width: number, contextBelow = false) {
+async function assertQuerySpace(scope: Locator, query: Locator, count: number, width: number) {
   await expect(scope.getByRole("button", { name: /^Remove .* from search scope$/ })).toHaveCount(Math.min(count, 2));
   await expect(query).toBeInViewport();
   const scopeBox = (await scope.boundingBox())!;
   const queryBox = (await query.boundingBox())!;
   expect(scopeBox.height).toBeLessThanOrEqual(44);
   expect(queryBox.width).toBeGreaterThanOrEqual(width === 375 ? 120 : 240);
-  if (contextBelow) {
-    // Full Search gives the query its own line; Vaults remain in the same surface below it.
-    expect(scopeBox.y).toBeGreaterThanOrEqual(queryBox.y + queryBox.height);
-    expect(scopeBox.y - queryBox.y - queryBox.height).toBeLessThanOrEqual(64);
-  } else if (width > 375) {
+  if (width > 375) {
     // Selected scopes cannot turn the desktop field into a stack.
     expect(Math.abs(queryBox.y + queryBox.height / 2 - scopeBox.y - scopeBox.height / 2)).toBeLessThanOrEqual(4);
   } else {
@@ -48,16 +44,13 @@ for (const width of [375, 1440, 2560]) {
       const query = page.getByRole("searchbox", { name: "Search query", exact: true });
       const scope = page.getByRole("group", { name: "Vault search scope" });
       await expect(query).toHaveValue("guide");
-      await assertQuerySpace(scope, query, count, width, true);
+      await assertQuerySpace(scope, query, count, width);
       if (count > 2) await expect(scope.getByText(`+${count - 2}`, { exact: true })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       const commandFrame = (await page.getByTestId("search-command-header").boundingBox())!;
-      const resultFrame = (await page.getByTestId("search-results-pane").locator(":scope > div").boundingBox())!;
-      const countFrame = (await page.getByTestId("search-tool-row").locator(":scope > div").boundingBox())!;
-      for (const frame of [resultFrame, countFrame]) {
-        expect(Math.abs(frame.x - commandFrame.x)).toBeLessThanOrEqual(1);
-        expect(Math.abs(frame.x + frame.width - commandFrame.x - commandFrame.width)).toBeLessThanOrEqual(1);
-      }
+      const resultFrame = (await page.getByTestId("search-results-panel").boundingBox())!;
+      expect(Math.abs(resultFrame.x - commandFrame.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(resultFrame.x + resultFrame.width - commandFrame.x - commandFrame.width)).toBeLessThanOrEqual(1);
     }
     await page.screenshot({ path: testInfo.outputPath("page-forty-scopes.png") });
 

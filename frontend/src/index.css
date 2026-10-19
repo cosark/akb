@@ -137,7 +137,6 @@
      follow the viewport; body gutters follow the actual reading container. */
   --spacing-document-preview-edge: clamp(1rem, 2vw, 3rem);
   --spacing-document-reading-gutter: clamp(1rem, 2cqi, 2rem);
-  --spacing-search-workspace-gutter: clamp(1rem, 3cqi, 2rem);
 
   /* ── Radius — soft, rounded family look (12px controls, 14px cards,
      16px modals/hero — mirrors seahorse/akb-platform) ─────────────── */

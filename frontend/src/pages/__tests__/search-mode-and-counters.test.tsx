@@ -113,7 +113,7 @@ describe("SearchPage · semantic (dense) mode", () => {
       "overflow-hidden",
     );
     expect(commandHeader).toHaveAttribute("role", "search");
-    expect(commandHeader).toHaveClass("border", "bg-surface");
+    expect(within(commandHeader).getByTestId("search-query-entry")).toHaveClass("border", "bg-surface");
     expect(workspace.contains(commandHeader)).toBe(true);
     expect(workspace.contains(suggestions)).toBe(true);
     expect(commandHeader).toContainElement(screen.getByRole("button", { name: "Search method" }));

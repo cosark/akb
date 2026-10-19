@@ -1316,45 +1316,41 @@ On every route, the global trigger opens the existing modal for quick
 lookup and document previews; its scope/query/kind carry into the full page.
 On `/search` and `/vault/:name/search`, the common global title, location icon,
 quick-search trigger and profile remain intact. A dedicated command row below
-owns the wide, URL-backed query form and explicit Search action. The compact
+owns the URL-backed query form and explicit Search action. The compact
 global trigger opens an independent quick lookup; opening or dismissing it must
-not change the page's query or filters. The header and working canvas use `surface` (white in light mode and
-the corresponding slate token in dark mode), not a grey title band.
+not change the page's query or filters. The workspace uses the same cool-gray
+`background` canvas, compact `WorkspacePageHeader`, and bounded `Panel` list
+as Vault Overview. A single `max-w-6xl` frame aligns the page identity, query
+field, and results panel, with the standard 12 / 16 / 24px responsive gutters.
 
-The full page has three distinct levels: query and execution, search context,
-then result refinement. One bordered search surface owns a full-width query row
-with the Search submit action inside its trailing edge. Keep its query text at
-16px and its integrated action at least 44px; Enter submits the same form.
-Below that row, a quieter inset context strip reads Search in, followed by the
-shared multi-Vault picker. A Search method menu shows By meaning / Exact text,
-with Semantic / Literal explanations in its options. Context controls never
-compete as a second action toolbar. Multiple Vault selections can take their own
-context line on narrow workspaces without consuming query width.
+The compact page title places the Search method menu on its trailing edge.
+By meaning / Exact text options explain Semantic / Literal behavior. Below it,
+a normal bordered input surface contains the shared multi-Vault picker, query,
+clear action, and quiet teal Search action at the trailing edge. Enter submits
+the same form. Query text is 16px on narrow screens and 14px on desktop. The
+scope stays inline when there is room; on narrow workspaces it takes a row above
+the query so long Vault names cannot squeeze out the text field. The whole input
+surface shows focus together, without a separate footer or action toolbar.
 
 There is no permanent refinement rail or resource-kind tab strip. A Result type
-menu in the results heading selects All content / Documents / Tables / Files for
-Semantic search. Literal search instead labels the section Exact matches.
-Honest result count sits below this heading; the supplementary scope is visible
-on wider workspaces and remains accessible through the search context on small
-screens. One Filters action opens
-the complete refinement dialog. Collection, document type and tag controls stay
-inside that dialog, rather than becoming a row of default shortcut buttons.
-The dialog preserves independent Collection Apply, immediate metadata/state
+menu in the results panel header selects All content / Documents / Tables / Files
+for Semantic search. The heading reads Results, or Exact matches for Literal
+search, beside an honest result count. One Filters action opens the complete
+refinement dialog. Collection, document type and tag controls stay inside that
+dialog. It preserves independent Collection Apply, immediate metadata/state
 changes, Literal options and Reset filters. Its body scrolls while its title and
 Done action remain reachable. Escape returns focus to Filters. Active filter
 chips remain removable above results when the dialog is closed, and removal
 retains focus on a remaining chip or Filters.
-Search owns its viewport and results scroll. Flat result rows use quiet dividers,
-a shared 16–32px container-based gutter (`--spacing-search-workspace-gutter`)
-and a 76rem reading cap. Fixed search and results-heading rows reserve the same
-scrollbar gutters on both edges as the scrolling results, keeping the frame
-centered and both edges aligned at any width.
-Result rows add no second horizontal inset; location, title, excerpt and metadata
-share one text column beside the resource glyph. Titles use 16px semibold type;
-location, a two-line excerpt and compact metadata support comparison without
-separate card borders. Top match stays beside metadata rather than at the far
-edge. Initial re-entry content is narrower, with recent queries, recent documents
-and suggested searches separated from the input.
+
+Search owns its viewport and results scroll. The results panel follows content
+height until the viewport fills, then scrolls below its fixed header. Result rows
+use the same 14px dark semibold titles, teal resource glyphs, quiet dividers, and
+16px panel inset as the existing workspace ledgers. A two-line excerpt follows
+the title; location, source type and compact metadata share a quiet line below.
+Preview / Open occupies the trailing edge. Top match stays beside metadata.
+Initial re-entry content shows recent queries, recent documents and suggested
+searches inside the same panel, without a separate hero or nested outer card.
 No illustrative sidebar, invented facet totals, unsupported sort, or query
 qualifier parser is added. Server contracts and saved URL state remain authoritative.
 The shared multi-Vault chips live inside the page query field, not in a second
@@ -1370,8 +1366,8 @@ available: user-scoped browser search history and recently viewed documents are
 shown as connected ledgers, with inaccessible Vault history removed through the
 existing Vault list. The history stores query/scope/mode and document identity
 only—never result bodies—and silently disappears when browser storage is not
-available. Semantic rows lead with location, a resource icon and linked title,
-one focused excerpt, then source type/tags. Literal rows retain exact snippets,
+available. Semantic rows lead with a resource icon and linked title,
+one focused excerpt, then location and source type/tags. Literal rows retain exact snippets,
 body-relative line numbers and match counts. Stable result IDs and accessible
 ranks preserve preview return focus. Optional backend
 tags progressively add compact result badges and optional tag suggestions.
@@ -1613,7 +1609,7 @@ with the full identity available in its labelled account menu.
   medium workspace widths, and one right rail when the workspace has room.
 - Guide preview uses one outer panel and a quiet divider for metadata; do not
   add another framed card around the rendered body.
-- Search keeps location/title/excerpt/metadata hierarchy, with at most two
+- Search keeps title/excerpt/location-and-metadata hierarchy, with at most two
   excerpt lines. Preserve the full document in preview, not in the result row.
 - Narrow editor toolbars keep every command mounted in a horizontally
   scrollable row and offer an explicit expand/collapse control. Keyboard
