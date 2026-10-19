@@ -1321,28 +1321,32 @@ global trigger opens an independent quick lookup; opening or dismissing it must
 not change the page's query or filters. The header and working canvas use `surface` (white in light mode and
 the corresponding slate token in dark mode), not a grey title band.
 
-The full page puts search first: the wide query field includes Vault scope,
-Semantic / Literal sits beside it as a compact segmented control, and the explicit
-Search action completes the command. On narrow workspaces the mode control moves
-below the query. A quiet mode-specific helper explains what will be searched.
-There is no permanent second filter rail. All / Documents / Tables / Files use
-compact text-only underline choices above the results. Keep the resource tabs
-48px tall, with a stronger active label; reserve glyphs for the result kind.
-The mode switch uses a quiet bordered group and a soft selected fill without a
-raised shadow. Single-row query field, mode switch and Search action share a
-44px height; a narrow query field can wrap the Vault scope above its input.
-Collection, Document type and Tags
-are quick entries into one Search filters dialog; below 56rem of *available
-workspace*, keep the single Filters entry and all controls inside that dialog.
+The full page has three distinct levels: query and execution, search context,
+then result refinement. One bordered search surface owns a full-width query row
+with the Search submit action inside its trailing edge. Keep its query text at
+16px and its integrated action at least 44px; Enter submits the same form.
+Below that row, a quieter inset context strip reads Search in, followed by the
+shared multi-Vault picker. A Search method menu shows By meaning / Exact text,
+with Semantic / Literal explanations in its options. Context controls never
+compete as a second action toolbar. Multiple Vault selections can take their own
+context line on narrow workspaces without consuming query width.
+
+There is no permanent refinement rail or resource-kind tab strip. A Result type
+menu in the results heading selects All content / Documents / Tables / Files for
+Semantic search. Literal search instead labels the section Exact matches.
+Honest result count sits below this heading; the supplementary scope is visible
+on wider workspaces and remains accessible through the search context on small
+screens. One Filters action opens
+the complete refinement dialog. Collection, document type and tag controls stay
+inside that dialog, rather than becoming a row of default shortcut buttons.
 The dialog preserves independent Collection Apply, immediate metadata/state
 changes, Literal options and Reset filters. Its body scrolls while its title and
-Done action remain reachable. Escape returns focus to the opening control;
-quick entries focus their corresponding field. Active filter chips remain
-removable above results when the dialog is closed, and removal retains focus
-on a remaining chip or Filters.
+Done action remain reachable. Escape returns focus to Filters. Active filter
+chips remain removable above results when the dialog is closed, and removal
+retains focus on a remaining chip or Filters.
 Search owns its viewport and results scroll. Flat result rows use quiet dividers,
 a shared 16–32px container-based gutter (`--spacing-search-workspace-gutter`)
-and a 76rem reading cap. Fixed command, kind and count rows reserve the same
+and a 76rem reading cap. Fixed search and results-heading rows reserve the same
 scrollbar gutters on both edges as the scrolling results, keeping the frame
 centered and both edges aligned at any width.
 Result rows add no second horizontal inset; location, title, excerpt and metadata

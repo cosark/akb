@@ -14,13 +14,12 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import {
+  ArrowRight,
   ArrowUpRight,
   Braces,
-  ChevronDown,
   Clock3,
   File,
   FileText,
-  Layers3,
   Search as SearchIcon,
   SlidersHorizontal,
   Sparkles,
@@ -123,12 +122,11 @@ const TYPE_META: Record<
 const SOURCE_FILTERS: Array<{
   key: SourceFilter;
   label: string;
-  icon: ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
 }> = [
-  { key: "all", label: "All", icon: Layers3 },
-  { key: "document", label: "Documents", icon: FileText },
-  { key: "table", label: "Tables", icon: Table },
-  { key: "file", label: "Files", icon: File },
+  { key: "all", label: "All" },
+  { key: "document", label: "Documents" },
+  { key: "table", label: "Tables" },
+  { key: "file", label: "Files" },
 ];
 
 const inlineActionClass =
@@ -216,8 +214,6 @@ function SearchWorkspace() {
   const reqId = useRef(0);
   const queryInputRef = useRef<HTMLInputElement>(null);
   const filtersButtonRef = useRef<HTMLButtonElement>(null);
-  const filterTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const filterSectionRef = useRef<"collection" | "type" | "tags" | null>(null);
   const filterContentRef = useRef<HTMLDivElement>(null);
   const activeFiltersRef = useRef<HTMLDivElement>(null);
   const pendingChipFocus = useRef<number | null>(null);
@@ -231,15 +227,6 @@ function SearchWorkspace() {
     (target ?? filtersButtonRef.current)?.focus({ preventScroll: true });
     pendingChipFocus.current = null;
   }, [searchParams]);
-
-  function openFilters(
-    trigger: HTMLButtonElement,
-    section: typeof filterSectionRef.current = null,
-  ) {
-    filterTriggerRef.current = trigger;
-    filterSectionRef.current = section;
-    setFiltersOpen(true);
-  }
 
   const doSearch = useCallback(
     async (searchQuery: string, searchMode: Mode, selectedVaults: string[]) => {
@@ -634,7 +621,7 @@ function SearchWorkspace() {
   const queryForm = (
     <form
       data-testid="search-command-header"
-      className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3 @min-[56rem]/search:grid-cols-[minmax(0,1fr)_auto_auto]"
+      className="w-full min-w-0 rounded-[var(--radius-xl)] border border-border-strong bg-surface shadow-xs transition-token focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-surface"
       onSubmit={(event) => {
         event.preventDefault();
         commitQuery(draft);
@@ -647,27 +634,17 @@ function SearchWorkspace() {
           ? "Semantic search matches meaning and keywords."
           : "Literal search matches exact text or a regular expression."}
       </span>
-      <div className="@container/scope-query order-1 flex min-h-11 min-w-0 flex-1 flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-border-strong bg-surface px-2 py-0.5 shadow-xs transition-token focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-surface">
-        <SearchVaultPicker
-          selected={scopeVaults}
-          contextVault={scopedVault}
-          vaults={vaults}
-          error={vaultsError}
-          onRetry={() => setVaultsRetry((retry) => retry + 1)}
-          onChange={setScopeVaults}
-        />
-        <div className="flex min-h-8 min-w-0 flex-[1_0_100%] items-center gap-2 px-1 @min-[30rem]/scope-query:flex-[1_1_12rem]">
-          <SearchIcon className="h-4 w-4 shrink-0 text-foreground-muted" aria-hidden />
-          <label htmlFor="vault-search" className="sr-only">
-            Search query
-          </label>
+      <div data-testid="search-query-entry" className="flex min-h-16 min-w-0 items-center gap-3 px-3 py-2 @min-[40rem]/search:px-4">
+        <div className="flex min-h-11 min-w-0 flex-1 items-center gap-3">
+          <SearchIcon className="hidden h-5 w-5 shrink-0 text-foreground-muted @min-[24rem]/search:block" aria-hidden />
+          <label htmlFor="vault-search" className="sr-only">Search query</label>
           <input
             ref={queryInputRef}
             id="vault-search"
             type="search"
             enterKeyHint="search"
             aria-describedby="search-query-help"
-            placeholder="Search documents, tables, and files…"
+            placeholder="Search your knowledge…"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -676,55 +653,61 @@ function SearchWorkspace() {
                 commitQuery("");
               }
             }}
-            className="min-w-0 flex-1 appearance-none bg-transparent text-sm text-foreground placeholder:text-foreground-muted focus:outline-none [&::-webkit-search-cancel-button]:hidden"
+            className="min-w-0 flex-1 appearance-none bg-transparent text-base text-foreground placeholder:text-foreground-muted focus:outline-none [&::-webkit-search-cancel-button]:hidden"
           />
           {draft && !loading && (
             <button
               type="button"
               aria-label="Clear search query"
               onClick={() => commitQuery("")}
-              className="ml-1 inline-flex h-7 shrink-0 cursor-pointer items-center justify-center rounded-[var(--radius-sm)] px-1 text-xs font-medium text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-[var(--radius-sm)] text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <X className="h-3.5 w-3.5" aria-hidden />
+              <X className="h-4 w-4" aria-hidden />
             </button>
           )}
         </div>
+        <Button
+          type="submit"
+          aria-label="Search"
+          loading={loading}
+          className="h-11 w-11 shrink-0 gap-2 rounded-[var(--radius-md)] p-0 shadow-none @min-[40rem]/search:w-auto @min-[40rem]/search:px-4"
+        >
+          <span className="hidden @min-[40rem]/search:inline">Search</span>
+          {!loading && <ArrowRight className="h-4 w-4" aria-hidden />}
+        </Button>
       </div>
       <div
         role="group"
-        aria-label="Search mode"
-        className="order-3 col-span-2 inline-flex w-fit items-center rounded-[var(--radius-md)] border border-border bg-surface p-px @min-[56rem]/search:order-2 @min-[56rem]/search:col-span-1"
+        aria-label="Search context"
+        className="grid min-w-0 grid-cols-1 items-center gap-x-2 gap-y-1 rounded-b-[var(--radius-xl)] border-t border-border bg-surface-2/50 px-3 py-1 @min-[24rem]/search:grid-cols-[minmax(0,1fr)_auto] @min-[40rem]/search:px-4"
       >
-        <button
-          type="button"
-          aria-label="Semantic"
-          aria-pressed={mode === "dense"}
-          onClick={() => switchMode("dense")}
-          className={searchModeClass(mode === "dense")}
-        >
-          <Sparkles className="h-3.5 w-3.5" aria-hidden />
-          Semantic
-        </button>
-        <button
-          type="button"
-          aria-label="Literal"
-          aria-pressed={mode === "literal"}
-          onClick={() => switchMode("literal")}
-          className={searchModeClass(mode === "literal")}
-        >
-          <Braces className="h-3.5 w-3.5" aria-hidden />
-          Literal
-        </button>
+        <div className={cn("@container/scope-query flex min-w-0 items-center gap-1", scopeVaults.length > 1 && "@max-[40rem]/search:col-span-full")}>
+          <span className="shrink-0 text-xs text-foreground-muted">Search in</span>
+          <SearchVaultPicker
+            selected={scopeVaults}
+            contextVault={scopedVault}
+            vaults={vaults}
+            error={vaultsError}
+            onRetry={() => setVaultsRetry((retry) => retry + 1)}
+            onChange={setScopeVaults}
+          />
+        </div>
+        <SelectMenu
+          aria-label="Search method"
+          variant="navigation"
+          value={mode}
+          onValueChange={(value) => switchMode(value as Mode)}
+          leadingIcon={mode === "dense" ? <Sparkles className="h-3.5 w-3.5" /> : <Braces className="h-3.5 w-3.5" />}
+          className="h-9 w-fit max-w-full gap-1.5 px-1.5 text-xs font-medium text-foreground-muted"
+          collisionPadding={8}
+          wrapHints
+          contentClassName="w-72 max-w-[calc(100vw-1rem)] [&_[role=menuitemradio]]:min-h-11"
+          options={[
+            { value: "dense", label: "By meaning", hint: "Semantic search with meaning and keywords." },
+            { value: "literal", label: "Exact text", hint: "Literal search, including regular expressions." },
+          ]}
+        />
       </div>
-      <Button
-        type="submit"
-        variant="default"
-        size="md"
-        loading={loading}
-        className="order-2 h-11 shrink-0 px-5 @min-[56rem]/search:order-3"
-      >
-        Search
-      </Button>
     </form>
   );
 
@@ -754,13 +737,10 @@ function SearchWorkspace() {
       >
         <header
           aria-label="Page search controls"
-          className="rail-scroll rail-scroll-centered shrink-0 overflow-hidden bg-surface px-search-workspace-gutter pb-3 pt-5 @min-[40rem]/search:pt-6"
+          className="rail-scroll rail-scroll-centered shrink-0 overflow-hidden bg-surface px-search-workspace-gutter pb-4 pt-5 @min-[40rem]/search:pt-6"
         >
           <div className="mx-auto w-full max-w-[76rem]">
             {queryForm}
-            <p className="mt-2 text-xs leading-relaxed text-foreground-muted">
-              {mode === "dense" ? "Find by meaning and keywords across your knowledge." : "Match exact text or a regular expression in document bodies."}
-            </p>
             <VaultQuerySuggestions
               query={draft}
               selected={scopeVaults}
@@ -773,79 +753,50 @@ function SearchWorkspace() {
           </div>
         </header>
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="rail-scroll rail-scroll-centered shrink-0 overflow-hidden border-b border-border px-search-workspace-gutter">
-            <div className="mx-auto flex min-h-12 w-full max-w-[76rem] items-center justify-between gap-3">
-              {mode === "dense" ? (
-                <div className="flex min-w-0 items-center gap-1 @min-[40rem]/search:gap-3" role="group" aria-label="Filter by content kind">
-                  {SOURCE_FILTERS.map(({ key, label }) => (
-                    <button
-                      key={key}
-                      type="button"
-                      aria-label={label}
-                      aria-pressed={activeSource === key}
-                      onClick={() => setFilter("source", key === "all" ? [] : [key])}
-                      className={sourceFilterClass(activeSource === key)}
-                    >
-                      <span>{label}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <p className="min-w-0 py-3 text-xs text-foreground-muted">Exact text matches</p>
-              )}
-              <div className="flex shrink-0 items-center gap-1">
-                {([
-                  ["collection", "Collection", Boolean(options.collection)],
-                  ["type", "Document type", activeTypes.size > 0],
-                  ["tags", "Tags", activeTags.size > 0],
-                ] as const).map(([section, label, active]) => (
-                  <button
-                    key={section}
-                    type="button"
-                    aria-haspopup="dialog"
-                    aria-controls={filtersOpen ? "search-filter-panel" : undefined}
-                    onClick={(event) => openFilters(event.currentTarget, section)}
-                    className={cn(
-                      "hidden min-h-11 cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 text-[13px] font-medium transition-token hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[56rem]/search:inline-flex",
-                      active ? "text-link" : "text-foreground-muted",
-                    )}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface">
+            <div data-testid="search-tool-row" className="rail-scroll rail-scroll-centered min-h-10 shrink-0 overflow-hidden px-search-workspace-gutter">
+              <div className="mx-auto flex min-h-16 w-full max-w-[76rem] items-center justify-between gap-3 border-b border-border pb-3 pt-1">
+                <div className="min-w-0">
+                  <h2
+                    id="search-results-heading"
+                    aria-label={`${mode === "literal" ? "Exact matches" : activeSource === "all" ? "All content" : SOURCE_FILTERS.find((item) => item.key === activeSource)!.label}${q ? ` for ${q}` : ""}`}
+                    className="text-base font-semibold text-foreground"
                   >
-                    {label}
-                    <ChevronDown className="h-3 w-3" aria-hidden />
-                  </button>
-                ))}
-                <button
+                    {mode === "dense" ? (
+                      <SelectMenu
+                        aria-label="Result type"
+                        variant="navigation"
+                        value={activeSource}
+                        onValueChange={(value) => setFilter("source", value === "all" ? [] : [value])}
+                        className="h-9 w-fit max-w-full gap-1.5 px-0 text-base"
+                        collisionPadding={8}
+                        contentClassName="min-w-48 [&_[role=menuitemradio]]:min-h-11"
+                        options={SOURCE_FILTERS.map(({ key, label }) => ({ value: key, label: key === "all" ? "All content" : label }))}
+                      />
+                    ) : "Exact matches"}
+                    <span className="sr-only">{q ? ` for ${q}` : ""}</span>
+                  </h2>
+                  <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs leading-relaxed text-foreground-muted">
+                    <span className="tabular-nums">{resultStatus}</span>
+                    <span aria-hidden className="hidden @min-[40rem]/search:inline">·</span>
+                    <span data-testid="search-scope-row" className="sr-only @min-[40rem]/search:not-sr-only">{scopeVaults.length === 0 ? "Across all accessible vaults" : `Across ${scopeVaults.length} ${scopeVaults.length === 1 ? "vault" : "vaults"}`}</span>
+                  </p>
+                </div>
+                <Button
                   ref={filtersButtonRef}
                   type="button"
+                  variant="ghost"
                   aria-label="Filters"
                   aria-haspopup="dialog"
                   aria-expanded={filtersOpen}
                   aria-controls={filtersOpen ? "search-filter-panel" : undefined}
-                  onClick={(event) => openFilters(event.currentTarget)}
-                  className="inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-border bg-surface px-2 text-[13px] font-medium text-foreground transition-token hover:border-border-strong hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/search:min-h-9 @min-[40rem]/search:px-3"
+                  onClick={() => setFiltersOpen(true)}
+                  className="min-h-11 shrink-0 gap-1.5 px-2 text-xs text-foreground-muted"
                 >
                   <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
-                  <span className="hidden @min-[24rem]/search:inline">Filters</span>
+                  Filters
                   {activeFilterCount > 0 && <Badge variant="secondary">{activeFilterCount}</Badge>}
-                </button>
-              </div>
-            </div>
-          </div>
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface">
-            <div
-              data-testid="search-tool-row"
-              className="rail-scroll rail-scroll-centered min-h-10 shrink-0 overflow-hidden px-search-workspace-gutter"
-            >
-              <div className="mx-auto flex min-h-10 w-full max-w-[76rem] flex-wrap items-center justify-between gap-x-4 gap-y-1 pb-1 pt-3 text-xs">
-                <p className="text-xs font-medium tabular-nums text-foreground-muted">
-                  {resultStatus}
-                </p>
-                <p
-                  data-testid="search-scope-row"
-                  className="min-w-0 break-words text-foreground-muted"
-                >
-                  {scopeVaults.length === 0 ? "Across all accessible vaults" : `Across ${scopeVaults.length} ${scopeVaults.length === 1 ? "vault" : "vaults"}`}
-                </p>
+                </Button>
               </div>
             </div>
 
@@ -1053,9 +1004,6 @@ function SearchWorkspace() {
 
                 {hasResults && !archiveUnsupported && (
                   <section aria-labelledby="search-results-heading">
-                    <h2 id="search-results-heading" className="sr-only">
-                      Results for {q}
-                    </h2>
                     {mode === "dense" ? (
                       <DenseResultList items={visibleDense} />
                     ) : (
@@ -1075,19 +1023,11 @@ function SearchWorkspace() {
           className="flex max-w-lg flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11"
           onOpenAutoFocus={(event) => {
             event.preventDefault();
-            const selector = filterSectionRef.current === "collection"
-              ? "#search-collection"
-              : filterSectionRef.current === "type"
-                ? "#search-all-types"
-                : filterSectionRef.current === "tags"
-                  ? "#search-tags"
-                  : "[data-filter-title]";
-            filterContentRef.current?.querySelector<HTMLElement>(selector)?.focus();
+            filterContentRef.current?.querySelector<HTMLElement>("[data-filter-title]")?.focus();
           }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            const trigger = filterTriggerRef.current;
-            (trigger?.isConnected && getComputedStyle(trigger).display !== "none" ? trigger : filtersButtonRef.current)?.focus({ preventScroll: true });
+            filtersButtonRef.current?.focus({ preventScroll: true });
           }}
         >
           <div className="shrink-0 border-b border-border px-5 py-5 pr-14">
@@ -1733,24 +1673,6 @@ function LiteralResultList({ items }: { items: GrepDoc[] }) {
         </li>
       ))}
     </ol>
-  );
-}
-
-function searchModeClass(active: boolean) {
-  return cn(
-    "inline-flex min-h-10 cursor-pointer items-center justify-center gap-1.5 rounded-[var(--radius-sm)] px-3 text-[13px] font-medium transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-    active
-      ? "bg-surface-selected text-surface-selected-foreground"
-      : "text-foreground-muted hover:bg-surface-hover hover:text-foreground",
-  );
-}
-
-function sourceFilterClass(active: boolean) {
-  return cn(
-    "relative -mb-px inline-flex min-h-12 min-w-8 cursor-pointer items-center justify-center border-b-2 px-1 text-[13px] font-medium transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring @min-[40rem]/search:px-2 @min-[40rem]/search:text-sm",
-    active
-      ? "border-primary font-semibold text-link"
-      : "border-transparent text-foreground-muted hover:bg-surface-hover hover:text-foreground",
   );
 }
 

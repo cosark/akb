@@ -104,9 +104,12 @@ for (const viewport of [
       await expect(page.getByText("Initial result")).toBeVisible();
       const query = page.getByRole("searchbox", { name: "Search query" });
       await expect(query).toHaveCount(1);
-      await expect(page.getByRole("button", { name: "All", exact: true })).toHaveAttribute("aria-pressed", "true");
-      await expect(page.getByRole("group", { name: "Search mode" })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Semantic", exact: true })).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByRole("button", { name: "Result type", exact: true })).toHaveText("All content");
+      await expect(page.getByRole("button", { name: "Search method", exact: true })).toHaveText("By meaning");
+      const entry = page.getByTestId("search-query-entry");
+      await expect(entry.getByRole("searchbox", { name: "Search query" })).toBeVisible();
+      await expect(entry.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+      await expect(page.getByRole("group", { name: "Filter by content kind" })).toHaveCount(0);
       await expect(page.getByTestId("search-workspace").getByRole("searchbox", { name: "Search query" })).toBeVisible();
       await expect(page.locator(".app-header").getByRole("searchbox", { name: "Search query" })).toHaveCount(0);
       await expect(page.locator(".app-header")).toHaveAttribute("data-surface", "paper");
@@ -125,10 +128,15 @@ for (const viewport of [
       await expect(query).toHaveValue("deployment");
       await expect(page.getByRole("button", { name: "Search knowledge", exact: true })).toBeFocused();
       await expect(page.getByRole("complementary", { name: "Search refinements" })).toHaveCount(0);
-      const kinds = await page.getByRole("group", { name: "Filter by content kind" }).boundingBox();
       const results = await page.getByRole("region", { name: "Search results" }).boundingBox();
-      if (!kinds || !results) throw new Error("Search workspace is not visible");
-      expect(kinds.y + kinds.height).toBeLessThanOrEqual(results.y + 1);
+      const controls = await page.getByTestId("search-tool-row").boundingBox();
+      if (!controls || !results) throw new Error("Search workspace is not visible");
+      expect(controls.y + controls.height).toBeLessThanOrEqual(results.y + 1);
+      const submit = (await entry.getByRole("button", { name: "Search", exact: true }).boundingBox())!;
+      const queryEntry = (await entry.boundingBox())!;
+      expect(submit.x).toBeGreaterThan(queryEntry.x);
+      expect(submit.x + submit.width).toBeLessThan(queryEntry.x + queryEntry.width);
+      expect(submit.y).toBeGreaterThanOrEqual(queryEntry.y);
       const commandFrame = (await page.getByTestId("search-command-header").boundingBox())!;
       const resultFrame = (await page.getByRole("list", { name: "Semantic search results" }).boundingBox())!;
       const countFrame = (await page.getByTestId("search-tool-row").locator(":scope > div").boundingBox())!;
@@ -157,9 +165,11 @@ for (const viewport of [
       await expect(
         page.getByText("Report outside initial top 25"),
       ).toBeVisible();
-      await page
-        .getByRole("button", { name: "Literal", pressed: false })
-        .click();
+      await page.getByRole("button", { name: "Search method", exact: true }).click();
+      const methodMenu = (await page.getByRole("menu").boundingBox())!;
+      expect(methodMenu.x).toBeGreaterThanOrEqual(8);
+      expect(methodMenu.x + methodMenu.width).toBeLessThanOrEqual(viewport.width - 8);
+      await page.getByRole("menuitemradio", { name: /^Exact text/ }).click();
       await page
         .getByRole("button", { name: "Filters", exact: true })
         .click();

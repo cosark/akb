@@ -13,7 +13,7 @@
 // cost) and lets us assert call args directly. The MSW-level contract
 // test already lives in lib/__tests__/api-search-contract.test.ts.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 
@@ -74,6 +74,16 @@ function renderAuthenticatedAt(url: string) {
   );
 }
 
+async function selectMethod(user: ReturnType<typeof userEvent.setup>, method: "By meaning" | "Exact text") {
+  await user.click(screen.getByRole("button", { name: "Search method" }));
+  await user.click(screen.getByRole("menuitemradio", { name: new RegExp(`^${method}`) }));
+}
+
+async function selectType(user: ReturnType<typeof userEvent.setup>, type: string) {
+  await user.click(screen.getByRole("button", { name: "Result type" }));
+  await user.click(screen.getByRole("menuitemradio", { name: type }));
+}
+
 function SearchLocationProbe() {
   const location = useLocation();
   return (
@@ -103,13 +113,13 @@ describe("SearchPage · semantic (dense) mode", () => {
       "overflow-hidden",
     );
     expect(commandHeader).toHaveAttribute("role", "search");
+    expect(commandHeader).toHaveClass("border", "bg-surface");
     expect(workspace.contains(commandHeader)).toBe(true);
     expect(workspace.contains(suggestions)).toBe(true);
-    expect(screen.getByRole("group", { name: "Search mode" })).toBeTruthy();
+    expect(commandHeader).toContainElement(screen.getByRole("button", { name: "Search method" }));
+    expect(within(commandHeader).getByRole("searchbox", { name: "Search query" })).toBeInTheDocument();
+    expect(within(commandHeader).getByRole("button", { name: "Search" })).toHaveAttribute("type", "submit");
     expect(screen.getByRole("region", { name: "Search results" })).toBeTruthy();
-    expect(screen.getByTestId("search-tool-row")).toHaveClass(
-      "min-h-10",
-    );
     expect(commandHeader).toContainElement(
       screen.getByRole("button", { name: "Search scope: All vaults" }),
     );
@@ -123,9 +133,7 @@ describe("SearchPage · semantic (dense) mode", () => {
     expect(
       screen.queryByRole("complementary", { name: "Search refinements" }),
     ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("group", { name: "Filter by content kind" }),
-    ).toContainElement(screen.getByRole("button", { name: "Tables", pressed: false }));
+    expect(screen.getByRole("button", { name: "Result type" })).toHaveTextContent("All content");
 
     const filters = screen.getByRole("button", { name: "Filters" });
     expect(filters).toHaveAttribute("aria-haspopup", "dialog");
@@ -139,15 +147,36 @@ describe("SearchPage · semantic (dense) mode", () => {
     expect(filters).toHaveFocus();
   });
 
-  it("offers All as the content-kind reset without changing the query", async () => {
+  it("offers All content in the result-type menu without changing the query", async () => {
     mockedSearch.mockResolvedValue({ query: "postgres", total: 0, returned: 0, total_matches: 0, results: [] });
     const user = userEvent.setup();
     renderAt("/search?q=postgres&source=table&v=engineering");
-    await screen.findByRole("button", { name: "Tables", pressed: true });
-    await user.click(screen.getByRole("button", { name: "All" }));
+    expect(await screen.findByRole("button", { name: "Result type" })).toHaveTextContent("Tables");
+    await selectType(user, "All content");
     expect(screen.getByRole("searchbox", { name: "Search query" })).toHaveValue("postgres");
-    expect(screen.getByRole("button", { name: "All", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Result type" })).toHaveTextContent("All content");
     await waitFor(() => expect(mockedSearch).toHaveBeenLastCalledWith("postgres", ["engineering"], 25, expect.objectContaining({ source_type: undefined })));
+  });
+
+  it("submits the current draft from the search surface while preserving its Vault context", async () => {
+    mockedSearch.mockResolvedValue({ query: "new query", total: 0, returned: 0, total_matches: 0, results: [] });
+    const user = userEvent.setup();
+    renderAt("/search?q=old&v=engineering");
+    await waitFor(() => expect(mockedSearch).toHaveBeenCalled());
+    const form = screen.getByTestId("search-command-header");
+    const queryEntry = within(form).getByTestId("search-query-entry");
+    const query = within(queryEntry).getByRole("searchbox", { name: "Search query" });
+    const submit = within(queryEntry).getByRole("button", { name: "Search" });
+    expect(submit).toHaveAttribute("type", "submit");
+    await user.clear(query);
+    await user.type(query, "new query");
+    expect(within(queryEntry).getByRole("button", { name: "Clear search query" })).toBeInTheDocument();
+    expect(within(form).getByRole("button", { name: "Search scope: engineering" })).toBeInTheDocument();
+    expect(within(form).getByRole("button", { name: "Search method" })).toHaveTextContent("By meaning");
+    await user.click(submit);
+    await waitFor(() => expect(mockedSearch).toHaveBeenLastCalledWith(
+      "new query", ["engineering"], 25, expect.any(Object),
+    ));
   });
 
   it("calls searchDocs on initial render with ?q and renders a hit", async () => {
@@ -354,8 +383,8 @@ describe("SearchPage · literal mode + counter header (PR #39 regression)", () =
   });
 });
 
-describe("SearchPage · mode toggle re-issues the correct call", () => {
-  it("switches from semantic to literal on button click", async () => {
+describe("SearchPage · search method re-issues the correct call", () => {
+  it("switches from meaning to exact text through the method menu", async () => {
     mockedSearch.mockResolvedValue({
       query: "k8s",
       total: 0,
@@ -373,14 +402,14 @@ describe("SearchPage · mode toggle re-issues the correct call", () => {
     renderAt("/search?q=k8s");
     await waitFor(() => expect(mockedSearch).toHaveBeenCalledTimes(1));
     const u = userEvent.setup();
-    // The mode toggle ("Literal", with aria-pressed) and the short-query
-    // hint link below ("LITERAL") both reference literal mode. The toggle
-    // is the only one with aria-pressed set.
-    const toggle = screen
-      .getAllByRole("button", { name: "Literal" })
-      .find((b) => b.hasAttribute("aria-pressed"));
-    if (!toggle) throw new Error("Literal toggle button not found");
-    await u.click(toggle);
+    await u.click(screen.getByRole("button", { name: "Search method" }));
+    expect(screen.getByRole("menuitemradio", { name: /^By meaning/ })).toHaveTextContent("Semantic");
+    expect(screen.getByRole("menuitemradio", { name: /^Exact text/ })).toHaveTextContent("Literal");
+    await u.keyboard("{Escape}");
+    await selectMethod(u, "Exact text");
+    expect(screen.getByRole("button", { name: "Search method" })).toHaveTextContent("Exact text");
+    expect(screen.queryByRole("button", { name: "Result type" })).not.toBeInTheDocument();
+    expect(screen.getByText("Exact matches")).toBeInTheDocument();
     await waitFor(() => expect(mockedGrep).toHaveBeenCalledWith("k8s", [], 20, expect.objectContaining({ regex: false, case_sensitive: false })));
   });
 });

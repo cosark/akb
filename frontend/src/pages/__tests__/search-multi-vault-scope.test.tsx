@@ -187,7 +187,8 @@ describe("SearchPage · multi-vault scope · interactions (write path)", () => {
     await user.click(screen.getByRole("button", { name: "Remove alpha from search scope" }));
     await waitFor(() => expect(mockedSearch).toHaveBeenLastCalledWith("x", [], 25, expect.any(Object)));
     expect(screen.getByTestId("search-url")).toHaveTextContent("v=");
-    await user.click(screen.getByRole("button", { name: "Literal" }));
+    await user.click(screen.getByRole("button", { name: "Search method" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^Exact text/ }));
     await waitFor(() => expect(grepDocs).toHaveBeenLastCalledWith("x", [], 20, expect.any(Object)));
     await user.click(screen.getByRole("button", { name: "Back" }));
     await waitFor(() => expect(mockedSearch).toHaveBeenLastCalledWith("x", [], 25, expect.any(Object)));

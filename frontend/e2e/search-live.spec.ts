@@ -117,11 +117,12 @@ test("real login, search filters, reload and exact-search options", async ({
       const url = new URL(response.url());
       return url.pathname === "/api/v1/search" && url.searchParams.get("vault") === vault;
     });
-    await page.getByRole("button", { name: "Semantic", exact: true }).click();
+    await page.getByRole("button", { name: "Search method", exact: true }).click();
+    await page.getByRole("menuitemradio", { name: /^By meaning/ }).click();
     const semantic = await semanticResponse;
     expect(semantic.ok()).toBeTruthy();
     expect((await semantic.json()).results).toHaveLength(2);
-    await expect(page.getByRole("button", { name: "Semantic", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: "Search method", exact: true })).toHaveText("By meaning");
     await expect(page.getByRole("region", { name: "Search results", exact: true })).toHaveAttribute("aria-busy", "false");
     await expect(
       page.getByText("Live active report", { exact: true }),

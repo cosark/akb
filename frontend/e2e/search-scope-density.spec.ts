@@ -17,14 +17,18 @@ async function mockWorkspace(page: Page) {
   });
 }
 
-async function assertQuerySpace(scope: Locator, query: Locator, count: number, width: number) {
+async function assertQuerySpace(scope: Locator, query: Locator, count: number, width: number, contextBelow = false) {
   await expect(scope.getByRole("button", { name: /^Remove .* from search scope$/ })).toHaveCount(Math.min(count, 2));
   await expect(query).toBeInViewport();
   const scopeBox = (await scope.boundingBox())!;
   const queryBox = (await query.boundingBox())!;
   expect(scopeBox.height).toBeLessThanOrEqual(44);
   expect(queryBox.width).toBeGreaterThanOrEqual(width === 375 ? 120 : 240);
-  if (width > 375) {
+  if (contextBelow) {
+    // Full Search gives the query its own line; Vaults remain in the same surface below it.
+    expect(scopeBox.y).toBeGreaterThanOrEqual(queryBox.y + queryBox.height);
+    expect(scopeBox.y - queryBox.y - queryBox.height).toBeLessThanOrEqual(64);
+  } else if (width > 375) {
     // Selected scopes cannot turn the desktop field into a stack.
     expect(Math.abs(queryBox.y + queryBox.height / 2 - scopeBox.y - scopeBox.height / 2)).toBeLessThanOrEqual(4);
   } else {
@@ -44,7 +48,7 @@ for (const width of [375, 1440, 2560]) {
       const query = page.getByRole("searchbox", { name: "Search query", exact: true });
       const scope = page.getByRole("group", { name: "Vault search scope" });
       await expect(query).toHaveValue("guide");
-      await assertQuerySpace(scope, query, count, width);
+      await assertQuerySpace(scope, query, count, width, true);
       if (count > 2) await expect(scope.getByText(`+${count - 2}`, { exact: true })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       const commandFrame = (await page.getByTestId("search-command-header").boundingBox())!;
