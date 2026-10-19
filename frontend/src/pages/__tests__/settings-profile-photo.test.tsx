@@ -29,9 +29,13 @@ const USER = {
 };
 const PHOTO = new File(["test image bytes"], "portrait.png", { type: "image/png" });
 
-function choose(file = PHOTO) {
+function startPicker() {
+  fireEvent.click(screen.getByRole("button", { name: /^(Upload photo|Change photo|Choose another)$/ }));
+}
+function deliverFile(file = PHOTO) {
   fireEvent.change(screen.getByLabelText("Choose profile photo"), { target: { files: [file] } });
 }
+function choose(file = PHOTO) { startPicker(); deliverFile(file); }
 function ready() {
   const image = screen.getByRole("img", { name: "Selected profile photo preview" });
   Object.defineProperties(image, { naturalWidth: { value: 512, configurable: true }, naturalHeight: { value: 512, configurable: true } });
@@ -92,6 +96,85 @@ describe("Settings profile photo", () => {
     expect(screen.queryByLabelText("Current password")).not.toBeInTheDocument();
     choose(); ready(); fireEvent.click(screen.getByRole("button", { name: "Save photo" }));
     await screen.findByText("Photo saved");
+  });
+
+  it("retains a file delivered during same-account proof without previewing or uploading before verification", async () => {
+    const dirty = vi.fn(); const patch = vi.fn();
+    const view = (visible: boolean) => <ProfileSection user={USER} visible={visible} localPasswordEnabled localProfileEditingEnabled onUserUpdate={patch} onDirtyChange={dirty} />;
+    const { rerender } = render(view(true));
+    startPicker(); rerender(view(false)); deliverFile();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(api.uploadProfilePhoto).not.toHaveBeenCalled();
+    expect(dirty).toHaveBeenLastCalledWith(true);
+    rerender(view(true));
+    expect(await screen.findByRole("img", { name: "Selected profile photo preview" })).toBeVisible();
+    ready(); fireEvent.click(screen.getByRole("button", { name: "Save photo" }));
+    await screen.findByText("Photo saved");
+    expect(api.uploadProfilePhoto).toHaveBeenCalledWith(PHOTO, REVISION);
+  });
+
+  it("keeps the revision reviewed before opening the native picker even when proof sees a newer photo", async () => {
+    const view = (visible: boolean, avatar = AVATAR) => <ProfileSection user={{ ...USER, avatar }} visible={visible} localPasswordEnabled localProfileEditingEnabled onUserUpdate={vi.fn()} />;
+    const { rerender } = render(view(true));
+    startPicker(); rerender(view(false)); deliverFile();
+    rerender(view(true, NEXT_AVATAR)); ready();
+    fireEvent.click(screen.getByRole("button", { name: "Save photo" }));
+    await screen.findByText("Photo saved");
+    expect(api.uploadProfilePhoto).toHaveBeenCalledWith(PHOTO, REVISION);
+  });
+
+  it("does not adopt an unsolicited file change without a verified picker owner", () => {
+    const dirty = vi.fn(); mount({ onDirtyChange: dirty }); deliverFile();
+    expect(dirty).toHaveBeenLastCalledWith(false);
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(api.uploadProfilePhoto).not.toHaveBeenCalled();
+  });
+
+  it.each(["account", "session"])("discards a pending selection when its %s changes before proof completes", async change => {
+    const dirty = vi.fn();
+    const view = (visible: boolean, user = USER) => <ProfileSection user={user} visible={visible} localPasswordEnabled localProfileEditingEnabled onUserUpdate={vi.fn()} onDirtyChange={dirty} />;
+    const { rerender } = render(view(true));
+    startPicker(); rerender(view(false)); deliverFile();
+    expect(dirty).toHaveBeenLastCalledWith(true);
+    if (change === "session") vi.mocked(api.isCurrentAuthSession).mockReturnValue(false);
+    rerender(view(true, change === "account" ? { ...USER, user_id: "u2" } : USER));
+    await waitFor(() => expect(dirty).toHaveBeenLastCalledWith(false));
+    expect(screen.queryByRole("img", { name: "Selected profile photo preview" })).not.toBeInTheDocument();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(api.uploadProfilePhoto).not.toHaveBeenCalled();
+  });
+
+  it("revokes a preview rather than exposing it to a replacement account using the same auth carrier", async () => {
+    const { rerender } = mount(); choose();
+    const src = screen.getByRole("img", { name: "Selected profile photo preview" }).getAttribute("src");
+    rerender(<ProfileSection user={{ ...USER, user_id: "u2" }} localPasswordEnabled localProfileEditingEnabled onUserUpdate={vi.fn()} />);
+    await waitFor(() => expect(revoke).toHaveBeenCalledWith(src));
+    expect(screen.queryByRole("button", { name: "Save photo" })).not.toBeInTheDocument();
+    expect(api.uploadProfilePhoto).not.toHaveBeenCalled();
+  });
+
+  it("uses the refreshed upload policy before promoting a pending selection", async () => {
+    const dirty = vi.fn();
+    const view = (visible: boolean, canUpload = true) => <ProfileSection user={{ ...USER, profile_capabilities: { avatar: { ...USER.profile_capabilities.avatar, can_upload: canUpload } } }} visible={visible} localPasswordEnabled localProfileEditingEnabled onUserUpdate={vi.fn()} onDirtyChange={dirty} />;
+    const { rerender } = render(view(true));
+    startPicker(); rerender(view(false)); deliverFile();
+    rerender(view(true, false));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Photo changes are no longer available");
+    expect(dirty).toHaveBeenLastCalledWith(false);
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(api.uploadProfilePhoto).not.toHaveBeenCalled();
+  });
+
+  it("a native cancel event preserves the prior draft until the next deliberate choice", () => {
+    mount(); choose(); ready();
+    const src = screen.getByRole("img", { name: "Selected profile photo preview" }).getAttribute("src");
+    startPicker(); fireEvent(screen.getByLabelText("Choose profile photo"), new Event("cancel", { bubbles: true }));
+    expect(screen.getByRole("img", { name: "Selected profile photo preview" })).toHaveAttribute("src", src);
+    expect(URL.createObjectURL).toHaveBeenCalledOnce();
+    choose(new File(["other image"], "other.png", { type: "image/png" }));
+    expect(screen.getByRole("img", { name: "Selected profile photo preview" })).not.toHaveAttribute("src", src);
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(2);
+    expect(api.uploadProfilePhoto).not.toHaveBeenCalled();
   });
 
   it("retains a failed candidate, supports dismiss/retry and does not replace the saved photo", async () => {

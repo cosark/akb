@@ -24,11 +24,14 @@ type PhotoUser = {
   profile_capabilities?: { avatar?: ProfileAvatarCapabilities };
 };
 
-type Candidate = {
-  file: File;
-  url: string;
+type SelectionOwner = {
+  userId: string;
   revision: string | null;
   session: AuthSessionSnapshot;
+};
+type PendingSelection = SelectionOwner & { file: File };
+type Candidate = PendingSelection & {
+  url: string;
   ready: boolean;
 };
 
@@ -50,6 +53,7 @@ export function useProfilePhotoEditor({ user, visible, blocked, onUserUpdate }: 
   onUserUpdate: (patch: { avatar?: AvatarState; profile_capabilities?: PhotoUser["profile_capabilities"] }) => void;
 }) {
   const [candidate, setCandidate] = useState<Candidate | null>(null);
+  const [pendingSelection, setPendingSelection] = useState<PendingSelection | null>(null);
   const [removeReview, setRemoveReview] = useState<{ revision: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -58,6 +62,7 @@ export function useProfilePhotoEditor({ user, visible, blocked, onUserUpdate }: 
   const mounted = useRef(true);
   const owner = useRef(user.user_id);
   const inFlight = useRef(false);
+  const pickerOwner = useRef<SelectionOwner | null>(null);
   owner.current = user.user_id;
   const policy = user.profile_capabilities?.avatar;
   const enabled = policy?.supported === true;
@@ -69,22 +74,30 @@ export function useProfilePhotoEditor({ user, visible, blocked, onUserUpdate }: 
   }, []);
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
   useEffect(() => {
-    if (candidate && !isCurrentAuthSession(candidate.session)) {
+    const stale = (selection: SelectionOwner) => selection.userId !== user.user_id || !isCurrentAuthSession(selection.session);
+    if (pickerOwner.current && stale(pickerOwner.current)) pickerOwner.current = null;
+    if (pendingSelection && stale(pendingSelection)) setPendingSelection(null);
+    if (candidate && stale(candidate)) {
       setCandidate(null);
       setError("");
       setConflict(false);
       setRemoveReview(null);
     }
-  }, [candidate, user.user_id, visible]);
+  }, [candidate, pendingSelection, user.user_id, visible]);
 
-  const owns = (id: string, session: AuthSessionSnapshot) =>
-    mounted.current && owner.current === id && isCurrentAuthSession(session);
-
-  function select(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = ""; // A cancelled picker is inert; the same file can be chosen again.
-    if (!file || !visible || blocked || inFlight.current || !policy?.can_upload) return;
+  // A native chooser can return its File while window.focus is rechecking
+  // identity. Retain it without a blob URL or write until that proof succeeds.
+  useEffect(() => {
+    if (!pendingSelection || !visible || blocked || busy) return;
+    setPendingSelection(null);
+    if (pendingSelection.userId !== user.user_id || !isCurrentAuthSession(pendingSelection.session)) return;
     setError(""); setRemoveReview(null);
+    if (!policy?.can_upload) {
+      setCandidate(null);
+      setError("Photo changes are no longer available. Your saved photo has not changed.");
+      return;
+    }
+    const { file } = pendingSelection;
     if (!policy.allowed_content_types.includes(file.type)) {
       setError("Choose a JPEG, PNG or WebP image. Animated images are not supported.");
       return;
@@ -93,7 +106,27 @@ export function useProfilePhotoEditor({ user, visible, blocked, onUserUpdate }: 
       setError(`Choose a non-empty image up to ${Math.floor(policy.max_upload_bytes / (1024 * 1024))} MB.`);
       return;
     }
-    setCandidate({ file, url: URL.createObjectURL(file), revision: user.avatar?.revision ?? null, session: authSessionSnapshot(), ready: false });
+    setCandidate({ ...pendingSelection, url: URL.createObjectURL(file), ready: false });
+  }, [pendingSelection, visible, blocked, busy, policy, user.user_id]);
+
+  const owns = (id: string, session: AuthSessionSnapshot) =>
+    mounted.current && owner.current === id && isCurrentAuthSession(session);
+
+  function beginSelection() {
+    if (!visible || blocked || inFlight.current || pendingSelection || !policy?.can_upload) return false;
+    // Bind ownership and optimistic concurrency before leaving for native UI,
+    // never to whichever account/photo happens to be current on return.
+    pickerOwner.current = { userId: user.user_id, revision: user.avatar?.revision ?? null, session: authSessionSnapshot() };
+    return true;
+  }
+
+  function select(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = ""; // A cancelled picker is inert; the same file can be chosen again.
+    const selection = pickerOwner.current;
+    pickerOwner.current = null;
+    if (!file || !selection || !owns(selection.userId, selection.session)) return;
+    setPendingSelection({ ...selection, file });
   }
 
   function previewLoaded(image: HTMLImageElement) {
@@ -106,6 +139,7 @@ export function useProfilePhotoEditor({ user, visible, blocked, onUserUpdate }: 
 
   function cancel() {
     if (inFlight.current) return;
+    pickerOwner.current = null; setPendingSelection(null);
     setCandidate(null); setRemoveReview(null); setError(""); setConflict(false);
   }
 
@@ -115,8 +149,8 @@ export function useProfilePhotoEditor({ user, visible, blocked, onUserUpdate }: 
   }
 
   async function save() {
-    if (!candidate?.ready || !visible || blocked || inFlight.current || !policy?.can_upload || conflict) return;
-    if (!isCurrentAuthSession(candidate.session)) { cancel(); return; }
+    if (!candidate?.ready || pendingSelection || !visible || blocked || inFlight.current || !policy?.can_upload || conflict) return;
+    if (!owns(candidate.userId, candidate.session)) { cancel(); return; }
     inFlight.current = true; setBusy(true); setError("");
     const submitted = candidate;
     const id = user.user_id;
@@ -163,10 +197,10 @@ export function useProfilePhotoEditor({ user, visible, blocked, onUserUpdate }: 
 
   return {
     user, policy, enabled, candidate, removeReview, busy, error, conflict,
-    dirty: candidate !== null || removeReview !== null,
-    blocked: blocked || busy || !visible,
+    dirty: candidate !== null || pendingSelection !== null || removeReview !== null,
+    blocked: blocked || busy || !visible || pendingSelection !== null,
     message: flash.message,
-    select, previewLoaded, cancel, save, remove, reload,
+    beginSelection, select, previewLoaded, cancel, save, remove, reload,
     requestRemoval: () => { if (visible && !blocked && !inFlight.current && policy?.can_remove) { setRemoveReview({ revision: user.avatar?.revision ?? null }); setError(""); setConflict(false); } },
     dismissError: () => setError(""),
     previewFailed: () => { setCandidate(null); setError("This image could not be opened. Choose a different JPEG, PNG or WebP image."); },
@@ -201,7 +235,7 @@ export function ProfilePhotoEditor({ editor }: { editor: ReturnType<typeof usePr
         <input ref={input} type="file" accept={policy?.allowed_content_types.join(",") ?? "image/jpeg,image/png,image/webp"}
           className="sr-only" tabIndex={-1} aria-label="Choose profile photo" aria-describedby={descriptionId} disabled={blocked || !policy?.can_upload} onChange={editor.select} />
         {policy?.can_upload && <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button ref={chooseButton} variant="outline" size="sm" type="button" disabled={blocked} aria-describedby={`${descriptionId}${editor.error || editor.conflict ? ` ${errorId}` : ""}`} className="min-h-11 sm:min-h-9" onClick={() => input.current?.click()}>
+          <Button ref={chooseButton} variant="outline" size="sm" type="button" disabled={blocked} aria-describedby={`${descriptionId}${editor.error || editor.conflict ? ` ${errorId}` : ""}`} className="min-h-11 sm:min-h-9" onClick={() => { if (editor.beginSelection()) input.current?.click(); }}>
             <Camera className="h-4 w-4" aria-hidden />{candidate ? "Choose another" : photoPresent ? "Change photo" : "Upload photo"}
           </Button>
           {candidate ? <>

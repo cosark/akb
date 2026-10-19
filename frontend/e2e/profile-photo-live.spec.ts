@@ -28,14 +28,38 @@ test("profile photo persists through real storage, reload and local reauthentica
     await page.goto("/auth"); await page.evaluate(token => localStorage.setItem("akb_token", token), token);
     await page.goto("/settings");
     const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
-    const select = async () => {
-      await dialog.getByLabel("Choose profile photo").setInputFiles({ name: "owned-portrait.png", mimeType: "image/png", buffer: png });
+    const pickPhoto = async (withForegroundProof = false) => {
+      const pickerEvent = page.waitForEvent("filechooser");
+      await dialog.getByRole("button", { name: /^(Upload photo|Change photo|Choose another)$/ }).click();
+      const picker = await pickerEvent;
+      if (withForegroundProof) {
+        let release!: () => void;
+        let reached!: () => void;
+        const pending = new Promise<void>(resolve => { release = resolve; });
+        const started = new Promise<void>(resolve => { reached = resolve; });
+        await page.route("**/api/v1/auth/me", async route => {
+          reached();
+          await pending;
+          await route.continue();
+        }, { times: 1 });
+        try {
+          await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+          await started;
+          await expect(dialog.getByRole("button", { name: "Upload photo", exact: true })).not.toBeVisible();
+          await picker.setFiles({ name: "owned-portrait.png", mimeType: "image/png", buffer: png });
+          await expect(dialog.getByRole("button", { name: "Save photo", exact: true })).not.toBeVisible();
+        } finally { release(); }
+      } else await picker.setFiles({ name: "owned-portrait.png", mimeType: "image/png", buffer: png });
+      await expect(dialog.getByRole("img", { name: "Selected profile photo preview" })).toBeVisible();
       await expect(dialog.getByRole("button", { name: "Save photo" })).toBeEnabled();
+    };
+    const select = async (withForegroundProof = false) => {
+      await pickPhoto(withForegroundProof);
       await dialog.getByRole("button", { name: "Save photo" }).click();
       await expect(dialog.getByRole("button", { name: "Change photo" })).toBeVisible();
       await expect(dialog.locator('[data-slot="user-avatar"] img')).toHaveCount(1);
     };
-    await select();
+    await select(true);
     const saved = await (await request.get(`${endpoint}/auth/me`, { headers: bearer(token) })).json();
     const firstRevision = saved.avatar.revision;
     const bytes = await request.get(`${endpoint}${saved.avatar.url.replace(endpoint, "")}`, { headers: bearer(token) });
@@ -51,7 +75,7 @@ test("profile photo persists through real storage, reload and local reauthentica
     // A committed replacement may lose only its HTTP acknowledgement. A retry
     // must conflict, not overwrite, and failed recovery must keep the fence.
     await dialog.getByLabel("Display name", { exact: true }).fill("Unrelated profile draft");
-    await dialog.getByLabel("Choose profile photo").setInputFiles({ name: "replacement.png", mimeType: "image/png", buffer: png });
+    await pickPhoto();
     await expect(dialog.getByRole("button", { name: "Save photo", exact: true })).toBeEnabled();
     let loseAcknowledgement = true;
     await page.route("**/api/v1/auth/me/avatar?**", async route => {
