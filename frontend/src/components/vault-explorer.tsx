@@ -647,9 +647,9 @@ export function VaultExplorer({
             />
         </label>
         </div>
-        {activeFilterCount > 0 && <div className="flex items-center justify-between gap-2 pb-1 text-xs text-foreground-muted"><span>{activeFilterCount} active {activeFilterCount === 1 ? "filter" : "filters"}</span><button type="button" onClick={() => { changeArchiveScope("unarchived"); setKindFilter("all"); changeCollectionScope(""); focusResourceFilter(); }} className="rounded-[var(--radius-sm)] text-link focus-visible:ring-2 focus-visible:ring-ring">Reset filters</button></div>}
       </div>
 
+      {activeFilterCount > 0 && <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2 text-xs text-foreground-muted"><span>{activeFilterCount} active {activeFilterCount === 1 ? "filter" : "filters"}</span><button type="button" onClick={() => { changeArchiveScope("unarchived"); setKindFilter("all"); changeCollectionScope(""); focusResourceFilter(); }} className="rounded-[var(--radius-sm)] text-link focus-visible:ring-2 focus-visible:ring-ring">Reset filters</button></div>}
       <div
         ref={listRef}
         role="tree"
