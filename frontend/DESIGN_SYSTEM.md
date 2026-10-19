@@ -1369,8 +1369,12 @@ a continuous vertical boundary when the available workspace reaches 40rem;
 stacked regions use a horizontal boundary. Omit absent ledgers. Recent items
 retain their compact tonal icon tiles. Suggested searches occupy a full-width
 header band followed by three joined action cells at 40rem, or stacked cells
-below it. Preserve wrapping labels and a visible forward arrow. Use the shared
-panel's existing inset and compact spacing; do not replace the bands with large
+below it. Preserve wrapping labels and a visible forward arrow. The ready state
+has no outer body padding: section bands and dividers reach the panel edges.
+Section headers and list/action rows own a single 16px horizontal inset. Reserve
+scrollbar space only when ready-state content overflows. Active pre-query filter
+chips and notices keep their own 16px inset; searched results retain the normal
+padded body and stable scrollbar gutter. Do not replace the bands with large
 free-standing headings or separate suggestion cards.
 No illustrative sidebar, invented facet totals, unsupported sort, or query
 qualifier parser is added. Server contracts and saved URL state remain authoritative.

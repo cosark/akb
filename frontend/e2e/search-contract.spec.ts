@@ -232,6 +232,13 @@ for (const viewport of [
       await page.screenshot({ path: testInfo.outputPath("search-no-results.png"), animations: "disabled" });
       await page.getByRole("button", { name: "Clear search query" }).click();
       await expect(page.getByRole("heading", { name: "Suggested searches" })).toBeVisible();
+      const readyPane = page.getByTestId("search-results-pane");
+      const readyPaneBox = (await readyPane.boundingBox())!;
+      const readyContentBox = (await page.getByTestId("search-start-state").boundingBox())!;
+      const readyGeometry = await readyPane.evaluate(element => ({ width: element.clientWidth, scrollTop: element.scrollTop }));
+      expect(Math.abs(readyContentBox.x - readyPaneBox.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(readyContentBox.y + readyGeometry.scrollTop - readyPaneBox.y)).toBeLessThanOrEqual(1);
+      expect(readyContentBox.width).toBe(readyGeometry.width);
       await page.screenshot({ path: testInfo.outputPath("search-start.png"), animations: "disabled" });
     });
   }

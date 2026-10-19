@@ -793,14 +793,14 @@ function SearchWorkspace() {
             aria-label="Search results"
             aria-busy={loading}
             data-testid="search-results-pane"
-            className="rail-scroll min-h-0 min-w-0 flex-1 overflow-y-auto bg-surface"
+            className={cn("rail-scroll min-h-0 min-w-0 flex-1 overflow-y-auto bg-surface", !searched && "rail-scroll-auto")}
           >
-            <div className="w-full space-y-4 p-4">
+            <div className={cn("w-full space-y-4", searched && "p-4")}>
               {activeFilters.length > 0 && (
                 <div
                   ref={activeFiltersRef}
                   aria-label="Active search filters"
-                  className="flex flex-wrap items-center gap-2"
+                  className={cn("flex flex-wrap items-center gap-2", !searched && "px-4 pt-4")}
                 >
                   {activeFilters.map((filter, index) => (
                     <button
@@ -900,7 +900,7 @@ function SearchWorkspace() {
                 <Alert
                   variant="warning"
                   title="Document state filter unavailable"
-                  className="rounded-[var(--radius-md)]"
+                  className={cn("rounded-[var(--radius-md)]", !searched && "mx-4 mt-4")}
                 >
                   This server could not confirm the selected document state
                   filter. Results are hidden to avoid showing the wrong scope.
@@ -1257,7 +1257,7 @@ function SearchStartState({
   const hasDocuments = visibleDocuments.length > 0;
 
   return (
-    <div className="w-full">
+    <div data-testid="search-start-state" className="w-full">
       <div className="min-w-0 bg-surface">
         {(hasSearches || hasDocuments) && (
           <div
@@ -1268,7 +1268,7 @@ function SearchStartState({
           >
             {hasSearches && (
               <section aria-labelledby="recent-searches-heading">
-                <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4 sm:px-5">
+                <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4">
                   <div className="flex min-w-0 items-center gap-2">
                     <Clock3
                       className="h-3.5 w-3.5 shrink-0 text-foreground-muted"
@@ -1298,7 +1298,7 @@ function SearchStartState({
                       key={`${search.surface}:${search.mode}:${search.vaults.join(",")}:${search.query}`}
                       type="button"
                       onClick={() => onRepeatSearch(search)}
-                      className="group flex min-h-14 w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5"
+                      className="group flex min-h-14 w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     >
                       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-border bg-surface-2 text-foreground-muted transition-colors group-hover:text-link">
                         <SearchIcon className="h-4 w-4" aria-hidden />
@@ -1341,7 +1341,7 @@ function SearchStartState({
                     "border-t border-border @min-[40rem]/search:border-l @min-[40rem]/search:border-t-0",
                 )}
               >
-                <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4 sm:px-5">
+                <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4">
                   <div className="flex min-w-0 items-center gap-2">
                     <FileText
                       className="h-3.5 w-3.5 shrink-0 text-foreground-muted"
@@ -1370,7 +1370,7 @@ function SearchStartState({
                         id={returnFocusId}
                         to={`/vault/${document.vault}/doc/${encodeURIComponent(document.path)}`}
                         state={documentPreviewState(location, returnFocusId)}
-                        className="group flex min-h-14 items-center gap-3 px-4 py-2.5 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5"
+                        className="group flex min-h-14 items-center gap-3 px-4 py-2.5 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                       >
                         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-border bg-surface-2 text-foreground-muted transition-colors group-hover:text-link">
                           <FileText className="h-4 w-4" aria-hidden />
@@ -1397,7 +1397,7 @@ function SearchStartState({
         )}
 
         <section>
-          <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4 sm:px-5">
+          <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4">
             <div>
               <h3
                 id="search-start-heading"
@@ -1423,7 +1423,7 @@ function SearchStartState({
                 type="button"
                 aria-label={suggestion}
                 onClick={() => onSuggestion(suggestion)}
-                className="group flex min-h-14 w-full cursor-pointer items-center gap-3 px-4 text-left transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5"
+                className="group flex min-h-14 w-full cursor-pointer items-center gap-3 px-4 text-left transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               >
                 <SearchIcon
                   className="h-4 w-4 shrink-0 text-foreground-muted"
