@@ -7,6 +7,17 @@ specifically; the proxy has its own log in
 
 ## Unreleased
 
+### Authentication
+
+- Complete a workspace SSO login after the person selects an enabled upstream
+  on the realm's login page. The browser state records the allowed choices;
+  both verified tokens must name the same allowed provider, which is checked
+  again without the provider cache before admission. Admission/domain policy
+  uses that actual provider. Direct-provider and legacy logins remain exactly
+  pinned; rejected callbacks return to the sign-in page instead of a JSON error.
+  Upgrade all callback-serving API processes together before issuing the new
+  workspace states; see the standalone SSO deployment guide (#768).
+
 ## 0.16.2 — 2026-10-13
 
 ### Authentication
