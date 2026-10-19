@@ -1362,6 +1362,12 @@ the title; location, source type and compact metadata share a quiet line below.
 Preview / Open occupies the trailing edge. Top match stays beside metadata.
 Initial re-entry content shows recent queries, recent documents and suggested
 searches inside the same panel, without a separate hero or nested outer card.
+Use quiet H3 section labels on the plain panel surface, unboxed 16px list icons,
+and a single divider before suggestions. The two recent ledgers share columns
+when the available workspace reaches 40rem; omit absent ledgers. Suggestions
+use three columns at the same container width, wrap their full labels, and keep
+a visible forward arrow. Soft token-tinted fills and hover states distinguish
+these starting actions without repeated gray title bars or table-like grids.
 No illustrative sidebar, invented facet totals, unsupported sort, or query
 qualifier parser is added. Server contracts and saved URL state remain authoritative.
 The shared multi-Vault picker lives inside the page query field, not in a second
