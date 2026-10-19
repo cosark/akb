@@ -20,6 +20,7 @@ from app.api.routes import (
     admin_sso,
     activity,
     assets,
+    user_avatar,
     app_inventory,
     app_installations,
     app_legacy_adoptions,
@@ -190,6 +191,8 @@ async def akb_error_handler(request: Request, exc: AKBError):
     retry_after = getattr(exc, "retry_after_secs", None)
     if retry_after is not None:
         headers = {"Retry-After": str(int(retry_after))}
+    if request.url.path == "/api/v1/auth/me/avatar":
+        headers = {**(headers or {}), "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
     return JSONResponse(
         status_code=exc.status_code,
         content=_error_payload(exc.status_code, detail),
@@ -358,6 +361,7 @@ async def _no_store_public_surfaces(request: Request, call_next):
 
 
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
+app.include_router(user_avatar.router, prefix="/api/v1", tags=["auth"])
 app.include_router(admin_auth.router, prefix="/api/v1", tags=["admin-auth"])
 app.include_router(admin_sso.router, prefix="/api/v1", tags=["admin-sso"])
 app.include_router(app_identity.router, prefix="/api/v1", tags=["app-identity"])

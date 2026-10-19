@@ -7,6 +7,15 @@ specifically; the proxy has its own log in
 
 ## Unreleased
 
+### Accounts
+
+- Add private profile photos for human local and SSO browser sessions. Upload,
+  replace and remove a photo in Settings without changing SSO-managed identity
+  fields. Photos use authenticated self-only reads, revision conflict checks,
+  bounded image normalization and durable object cleanup. Migration 114 and
+  matching API/worker versions are required; see
+  [profile photo operations](../docs/operations/profile-photos.md).
+
 ### Authentication
 
 - Complete a workspace SSO login after the person selects an enabled upstream

@@ -19,6 +19,7 @@ from app.exceptions import (
     ConflictError,
 )
 from app.models.pat_issuance import NAME_MAX_LENGTH, PATIssuanceRequest
+from app.models.user_avatar import CurrentUserProfile
 from app.services.token_issuer_policy import require_issuer_carrier, validate_locked_issuer
 from app.services.access_service import VALID_WRITE_ACTIONS, check_vault_access
 from app.services.auth_service import (
@@ -713,8 +714,9 @@ async def keycloak_backchannel_logout(logout_token: str = Form(...)):
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/auth/me", summary="Get current user info")
+@router.get("/auth/me", summary="Get current user info", response_model=CurrentUserProfile)
 async def me(user: AuthenticatedUser = Depends(get_current_user)):
+    from app.services.user_avatar_service import profile_metadata
     return {
         "user_id": user.user_id,
         "username": user.username,
@@ -724,6 +726,7 @@ async def me(user: AuthenticatedUser = Depends(get_current_user)):
         "auth_method": user.auth_method,
         "account_kind": user.account_kind,
         "key_class": user.key_class,
+        **await profile_metadata(user),
     }
 
 

@@ -599,6 +599,20 @@ an `sr-only` summary, never the only signal.
   quiet hairlines, cardless section headings and 20/28px content padding.
   Profile uses a compact avatar identity row and stacked profile/password forms;
   label/input columns and appearance previews respond to their container width.
+  Profile photos reuse that identity row, not a new card or modal. Choosing a
+  JPEG/PNG/still WebP shows a circular, centered-square preview; Save photo is
+  explicit and independent of Save profile. Cancel returns focus to the photo
+  picker without discarding text drafts. Removal uses an inline confirmation.
+  Pending photo writes participate in Settings' dirty/busy guards; native-file
+  picker focus changes alone never close Settings. Recoverable errors preserve
+  the saved photo and selected draft. A revision conflict keeps Reload photo
+  available even after dismissing the error, and never silently overwrites.
+  `UserAvatar` owns the fixed 28/40/48px shapes in the header, account menu and
+  Profile, with authenticated, session-scoped images and grapheme initials on
+  absence/failure. Photos are self-only; Members/author images remain unchanged.
+  Local and SSO users follow the photo capability, independently of SSO-managed
+  text fields. Older servers or missing storage retain initials and explain why
+  photo editing is unavailable; a request failure is not a feature-detection signal.
   Agent connections preserves three explicit phases, stacked in reading order:
   prepare access, configure, then try a read-only request. Never hide the final
   phase until token creation or offer a placeholder secret as usable config.
