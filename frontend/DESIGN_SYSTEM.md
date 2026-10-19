@@ -1362,13 +1362,16 @@ the title; location, source type and compact metadata share a quiet line below.
 Preview / Open occupies the trailing edge. Top match stays beside metadata.
 Initial re-entry content shows recent queries, recent documents and suggested
 searches inside the same panel, without a separate hero or nested outer card.
-Use semibold H3 section headings with a bottom hairline and unboxed 16px list
-icons. The two recent ledgers share columns with a vertical divider when the
-available workspace reaches 40rem; stacked ledgers use a horizontal divider.
-Omit absent ledgers. A full-width divider separates suggestions. Suggestions
-use three columns at the same container width, wrap their full labels, and keep
-a visible forward arrow. Soft token-tinted fills and hover states distinguish
-these starting actions without repeated gray title bars or table-like grids.
+Keep the ready-state ledgers connected: each region has a compact, softly
+filled `surface-2/60` header band, small semibold H3 label, and divided list rows
+immediately below. Recent searches and Recently viewed share the upper row with
+a continuous vertical boundary when the available workspace reaches 40rem;
+stacked regions use a horizontal boundary. Omit absent ledgers. Recent items
+retain their compact tonal icon tiles. Suggested searches occupy a full-width
+header band followed by three joined action cells at 40rem, or stacked cells
+below it. Preserve wrapping labels and a visible forward arrow. Use the shared
+panel's existing inset and compact spacing; do not replace the bands with large
+free-standing headings or separate suggestion cards.
 No illustrative sidebar, invented facet totals, unsupported sort, or query
 qualifier parser is added. Server contracts and saved URL state remain authoritative.
 The shared multi-Vault picker lives inside the page query field, not in a second

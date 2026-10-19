@@ -1257,180 +1257,190 @@ function SearchStartState({
   const hasDocuments = visibleDocuments.length > 0;
 
   return (
-    <div className="w-full space-y-4">
-      {(hasSearches || hasDocuments) && (
-        <div
-          className={cn(
-            "grid border-b border-border-strong pb-4",
-            hasSearches && hasDocuments && "@min-[40rem]/search:grid-cols-2",
-          )}
-        >
-          {hasSearches && (
-            <section aria-labelledby="recent-searches-heading" className={cn("min-w-0", hasDocuments && "@min-[40rem]/search:pr-5")}>
-              <div className="mb-2 flex min-h-11 items-center justify-between gap-3 border-b border-border px-2">
-                <div className="flex min-w-0 items-center gap-3">
-                  <Clock3
-                    className="h-4 w-4 shrink-0 text-foreground-muted"
-                    aria-hidden
-                  />
-                  <h3
-                    id="recent-searches-heading"
-                    className="text-sm font-semibold text-foreground"
-                  >
-                    Recent searches
-                  </h3>
-                </div>
-                <button
-                  type="button"
-                  onClick={onClearSearches}
-                  className="inline-flex h-11 cursor-pointer items-center rounded-[var(--radius-sm)] px-2 text-xs font-medium text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-9"
-                >
-                  Clear
-                </button>
-              </div>
-              <div
-                className="space-y-0.5"
-                aria-label="Recent searches"
-              >
-                {visibleSearches.map((search) => (
-                  <button
-                    key={`${search.surface}:${search.mode}:${search.vaults.join(",")}:${search.query}`}
-                    type="button"
-                    onClick={() => onRepeatSearch(search)}
-                    className="group flex min-h-14 w-full cursor-pointer items-center gap-3 rounded-[var(--radius-sm)] px-2 py-2.5 text-left transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                  >
-                    <span className="flex h-8 w-4 shrink-0 items-center justify-center text-foreground-muted transition-colors group-hover:text-link">
-                      <SearchIcon className="h-4 w-4" aria-hidden />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-foreground transition-colors group-hover:text-link">
-                        {search.query}
-                      </span>
-                      <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-foreground-muted">
-                        <span>
-                          {search.mode === "semantic"
-                            ? "Semantic"
-                            : "Literal"}
-                        </span>
-                        <span aria-hidden>·</span>
-                        <span className="truncate">
-                          {search.vaults.length === 0
-                            ? "All vaults"
-                            : search.vaults.length === 1
-                              ? search.vaults[0]
-                              : `${search.vaults.length} vaults`}
-                        </span>
-                      </span>
-                    </span>
-                    <RelativeTime
-                      iso={search.searchedAt}
-                      className="hidden shrink-0 text-xs text-foreground-muted sm:block"
+    <div className="w-full">
+      <div className="min-w-0 bg-surface">
+        {(hasSearches || hasDocuments) && (
+          <div
+            className={cn(
+              "grid border-b border-border-strong bg-surface",
+              hasSearches && hasDocuments && "@min-[40rem]/search:grid-cols-2",
+            )}
+          >
+            {hasSearches && (
+              <section aria-labelledby="recent-searches-heading">
+                <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4 sm:px-5">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Clock3
+                      className="h-3.5 w-3.5 shrink-0 text-foreground-muted"
+                      aria-hidden
                     />
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {hasDocuments && (
-            <section
-              aria-labelledby="recent-documents-heading"
-              className={cn("min-w-0", hasSearches && "mt-4 border-t border-border-strong pt-4 @min-[40rem]/search:mt-0 @min-[40rem]/search:border-l @min-[40rem]/search:border-t-0 @min-[40rem]/search:pl-5 @min-[40rem]/search:pt-0")}
-            >
-              <div className="mb-2 flex min-h-11 items-center justify-between gap-3 border-b border-border px-2">
-                <div className="flex min-w-0 items-center gap-3">
-                  <FileText
-                    className="h-4 w-4 shrink-0 text-foreground-muted"
-                    aria-hidden
-                  />
-                  <h3
-                    id="recent-documents-heading"
-                    className="text-sm font-semibold text-foreground"
-                  >
-                    Recently viewed
-                  </h3>
-                </div>
-                <span className="text-xs text-foreground-muted">
-                  This browser
-                </span>
-              </div>
-              <div
-                className="space-y-0.5"
-                aria-label="Recently viewed documents"
-              >
-                {visibleDocuments.map((document, index) => {
-                  const returnFocusId = `recent-search-document-${index}`;
-                  return (
-                    <Link
-                      key={`${document.vault}:${document.path}`}
-                      id={returnFocusId}
-                      to={`/vault/${document.vault}/doc/${encodeURIComponent(document.path)}`}
-                      state={documentPreviewState(location, returnFocusId)}
-                      className="group flex min-h-14 items-center gap-3 rounded-[var(--radius-sm)] px-2 py-2.5 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    <h3
+                      id="recent-searches-heading"
+                      className="text-xs font-semibold text-foreground"
                     >
-                      <span className="flex h-8 w-4 shrink-0 items-center justify-center text-foreground-muted transition-colors group-hover:text-link">
-                        <FileText className="h-4 w-4" aria-hidden />
+                      Recent searches
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onClearSearches}
+                    className="inline-flex h-11 cursor-pointer items-center rounded-[var(--radius-sm)] px-2 text-xs font-medium text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-9"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div
+                  className="divide-y divide-border"
+                  aria-label="Recent searches"
+                >
+                  {visibleSearches.map((search) => (
+                    <button
+                      key={`${search.surface}:${search.mode}:${search.vaults.join(",")}:${search.query}`}
+                      type="button"
+                      onClick={() => onRepeatSearch(search)}
+                      className="group flex min-h-14 w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5"
+                    >
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-border bg-surface-2 text-foreground-muted transition-colors group-hover:text-link">
+                        <SearchIcon className="h-4 w-4" aria-hidden />
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-foreground transition-colors group-hover:text-link">
-                          {document.title}
+                        <span className="block truncate text-sm font-medium text-foreground">
+                          {search.query}
                         </span>
-                        <span className="mt-0.5 block truncate text-xs text-foreground-muted">
-                          {document.vault} · {document.path}
+                        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-foreground-muted">
+                          <span>
+                            {search.mode === "semantic"
+                              ? "Semantic"
+                              : "Literal"}
+                          </span>
+                          <span aria-hidden>·</span>
+                          <span className="truncate">
+                            {search.vaults.length === 0
+                              ? "All vaults"
+                              : search.vaults.length === 1
+                                ? search.vaults[0]
+                                : `${search.vaults.length} vaults`}
+                          </span>
                         </span>
                       </span>
                       <RelativeTime
-                        iso={document.viewedAt}
+                        iso={search.searchedAt}
                         className="hidden shrink-0 text-xs text-foreground-muted sm:block"
                       />
-                    </Link>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-        </div>
-      )}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
 
-      <section>
-        <div className="mb-3 space-y-2">
-          <div className="flex min-h-11 items-center gap-3 border-b border-border px-2">
-            <SearchIcon className="h-4 w-4 shrink-0 text-foreground-muted" aria-hidden />
-            <h3 id="search-start-heading" className="text-sm font-semibold text-foreground">
-              Suggested searches
-            </h3>
+            {hasDocuments && (
+              <section
+                aria-labelledby="recent-documents-heading"
+                className={cn(
+                  hasSearches &&
+                    "border-t border-border @min-[40rem]/search:border-l @min-[40rem]/search:border-t-0",
+                )}
+              >
+                <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4 sm:px-5">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <FileText
+                      className="h-3.5 w-3.5 shrink-0 text-foreground-muted"
+                      aria-hidden
+                    />
+                    <h3
+                      id="recent-documents-heading"
+                      className="text-xs font-semibold text-foreground"
+                    >
+                      Recently viewed
+                    </h3>
+                  </div>
+                  <span className="text-xs text-foreground-muted">
+                    This browser
+                  </span>
+                </div>
+                <div
+                  className="divide-y divide-border"
+                  aria-label="Recently viewed documents"
+                >
+                  {visibleDocuments.map((document, index) => {
+                    const returnFocusId = `recent-search-document-${index}`;
+                    return (
+                      <Link
+                        key={`${document.vault}:${document.path}`}
+                        id={returnFocusId}
+                        to={`/vault/${document.vault}/doc/${encodeURIComponent(document.path)}`}
+                        state={documentPreviewState(location, returnFocusId)}
+                        className="group flex min-h-14 items-center gap-3 px-4 py-2.5 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5"
+                      >
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-border bg-surface-2 text-foreground-muted transition-colors group-hover:text-link">
+                          <FileText className="h-4 w-4" aria-hidden />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-foreground transition-colors group-hover:text-link">
+                            {document.title}
+                          </span>
+                          <span className="mt-0.5 block truncate text-xs text-foreground-muted">
+                            {document.vault} · {document.path}
+                          </span>
+                        </span>
+                        <RelativeTime
+                          iso={document.viewedAt}
+                          className="hidden shrink-0 text-xs text-foreground-muted sm:block"
+                        />
+                      </Link>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
           </div>
-          <p className="px-2 text-xs leading-relaxed text-foreground-muted">
-            {mode === "dense" ? "Try a topic, task, or question." : "Try a word, phrase, or regular expression."}
-          </p>
-        </div>
-        <div
-          aria-label="Suggested searches"
-          className="grid gap-2 @min-[40rem]/search:grid-cols-3"
-        >
-          {SUGGESTED_QUERIES.map((suggestion) => (
-            <button
-              key={suggestion}
-              type="button"
-              aria-label={suggestion}
-              onClick={() => onSuggestion(suggestion)}
-              className="group flex min-h-14 w-full cursor-pointer items-center gap-3 rounded-[var(--radius-sm)] bg-surface-2/40 px-3 py-3 text-left transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-            >
-              <SearchIcon
-                className="h-4 w-4 shrink-0 text-foreground-muted"
-                aria-hidden
-              />
-              <span className="min-w-0 flex-1 text-sm leading-5 text-foreground [overflow-wrap:anywhere]">
-                {suggestion}
-              </span>
-              <ArrowRight
-                className="h-3.5 w-3.5 shrink-0 text-foreground-muted transition-colors group-hover:text-link"
-                aria-hidden
-              />
-            </button>
-          ))}
-        </div>
-      </section>
+        )}
+
+        <section>
+          <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4 sm:px-5">
+            <div>
+              <h3
+                id="search-start-heading"
+                className="text-xs font-semibold text-foreground"
+              >
+                Suggested searches
+              </h3>
+              <p className="mt-0.5 hidden text-xs text-foreground-muted sm:block">
+                Start with an outcome, topic, or question.
+              </p>
+            </div>
+            <span className="text-xs text-foreground-muted">
+              {mode === "dense" ? "Meaning and context" : "Exact text or regex"}
+            </span>
+          </div>
+          <div
+            aria-label="Suggested searches"
+            className="grid divide-y divide-border @min-[40rem]/search:grid-cols-3 @min-[40rem]/search:divide-x @min-[40rem]/search:divide-y-0"
+          >
+            {SUGGESTED_QUERIES.map((suggestion) => (
+              <button
+                key={suggestion}
+                type="button"
+                aria-label={suggestion}
+                onClick={() => onSuggestion(suggestion)}
+                className="group flex min-h-14 w-full cursor-pointer items-center gap-3 px-4 text-left transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5"
+              >
+                <SearchIcon
+                  className="h-4 w-4 shrink-0 text-foreground-muted"
+                  aria-hidden
+                />
+                <span className="min-w-0 flex-1 py-2 text-sm leading-5 text-foreground [overflow-wrap:anywhere]">
+                  {suggestion}
+                </span>
+                <ArrowRight
+                  className="h-3.5 w-3.5 shrink-0 text-foreground-muted transition-colors group-hover:text-link"
+                  aria-hidden
+                />
+              </button>
+            ))}
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
