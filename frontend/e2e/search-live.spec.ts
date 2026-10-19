@@ -68,14 +68,17 @@ test("real login, search filters, reload and exact-search options", async ({
     await expect(
       page.getByText("Live archived report", { exact: true }),
     ).toHaveCount(0);
-    await page.getByRole("button", { name: "More filters" }).click();
+    await page.getByRole("button", { name: "Filters", exact: true }).click();
     await page.getByRole("button", { name: "Toggle report" }).click();
+    await page.getByRole("button", { name: "Done", exact: true }).click();
     await expect(
       page.getByText("Live active report", { exact: true }),
     ).toBeVisible();
     await expect(page.getByText("Live note", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Filters", exact: true }).click();
     await page.getByRole("button", { name: "Document state", exact: true }).click();
     await page.getByRole("menuitemradio", { name: "All documents", exact: true }).click();
+    await page.getByRole("button", { name: "Done", exact: true }).click();
     await expect(
       page.getByText("Live archived report", { exact: true }),
     ).toBeVisible();
@@ -88,8 +91,9 @@ test("real login, search filters, reload and exact-search options", async ({
     await expect(
       page.getByText("Live active report", { exact: true }),
     ).toHaveCount(0);
-    await page.getByRole("button", { name: "More filters" }).click();
+    await page.getByRole("button", { name: "Filters", exact: true }).click();
     await page.getByLabel("Regular expression").click();
+    await page.getByRole("button", { name: "Done", exact: true }).click();
     await expect(
       page.getByText("Live active report", { exact: true }),
     ).toBeVisible();

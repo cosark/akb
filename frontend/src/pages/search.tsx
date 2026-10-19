@@ -1,5 +1,6 @@
 import {
   type ComponentType,
+  useLayoutEffect,
   useCallback,
   useEffect,
   useMemo,
@@ -15,7 +16,6 @@ import {
 import {
   ArrowUpRight,
   Braces,
-  Check,
   ChevronDown,
   Clock3,
   File,
@@ -32,6 +32,13 @@ import { searchDocs, grepDocs, listVaults, type GrepDoc } from "@/lib/api";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { RelativeTime } from "@/components/ui/relative-time";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -208,6 +215,31 @@ function SearchWorkspace() {
   );
   const reqId = useRef(0);
   const queryInputRef = useRef<HTMLInputElement>(null);
+  const filtersButtonRef = useRef<HTMLButtonElement>(null);
+  const filterTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const filterSectionRef = useRef<"collection" | "type" | "tags" | null>(null);
+  const filterContentRef = useRef<HTMLDivElement>(null);
+  const activeFiltersRef = useRef<HTMLDivElement>(null);
+  const pendingChipFocus = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (pendingChipFocus.current === null) return;
+    const buttons = activeFiltersRef.current?.querySelectorAll<HTMLButtonElement>(
+      "button[data-filter-chip]",
+    );
+    const target = buttons?.[Math.min(pendingChipFocus.current, buttons.length - 1)];
+    (target ?? filtersButtonRef.current)?.focus({ preventScroll: true });
+    pendingChipFocus.current = null;
+  }, [searchParams]);
+
+  function openFilters(
+    trigger: HTMLButtonElement,
+    section: typeof filterSectionRef.current = null,
+  ) {
+    filterTriggerRef.current = trigger;
+    filterSectionRef.current = section;
+    setFiltersOpen(true);
+  }
 
   const doSearch = useCallback(
     async (searchQuery: string, searchMode: Mode, selectedVaults: string[]) => {
@@ -504,13 +536,13 @@ function SearchWorkspace() {
       ? `${returnedDocs} of ${total} ${literalUnit} · ${returnedMatches} of ${totalMatches} ${totalMatches === 1 ? "match" : "matches"}`
       : `${total} ${literalUnit} · ${totalMatches} ${totalMatches === 1 ? "match" : "matches"}`;
   const activeFilterCount =
-    (activeSource === "all" ? 0 : 1) +
+    (mode === "literal" || activeSource === "all" ? 0 : 1) +
     (allTypesActive ? 0 : 1) +
     (activeTags.size === 0 ? 0 : 1) +
     Number(Boolean(options.collection)) +
     Number(archiveScope !== "unarchived") +
-    Number(options.regex) +
-    Number(options.case_sensitive) +
+    Number(mode === "literal" && options.regex) +
+    Number(mode === "literal" && options.case_sensitive) +
     Number(mode === "literal" && options.include_text_files);
   const accessibleVaultNames = new Set(vaults ?? []);
   const visibleRecentDocuments = recentDocuments
@@ -602,7 +634,7 @@ function SearchWorkspace() {
   const queryForm = (
     <form
       data-testid="search-command-header"
-      className="flex w-full min-w-0 items-start gap-2.5"
+      className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3 @min-[56rem]/search:grid-cols-[minmax(0,1fr)_auto_auto]"
       onSubmit={(event) => {
         event.preventDefault();
         commitQuery(draft);
@@ -615,7 +647,7 @@ function SearchWorkspace() {
           ? "Semantic search matches meaning and keywords."
           : "Literal search matches exact text or a regular expression."}
       </span>
-      <div className="@container/scope-query flex min-h-10 min-w-0 flex-1 flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-border-strong bg-surface px-2 py-1 shadow-xs transition-token focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-surface">
+      <div className="@container/scope-query order-1 flex min-h-12 min-w-0 flex-1 flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-border-strong bg-surface px-2 py-1.5 shadow-xs transition-token focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-surface">
         <SearchVaultPicker
           selected={scopeVaults}
           contextVault={scopedVault}
@@ -658,12 +690,38 @@ function SearchWorkspace() {
           )}
         </div>
       </div>
+      <div
+        role="group"
+        aria-label="Search mode"
+        className="order-3 col-span-2 inline-flex w-fit items-center gap-1 rounded-[var(--radius-md)] bg-surface-2 p-1 @min-[56rem]/search:order-2 @min-[56rem]/search:col-span-1"
+      >
+        <button
+          type="button"
+          aria-label="Semantic"
+          aria-pressed={mode === "dense"}
+          onClick={() => switchMode("dense")}
+          className={searchModeClass(mode === "dense")}
+        >
+          <Sparkles className="h-3.5 w-3.5" aria-hidden />
+          Semantic
+        </button>
+        <button
+          type="button"
+          aria-label="Literal"
+          aria-pressed={mode === "literal"}
+          onClick={() => switchMode("literal")}
+          className={searchModeClass(mode === "literal")}
+        >
+          <Braces className="h-3.5 w-3.5" aria-hidden />
+          Literal
+        </button>
+      </div>
       <Button
         type="submit"
         variant="default"
         size="md"
         loading={loading}
-        className="h-10 shrink-0 px-4"
+        className="order-2 h-12 shrink-0 px-5 @min-[56rem]/search:order-3"
       >
         Search
       </Button>
@@ -696,330 +754,90 @@ function SearchWorkspace() {
       >
         <header
           aria-label="Page search controls"
-          className="shrink-0 border-b border-border bg-surface px-4 py-3 sm:px-6"
+          className="shrink-0 bg-surface px-4 pb-3 pt-5 sm:px-6 sm:pt-6"
         >
-          {queryForm}
-          <VaultQuerySuggestions
-            query={draft}
-            selected={scopeVaults}
-            vaults={vaults}
-            onSelect={(vault) => {
-              setScopeVaults([...scopeVaults, vault], true);
-              queryInputRef.current?.focus({ preventScroll: true });
-            }}
-          />
+          <div className="mx-auto w-full max-w-[76rem]">
+            {queryForm}
+            <p className="mt-2 text-xs leading-relaxed text-foreground-muted">
+              {mode === "dense" ? "Find by meaning and keywords across your knowledge." : "Match exact text or a regular expression in document bodies."}
+            </p>
+            <VaultQuerySuggestions
+              query={draft}
+              selected={scopeVaults}
+              vaults={vaults}
+              onSelect={(vault) => {
+                setScopeVaults([...scopeVaults, vault], true);
+                queryInputRef.current?.focus({ preventScroll: true });
+              }}
+            />
+          </div>
         </header>
-        <div className="flex min-h-0 flex-1 flex-col @min-[56rem]/search:flex-row">
-          <aside
-            aria-label="Search refinements"
-            className="rail-scroll grid max-h-[55%] shrink-0 grid-cols-[1fr_auto] content-start gap-x-2 overflow-y-auto border-b border-border bg-surface p-3 @min-[56rem]/search:block @min-[56rem]/search:max-h-none @min-[56rem]/search:w-64 @min-[56rem]/search:border-b-0 @min-[56rem]/search:border-r @min-[56rem]/search:p-5"
-          >
-            <h2 className="mb-5 hidden items-center gap-2 text-sm font-semibold @min-[56rem]/search:flex">
-              <SlidersHorizontal
-                className="h-4 w-4 text-foreground-muted"
-                aria-hidden
-              />
-              Filters
-            </h2>
-            <div className="flex flex-wrap items-center justify-between gap-2 @min-[56rem]/search:flex-col @min-[56rem]/search:items-start">
-              <span className="hidden text-xs font-medium text-foreground-muted @min-[56rem]/search:block">
-                Search mode
-              </span>
-              <div
-                role="group"
-                aria-label="Search mode"
-                className="inline-flex min-h-10 shrink-0 items-stretch border-b border-border @min-[56rem]/search:w-full"
-              >
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="shrink-0 border-b border-border px-4 sm:px-6">
+            <div className="mx-auto flex min-h-14 w-full max-w-[76rem] items-center justify-between gap-2">
+              {mode === "dense" ? (
+                <div className="flex min-w-0 items-center gap-1" role="group" aria-label="Filter by content kind">
+                  {SOURCE_FILTERS.map(({ key, label, icon: Icon }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      aria-label={label}
+                      aria-pressed={activeSource === key}
+                      onClick={() => setFilter("source", key === "all" ? [] : [key])}
+                      className={sourceFilterClass(activeSource === key)}
+                    >
+                      <Icon className="hidden h-3.5 w-3.5 shrink-0 @min-[40rem]/search:block" aria-hidden />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="min-w-0 py-3 text-xs text-foreground-muted">Exact text matches</p>
+              )}
+              <div className="flex shrink-0 items-center gap-1">
+                {([
+                  ["collection", "Collection", Boolean(options.collection)],
+                  ["type", "Document type", activeTypes.size > 0],
+                  ["tags", "Tags", activeTags.size > 0],
+                ] as const).map(([section, label, active]) => (
+                  <button
+                    key={section}
+                    type="button"
+                    aria-haspopup="dialog"
+                    aria-controls={filtersOpen ? "search-filter-panel" : undefined}
+                    onClick={(event) => openFilters(event.currentTarget, section)}
+                    className={cn(
+                      "hidden min-h-11 items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 text-xs font-medium transition-token hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[56rem]/search:inline-flex",
+                      active ? "text-link" : "text-foreground-muted",
+                    )}
+                  >
+                    {label}
+                    <ChevronDown className="h-3 w-3" aria-hidden />
+                  </button>
+                ))}
                 <button
+                  ref={filtersButtonRef}
                   type="button"
-                  aria-label="Semantic"
-                  aria-pressed={mode === "dense"}
-                  onClick={() => switchMode("dense")}
-                  className={searchModeClass(mode === "dense")}
+                  aria-label="Filters"
+                  aria-haspopup="dialog"
+                  aria-expanded={filtersOpen}
+                  aria-controls={filtersOpen ? "search-filter-panel" : undefined}
+                  onClick={(event) => openFilters(event.currentTarget)}
+                  className="inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-xs font-medium text-foreground transition-token hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/search:px-3"
                 >
-                  <Sparkles className="h-3.5 w-3.5" aria-hidden />
-                  Semantic
-                </button>
-                <button
-                  type="button"
-                  aria-label="Literal"
-                  aria-pressed={mode === "literal"}
-                  onClick={() => switchMode("literal")}
-                  className={searchModeClass(mode === "literal")}
-                >
-                  <Braces className="h-3.5 w-3.5" aria-hidden />
-                  Literal
+                  <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
+                  Filters
+                  {activeFilterCount > 0 && <Badge variant="secondary">{activeFilterCount}</Badge>}
                 </button>
               </div>
-
-              <p className="hidden text-xs leading-relaxed text-foreground-muted @min-[56rem]/search:block">
-                {mode === "dense"
-                  ? "Find by meaning and keywords."
-                  : "Match exact text or a pattern."}
-              </p>
             </div>
-            <div className="col-span-2 row-start-2 mt-3 @min-[56rem]/search:mt-5 @min-[56rem]/search:border-t @min-[56rem]/search:border-border @min-[56rem]/search:pt-4">
-              {mode === "dense" && (
-                <fieldset>
-                  <legend className="mb-2 text-xs font-semibold">
-                    Content type
-                  </legend>
-                  <div
-                    className="flex flex-wrap gap-1.5 @min-[56rem]/search:flex-col"
-                    role="group"
-                    aria-label="Filter by content kind"
-                  >
-                    {SOURCE_FILTERS.map(({ key, label, icon: Icon }) => (
-                      <button
-                        key={key}
-                        type="button"
-                        aria-label={label}
-                        aria-pressed={activeSource === key}
-                        onClick={() =>
-                          setFilter("source", key === "all" ? [] : [key])
-                        }
-                        className={sourceFilterClass(activeSource === key)}
-                      >
-                        <Icon className="h-3.5 w-3.5" aria-hidden />
-                        <span className="flex-1">{label}</span>
-                        {activeSource === key && (
-                          <Check className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </fieldset>
-              )}
-            </div>
-            <div className="col-start-2 row-start-1 @min-[56rem]/search:mt-5">
-              <button
-                type="button"
-                aria-label="More filters"
-                aria-expanded={filtersOpen}
-                aria-controls="search-filter-tray"
-                onClick={() => setFiltersOpen((open) => !open)}
-                className={cn(
-                  "inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] border border-border px-3 text-xs font-medium transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[56rem]/search:w-full",
-                  filtersOpen
-                    ? "bg-surface-2 text-foreground"
-                    : "bg-surface text-foreground-muted",
-                )}
-              >
-                <span className="flex-1 text-left">More filters</span>
-                {activeFilterCount > 0 && (
-                  <Badge variant="secondary">{activeFilterCount}</Badge>
-                )}
-                <ChevronDown
-                  className={cn(
-                    "h-3.5 w-3.5 shrink-0 transition-transform motion-reduce:transition-none",
-                    filtersOpen && "rotate-180",
-                  )}
-                  aria-hidden
-                />
-              </button>
-            </div>
-            {filtersOpen && (
-              <aside
-                id="search-filter-tray"
-                aria-label="Search filters"
-                className="col-span-2 mt-4 border-t border-border pt-4"
-              >
-                <div className="grid gap-5 sm:grid-cols-2 @min-[56rem]/search:grid-cols-1">
-                  <fieldset>
-                    <legend className="mb-2 text-xs font-semibold">
-                      Document type
-                    </legend>
-                    <div
-                      className="flex flex-wrap gap-1.5"
-                      role="group"
-                      aria-label="Filter by document type"
-                    >
-                      <button
-                        type="button"
-                        aria-label="Show all types"
-                        aria-pressed={allTypesActive}
-                        onClick={() => setFilter("doc_type", [])}
-                        className={filterButtonClass(allTypesActive)}
-                      >
-                        All types
-                      </button>
-                      {ALL_TYPES.map((type) => (
-                        <button
-                          key={type}
-                          type="button"
-                          aria-label={`Toggle ${type}`}
-                          aria-pressed={activeTypes.has(type)}
-                          onClick={() => toggleType(type)}
-                          className={filterButtonClass(activeTypes.has(type))}
-                        >
-                          <span className="capitalize">{type}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </fieldset>
-                  <div>
-                    <label
-                      htmlFor="search-tags"
-                      className="mb-2 block text-xs font-semibold"
-                    >
-                      Tags (match any)
-                    </label>
-                    <TagInput
-                      id="search-tags"
-                      value={[...activeTags]}
-                      onChange={(tags) => setFilter("tag", tags)}
-                    />
-                    {availableTags.length > 0 && (
-                      <div
-                        className="mt-2 flex flex-wrap gap-1.5"
-                        role="group"
-                        aria-label="Suggested tags from loaded results"
-                      >
-                        {availableTags.slice(0, 12).map(([tag]) => (
-                          <button
-                            key={tag}
-                            type="button"
-                            aria-label={`Toggle tag ${tag}`}
-                            aria-pressed={activeTags.has(tag)}
-                            onClick={() => toggleTag(tag)}
-                            className={filterButtonClass(activeTags.has(tag))}
-                          >
-                            <Tag className="h-3 w-3" aria-hidden />
-                            {tag}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <form
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      setFilter("collection", [
-                        collectionDraft.trim().replace(/^\/+|\/+$/g, ""),
-                      ]);
-                    }}
-                  >
-                    <label
-                      htmlFor="search-collection"
-                      className="mb-2 block text-xs font-semibold"
-                    >
-                      Collection path (including children)
-                    </label>
-                    <div className="flex gap-2">
-                      <Input
-                        id="search-collection"
-                        value={collectionDraft}
-                        onChange={(event) =>
-                          setCollectionDraft(event.target.value)
-                        }
-                        placeholder="e.g. guides/api"
-                      />
-                      <Button type="submit" variant="outline" size="sm">
-                        Apply
-                      </Button>
-                    </div>
-                    <p className="mt-1 text-xs text-foreground-muted">
-                      The same path is used in each selected Vault.
-                    </p>
-                  </form>
-                  <div className="flex flex-col gap-3 text-sm">
-                    <div>
-                      <label
-                        htmlFor="search-document-state"
-                        className="mb-2 block text-xs font-semibold"
-                      >
-                        Document state
-                      </label>
-                      <SelectMenu
-                        id="search-document-state"
-                        aria-label="Document state"
-                        value={archiveScope}
-                        onValueChange={(value) =>
-                          setFilter("archive_scope", [value])
-                        }
-                        options={[
-                          { value: "unarchived", label: "Current documents" },
-                          { value: "archived", label: "Archived documents" },
-                          { value: "all", label: "All documents" },
-                        ]}
-                      />
-                      <p className="mt-1 text-xs text-foreground-muted">
-                        Current includes drafts. Archived searches documents
-                        only.
-                      </p>
-                    </div>
-                    {mode === "literal" && (
-                      <>
-                        <label className="flex min-h-9 items-center gap-2">
-                          <input
-                            type="checkbox"
-                            className="accent-primary focus-visible:outline-ring"
-                            checked={Boolean(options.include_text_files)}
-                            onChange={(event) =>
-                              setFilter(
-                                "include_text_files",
-                                event.target.checked ? ["true"] : [],
-                              )
-                            }
-                          />
-                          Include text Files
-                        </label>
-                        <label className="flex min-h-9 items-center gap-2">
-                          <input
-                            type="checkbox"
-                            className="accent-primary focus-visible:outline-ring"
-                            checked={Boolean(options.regex)}
-                            onChange={(event) =>
-                              setFilter(
-                                "regex",
-                                event.target.checked ? ["true"] : [],
-                              )
-                            }
-                          />
-                          Regular expression
-                        </label>
-                        <label className="flex min-h-9 items-center gap-2">
-                          <input
-                            type="checkbox"
-                            className="accent-primary focus-visible:outline-ring"
-                            checked={Boolean(options.case_sensitive)}
-                            onChange={(event) =>
-                              setFilter(
-                                "case_sensitive",
-                                event.target.checked ? ["true"] : [],
-                              )
-                            }
-                          />
-                          Case sensitive
-                        </label>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div className="mt-4 flex flex-col items-start gap-3 border-t border-border pt-3">
-                  <p className="text-xs text-foreground-muted">
-                    {mode === "literal"
-                      ? "Literal search includes text Files when enabled. Document type, tag, and archived-only filters exclude Files. Content-kind selection is retained for Semantic search."
-                      : "Document type and tag filters search documents only. Filters apply on the server before the result limit."}
-                  </p>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={resetFilters}
-                  >
-                    Reset filters
-                  </Button>
-                </div>
-              </aside>
-            )}
-          </aside>
+          </div>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface">
             <div
               data-testid="search-tool-row"
-              className="flex min-h-10 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border px-4 py-3 text-xs sm:px-6"
+              className="mx-auto flex min-h-10 w-full max-w-[79rem] shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 text-xs sm:px-6"
             >
-              <p className="text-sm font-semibold tabular-nums text-foreground">
+              <p className="text-xs font-medium tabular-nums text-foreground-muted">
                 {resultStatus}
               </p>
               <p
@@ -1035,21 +853,26 @@ function SearchWorkspace() {
               aria-label="Search results"
               aria-busy={loading}
               data-testid="search-results-pane"
-              className="rail-scroll min-h-0 min-w-0 flex-1 overflow-y-auto bg-surface px-4 py-5 sm:px-6"
+              className="rail-scroll min-h-0 min-w-0 flex-1 overflow-y-auto bg-surface px-4 pb-6 pt-1 sm:px-6"
             >
               <div className="mx-auto w-full max-w-[76rem] space-y-4">
                 {activeFilters.length > 0 && (
                   <div
+                    ref={activeFiltersRef}
                     aria-label="Active search filters"
                     className="flex flex-wrap items-center gap-2"
                   >
-                    {activeFilters.map((filter) => (
+                    {activeFilters.map((filter, index) => (
                       <button
                         key={filter.label}
                         type="button"
-                        onClick={filter.remove}
+                        data-filter-chip
+                        onClick={() => {
+                          pendingChipFocus.current = index;
+                          filter.remove();
+                        }}
                         aria-label={`Remove filter ${filter.label}`}
-                        className="inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] border border-border bg-surface-2 px-2 text-xs text-foreground-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="inline-flex min-h-11 max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] border border-border bg-surface-2 px-2 text-xs text-foreground-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         <span className="truncate">{filter.label}</span>
                         <X className="h-3 w-3 shrink-0" aria-hidden />
@@ -1057,7 +880,10 @@ function SearchWorkspace() {
                     ))}
                     <button
                       type="button"
-                      onClick={resetFilters}
+                      onClick={() => {
+                        resetFilters();
+                        filtersButtonRef.current?.focus({ preventScroll: true });
+                      }}
                       className={inlineActionClass}
                     >
                       Clear filters
@@ -1241,6 +1067,218 @@ function SearchWorkspace() {
           </div>
         </div>
       </section>
+      <Dialog open={filtersOpen} onOpenChange={setFiltersOpen}>
+        <DialogContent
+          id="search-filter-panel"
+          ref={filterContentRef}
+          className="flex max-w-lg flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11"
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            const selector = filterSectionRef.current === "collection"
+              ? "#search-collection"
+              : filterSectionRef.current === "type"
+                ? "#search-all-types"
+                : filterSectionRef.current === "tags"
+                  ? "#search-tags"
+                  : "[data-filter-title]";
+            filterContentRef.current?.querySelector<HTMLElement>(selector)?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            const trigger = filterTriggerRef.current;
+            (trigger?.isConnected && getComputedStyle(trigger).display !== "none" ? trigger : filtersButtonRef.current)?.focus({ preventScroll: true });
+          }}
+        >
+          <div className="shrink-0 border-b border-border px-5 py-5 pr-14">
+            <DialogTitle data-filter-title tabIndex={-1} className="text-base focus:outline-none">Search filters</DialogTitle>
+            <DialogDescription className="mt-1 text-xs">Changes apply as you select them. Use Apply for a collection path.</DialogDescription>
+          </div>
+          <div className="rail-scroll min-h-0 space-y-6 overflow-y-auto p-5">
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                setFilter("collection", [
+                  collectionDraft.trim().replace(/^\/+|\/+$/g, ""),
+                ]);
+              }}
+            >
+              <label
+                htmlFor="search-collection"
+                className="mb-2 block text-sm font-semibold"
+              >
+                Collection path (including children)
+              </label>
+              <div className="flex gap-2">
+                <Input
+                  className="min-h-11"
+                  id="search-collection"
+                  value={collectionDraft}
+                  onChange={(event) =>
+                    setCollectionDraft(event.target.value)
+                  }
+                  placeholder="e.g. guides/api"
+                />
+                <Button type="submit" variant="outline" size="sm" className="min-h-11">
+                  Apply
+                </Button>
+              </div>
+              <p className="mt-1 text-xs text-foreground-muted">
+                The same path is used in each selected Vault.
+              </p>
+            </form>
+            <fieldset>
+              <legend className="mb-2 text-sm font-semibold">
+                Document type
+              </legend>
+              <div
+                className="flex flex-wrap gap-1.5"
+                role="group"
+                aria-label="Filter by document type"
+              >
+                <button
+                  type="button"
+                  id="search-all-types"
+                  aria-label="Show all types"
+                  aria-pressed={allTypesActive}
+                  onClick={() => setFilter("doc_type", [])}
+                  className={filterButtonClass(allTypesActive)}
+                >
+                  All types
+                </button>
+                {ALL_TYPES.map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    aria-label={`Toggle ${type}`}
+                    aria-pressed={activeTypes.has(type)}
+                    onClick={() => toggleType(type)}
+                    className={filterButtonClass(activeTypes.has(type))}
+                  >
+                    <span className="capitalize">{type}</span>
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+            <div className="[&_input]:min-h-11">
+              <label
+                htmlFor="search-tags"
+                className="mb-2 block text-sm font-semibold"
+              >
+                Tags (match any)
+              </label>
+              <TagInput
+                id="search-tags"
+                value={[...activeTags]}
+                onChange={(tags) => setFilter("tag", tags)}
+              />
+              {availableTags.length > 0 && (
+                <div
+                  className="mt-2 flex flex-wrap gap-1.5"
+                  role="group"
+                  aria-label="Suggested tags from loaded results"
+                >
+                  {availableTags.slice(0, 12).map(([tag]) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      aria-label={`Toggle tag ${tag}`}
+                      aria-pressed={activeTags.has(tag)}
+                      onClick={() => toggleTag(tag)}
+                      className={filterButtonClass(activeTags.has(tag))}
+                    >
+                      <Tag className="h-3 w-3" aria-hidden />
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col gap-3 text-sm">
+              <div>
+                <label
+                  htmlFor="search-document-state"
+                  className="mb-2 block text-sm font-semibold"
+                >
+                  Document state
+                </label>
+                <SelectMenu
+                  id="search-document-state"
+                className="min-h-11"
+                  aria-label="Document state"
+                  value={archiveScope}
+                  onValueChange={(value) =>
+                    setFilter("archive_scope", [value])
+                  }
+                  options={[
+                    { value: "unarchived", label: "Current documents" },
+                    { value: "archived", label: "Archived documents" },
+                    { value: "all", label: "All documents" },
+                  ]}
+                />
+                <p className="mt-1 text-xs text-foreground-muted">
+                  Current includes drafts. Archived searches documents
+                  only.
+                </p>
+              </div>
+              {mode === "literal" && (
+                <>
+                  <label className="flex min-h-11 cursor-pointer items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="accent-primary focus-visible:outline-ring"
+                      checked={Boolean(options.include_text_files)}
+                      onChange={(event) =>
+                        setFilter(
+                          "include_text_files",
+                          event.target.checked ? ["true"] : [],
+                        )
+                      }
+                    />
+                    Include text Files
+                  </label>
+                  <label className="flex min-h-11 cursor-pointer items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="accent-primary focus-visible:outline-ring"
+                      checked={Boolean(options.regex)}
+                      onChange={(event) =>
+                        setFilter(
+                          "regex",
+                          event.target.checked ? ["true"] : [],
+                        )
+                      }
+                    />
+                    Regular expression
+                  </label>
+                  <label className="flex min-h-11 cursor-pointer items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="accent-primary focus-visible:outline-ring"
+                      checked={Boolean(options.case_sensitive)}
+                      onChange={(event) =>
+                        setFilter(
+                          "case_sensitive",
+                          event.target.checked ? ["true"] : [],
+                        )
+                      }
+                    />
+                    Case sensitive
+                  </label>
+                </>
+              )}
+            </div>
+            <p className="border-t border-border pt-4 text-xs leading-relaxed text-foreground-muted">
+              {mode === "literal"
+                ? "Literal search includes text Files when enabled. Document type, tag, and archived-only filters exclude Files. Content-kind selection is retained for Semantic search."
+                : "Document type and tag filters search documents only. Filters apply on the server before the result limit."}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border px-5 py-3">
+            <Button type="button" variant="ghost" className="min-h-11" onClick={resetFilters}>Reset filters</Button>
+            <DialogClose asChild><Button type="button" className="min-h-11">Done</Button></DialogClose>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1498,7 +1536,7 @@ function DenseResultList({ items }: { items: DenseResult[] }) {
   const location = useLocation();
 
   return (
-    <ol className="space-y-3" aria-label="Semantic search results">
+    <ol className="divide-y divide-border" aria-label="Semantic search results">
       {items.map((result, index) => {
         const sourceType = result.source_type || "document";
         const { icon: SourceIcon, label: sourceLabel } = TYPE_META[sourceType];
@@ -1509,7 +1547,7 @@ function DenseResultList({ items }: { items: DenseResult[] }) {
         return (
           <li
             key={result.uri}
-            className="overflow-hidden rounded-[var(--radius-md)] border border-border bg-surface"
+            className="min-w-0 bg-surface"
           >
             <Link
               id={`search-dense-result-${index}`}
@@ -1522,7 +1560,7 @@ function DenseResultList({ items }: { items: DenseResult[] }) {
                     )
                   : undefined
               }
-              className="group block px-4 py-3 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5"
+              className="group block rounded-[var(--radius-sm)] px-2 py-5 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-3"
             >
               <div className="mb-1.5 flex min-w-0 items-center justify-between gap-3 text-xs text-foreground-muted">
                 <span
@@ -1550,12 +1588,12 @@ function DenseResultList({ items }: { items: DenseResult[] }) {
                   aria-hidden
                 />
                 <span className="sr-only">Result {index + 1}: </span>
-                <span className="min-w-0 text-sm font-semibold text-link [overflow-wrap:anywhere] group-hover:underline">
+                <span className="min-w-0 text-base font-semibold text-link [overflow-wrap:anywhere] group-hover:underline">
                   {result.title}
                 </span>
               </div>
               {detail && (
-                <p className="mt-2 line-clamp-2 whitespace-pre-line text-sm leading-relaxed text-foreground">
+                <p className="mt-2 max-w-[88ch] line-clamp-2 whitespace-pre-line text-sm leading-relaxed text-foreground-muted">
                   {detail}
                 </p>
               )}
@@ -1573,7 +1611,7 @@ function DenseResultList({ items }: { items: DenseResult[] }) {
                   </Badge>
                 ))}
                 {tags.length > 2 && <span>+{tags.length - 2} tags</span>}
-                {index === 0 && <span className="ml-auto">Top match</span>}
+                {index === 0 && <span className="font-medium text-link">Top match</span>}
               </div>
             </Link>
           </li>
@@ -1587,11 +1625,11 @@ function LiteralResultList({ items }: { items: GrepDoc[] }) {
   const location = useLocation();
 
   return (
-    <ol className="space-y-3" aria-label="Literal search results">
+    <ol className="divide-y divide-border" aria-label="Literal search results">
       {items.map((result, index) => (
         <li
           key={result.uri}
-          className="overflow-hidden rounded-[var(--radius-md)] border border-border bg-surface"
+          className="min-w-0 bg-surface"
         >
           <Link
             id={`search-literal-result-${index}`}
@@ -1606,7 +1644,7 @@ function LiteralResultList({ items }: { items: GrepDoc[] }) {
                     `search-literal-result-${index}`,
                   )
             }
-            className="group grid grid-cols-[1rem_minmax(0,1fr)] gap-3 p-4 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[1rem_minmax(0,1fr)_6.5rem] sm:px-5"
+            className="group grid grid-cols-[1rem_minmax(0,1fr)] gap-3 rounded-[var(--radius-sm)] px-2 py-5 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[1rem_minmax(0,1fr)_6.5rem] sm:px-3"
           >
             <span className="mt-0.5 text-foreground-muted">
               {result.resource_type === "file" ? (
@@ -1621,7 +1659,7 @@ function LiteralResultList({ items }: { items: GrepDoc[] }) {
                 <span className="sr-only" aria-label={`Result ${index + 1}`}>
                   {index + 1}
                 </span>
-                <span className="text-sm font-semibold text-link [overflow-wrap:anywhere] group-hover:underline">
+                <span className="text-base font-semibold text-link [overflow-wrap:anywhere] group-hover:underline">
                   {result.title}
                 </span>
                 {result.status === "archived" && (
@@ -1701,25 +1739,25 @@ function LiteralResultList({ items }: { items: GrepDoc[] }) {
 
 function searchModeClass(active: boolean) {
   return cn(
-    "-mb-px inline-flex min-h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 border-b-2 px-2.5 text-xs font-medium transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+    "inline-flex min-h-10 cursor-pointer items-center justify-center gap-1.5 rounded-[var(--radius-sm)] px-3 text-xs font-medium transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+    active
+      ? "bg-surface text-link shadow-xs"
+      : "text-foreground-muted hover:bg-surface-hover hover:text-foreground",
+  );
+}
+
+function sourceFilterClass(active: boolean) {
+  return cn(
+    "relative -mb-px inline-flex min-h-14 cursor-pointer items-center justify-center gap-1.5 border-b-2 px-1.5 text-xs font-medium transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring @min-[40rem]/search:px-3 @min-[40rem]/search:text-sm",
     active
       ? "border-primary text-link"
       : "border-transparent text-foreground-muted hover:bg-surface-hover hover:text-foreground",
   );
 }
 
-function sourceFilterClass(active: boolean) {
-  return cn(
-    "relative inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-2.5 text-left text-xs font-medium transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[56rem]/search:w-full @min-[56rem]/search:text-sm",
-    active
-      ? "bg-surface-selected text-surface-selected-foreground before:absolute before:inset-y-2.5 before:left-0 before:w-0.5 before:rounded-full before:bg-primary"
-      : "text-foreground-muted hover:bg-surface-hover hover:text-foreground",
-  );
-}
-
 function filterButtonClass(active: boolean) {
   return cn(
-    "inline-flex h-8 cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] border px-2.5 text-xs font-medium transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50",
+    "inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] border px-2.5 text-xs font-medium transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50",
     active
       ? "border-border-strong bg-surface-selected text-surface-selected-foreground"
       : "border-border bg-surface text-foreground-muted hover:border-border-strong hover:bg-surface-hover hover:text-foreground",

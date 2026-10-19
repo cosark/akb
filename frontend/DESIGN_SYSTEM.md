@@ -1321,21 +1321,26 @@ global trigger opens an independent quick lookup; opening or dismissing it must
 not change the page's query or filters. The header and working canvas use `surface` (white in light mode and
 the corresponding slate token in dark mode), not a grey title band.
 
-The full page takes its information hierarchy from GitHub search: a 256px
-refinement rail, an honest result-count/scope row, and separate bordered results.
-Semantic/Literal and content kinds are immediately visible; More filters reveals
-document types, tags, collection, state and literal options. Search mode uses
-underlined selections; content kinds use compact navigation rows with a leading
-selection marker and check, labelled All / Documents / Tables / Files. More
-filters is a neutral chevron disclosure, not another competing selected tab.
-Active filter chips
-remain removable above the results even when the advanced controls are closed.
-The rail appears only when the *available workspace* is at least 56rem wide;
-below that, controls reflow above results and use capped, independent scroll.
-This avoids squeezing results alongside the existing Vault/Collection rails.
-Search owns its viewport and results scroll. Result cards have 16px/24px outer
-gutters and a 76rem reading cap; initial re-entry content is narrower, with
-recent queries, recent documents and suggested searches separated from the input.
+The full page puts search first: the wide query field includes Vault scope,
+Semantic / Literal sits beside it as a compact segmented control, and the explicit
+Search action completes the command. On narrow workspaces the mode control moves
+below the query. A quiet mode-specific helper explains what will be searched.
+There is no permanent second filter rail. All / Documents / Tables / Files use
+short underline choices above the results. Collection, Document type and Tags
+are quick entries into one Search filters dialog; below 56rem of *available
+workspace*, keep the single Filters entry and all controls inside that dialog.
+The dialog preserves independent Collection Apply, immediate metadata/state
+changes, Literal options and Reset filters. Its body scrolls while its title and
+Done action remain reachable. Escape returns focus to the opening control;
+quick entries focus their corresponding field. Active filter chips remain
+removable above results when the dialog is closed, and removal retains focus
+on a remaining chip or Filters.
+Search owns its viewport and results scroll. Flat result rows use quiet dividers,
+16px/24px outer gutters and a 76rem reading cap. Titles use 16px semibold type;
+location, a two-line excerpt and compact metadata support comparison without
+separate card borders. Top match stays beside metadata rather than at the far
+edge. Initial re-entry content is narrower, with recent queries, recent documents
+and suggested searches separated from the input.
 No illustrative sidebar, invented facet totals, unsupported sort, or query
 qualifier parser is added. Server contracts and saved URL state remain authoritative.
 The shared multi-Vault chips live inside the page query field, not in a second
@@ -1351,8 +1356,8 @@ available: user-scoped browser search history and recently viewed documents are
 shown as connected ledgers, with inaccessible Vault history removed through the
 existing Vault list. The history stores query/scope/mode and document identity
 only—never result bodies—and silently disappears when browser storage is not
-available. Semantic cards lead with location, a resource icon and linked title,
-one focused excerpt, then source type/tags. Literal cards retain exact snippets,
+available. Semantic rows lead with location, a resource icon and linked title,
+one focused excerpt, then source type/tags. Literal rows retain exact snippets,
 body-relative line numbers and match counts. Stable result IDs and accessible
 ranks preserve preview return focus. Optional backend
 tags progressively add compact result badges and optional tag suggestions.

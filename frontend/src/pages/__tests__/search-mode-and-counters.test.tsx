@@ -88,7 +88,7 @@ function SearchLocationProbe() {
 }
 
 describe("SearchPage · semantic (dense) mode", () => {
-  it("separates the query, refinement rail and readable results workspace", async () => {
+  it("keeps search controls above the results and opens filters only when requested", async () => {
     const user = userEvent.setup();
     renderAt("/search");
 
@@ -102,7 +102,7 @@ describe("SearchPage · semantic (dense) mode", () => {
       "max-w-none",
       "overflow-hidden",
     );
-    expect(commandHeader).toHaveClass("flex");
+    expect(commandHeader).toHaveAttribute("role", "search");
     expect(workspace.contains(commandHeader)).toBe(true);
     expect(workspace.contains(suggestions)).toBe(true);
     expect(screen.getByRole("group", { name: "Search mode" })).toBeTruthy();
@@ -120,14 +120,23 @@ describe("SearchPage · semantic (dense) mode", () => {
       "flex-1",
       "overflow-y-auto",
     );
-    expect(screen.getByRole("complementary", { name: "Search refinements" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Tables", pressed: false })).toBeTruthy();
-    await user.click(
-      screen.getByRole("button", { name: "More filters" }),
-    );
     expect(
-      screen.getByRole("complementary", { name: "Search filters" }),
-    ).toBeTruthy();
+      screen.queryByRole("complementary", { name: "Search refinements" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Filter by content kind" }),
+    ).toContainElement(screen.getByRole("button", { name: "Tables", pressed: false }));
+
+    const filters = screen.getByRole("button", { name: "Filters" });
+    expect(filters).toHaveAttribute("aria-haspopup", "dialog");
+    expect(screen.queryByRole("dialog", { name: "Search filters" })).not.toBeInTheDocument();
+    await user.click(filters);
+    expect(screen.getByRole("dialog", { name: "Search filters" })).toHaveAccessibleDescription(
+      "Changes apply as you select them. Use Apply for a collection path.",
+    );
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(filters).toHaveFocus();
   });
 
   it("offers All as the content-kind reset without changing the query", async () => {
