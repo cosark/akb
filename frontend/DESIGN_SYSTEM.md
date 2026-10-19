@@ -1362,9 +1362,10 @@ the title; location, source type and compact metadata share a quiet line below.
 Preview / Open occupies the trailing edge. Top match stays beside metadata.
 Initial re-entry content shows recent queries, recent documents and suggested
 searches inside the same panel, without a separate hero or nested outer card.
-Use quiet H3 section labels on the plain panel surface, unboxed 16px list icons,
-and a single divider before suggestions. The two recent ledgers share columns
-when the available workspace reaches 40rem; omit absent ledgers. Suggestions
+Use semibold H3 section headings with a bottom hairline and unboxed 16px list
+icons. The two recent ledgers share columns with a vertical divider when the
+available workspace reaches 40rem; stacked ledgers use a horizontal divider.
+Omit absent ledgers. A full-width divider separates suggestions. Suggestions
 use three columns at the same container width, wrap their full labels, and keep
 a visible forward arrow. Soft token-tinted fills and hover states distinguish
 these starting actions without repeated gray title bars or table-like grids.

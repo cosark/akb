@@ -1257,17 +1257,17 @@ function SearchStartState({
   const hasDocuments = visibleDocuments.length > 0;
 
   return (
-    <div className="w-full space-y-5">
+    <div className="w-full space-y-4">
       {(hasSearches || hasDocuments) && (
         <div
           className={cn(
-            "grid gap-5 border-b border-border pb-5",
-            hasSearches && hasDocuments && "@min-[40rem]/search:grid-cols-2 @min-[40rem]/search:gap-8",
+            "grid border-b border-border-strong pb-4",
+            hasSearches && hasDocuments && "@min-[40rem]/search:grid-cols-2",
           )}
         >
           {hasSearches && (
-            <section aria-labelledby="recent-searches-heading" className="min-w-0">
-              <div className="mb-1 flex min-h-11 items-center justify-between gap-3 px-2">
+            <section aria-labelledby="recent-searches-heading" className={cn("min-w-0", hasDocuments && "@min-[40rem]/search:pr-5")}>
+              <div className="mb-2 flex min-h-11 items-center justify-between gap-3 border-b border-border px-2">
                 <div className="flex min-w-0 items-center gap-3">
                   <Clock3
                     className="h-4 w-4 shrink-0 text-foreground-muted"
@@ -1275,7 +1275,7 @@ function SearchStartState({
                   />
                   <h3
                     id="recent-searches-heading"
-                    className="text-xs font-medium text-foreground-muted"
+                    className="text-sm font-semibold text-foreground"
                   >
                     Recent searches
                   </h3>
@@ -1335,9 +1335,9 @@ function SearchStartState({
           {hasDocuments && (
             <section
               aria-labelledby="recent-documents-heading"
-              className="min-w-0"
+              className={cn("min-w-0", hasSearches && "mt-4 border-t border-border-strong pt-4 @min-[40rem]/search:mt-0 @min-[40rem]/search:border-l @min-[40rem]/search:border-t-0 @min-[40rem]/search:pl-5 @min-[40rem]/search:pt-0")}
             >
-              <div className="mb-1 flex min-h-11 items-center justify-between gap-3 px-2">
+              <div className="mb-2 flex min-h-11 items-center justify-between gap-3 border-b border-border px-2">
                 <div className="flex min-w-0 items-center gap-3">
                   <FileText
                     className="h-4 w-4 shrink-0 text-foreground-muted"
@@ -1345,7 +1345,7 @@ function SearchStartState({
                   />
                   <h3
                     id="recent-documents-heading"
-                    className="text-xs font-medium text-foreground-muted"
+                    className="text-sm font-semibold text-foreground"
                   >
                     Recently viewed
                   </h3>
@@ -1393,11 +1393,14 @@ function SearchStartState({
       )}
 
       <section>
-        <div className="mb-3 space-y-1 px-2">
-          <h3 id="search-start-heading" className="text-xs font-medium text-foreground-muted">
-            Suggested searches
-          </h3>
-          <p className="text-xs leading-relaxed text-foreground-muted">
+        <div className="mb-3 space-y-2">
+          <div className="flex min-h-11 items-center gap-3 border-b border-border px-2">
+            <SearchIcon className="h-4 w-4 shrink-0 text-foreground-muted" aria-hidden />
+            <h3 id="search-start-heading" className="text-sm font-semibold text-foreground">
+              Suggested searches
+            </h3>
+          </div>
+          <p className="px-2 text-xs leading-relaxed text-foreground-muted">
             {mode === "dense" ? "Try a topic, task, or question." : "Try a word, phrase, or regular expression."}
           </p>
         </div>
