@@ -726,7 +726,7 @@ function SearchWorkspace() {
 
       <section
         aria-label="Search workspace"
-        className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-4 overflow-hidden"
+        className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-4"
       >
         <header
           aria-label="Page search controls"

@@ -128,6 +128,26 @@ for (const viewport of [
         expect(titleBox.height).toBeGreaterThanOrEqual(20);
         expect(titleBox.y + titleBox.height).toBeLessThanOrEqual(entryBox.y);
       }
+      await query.click();
+      await expect(query).toBeFocused();
+      const focusRingClearance = await entry.evaluate(element => {
+        const field = element.getBoundingClientRect();
+        const clearance: number[] = [];
+        for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+          const style = getComputedStyle(parent);
+          const bounds = parent.getBoundingClientRect();
+          if (/hidden|clip|auto|scroll/.test(style.overflowX)) {
+            clearance.push(field.left - bounds.left, bounds.right - field.right);
+          }
+          if (/hidden|clip|auto|scroll/.test(style.overflowY)) {
+            clearance.push(field.top - bounds.top, bounds.bottom - field.bottom);
+          }
+        }
+        return clearance;
+      });
+      // The shared field has a 2px focus ring beyond a 2px offset.
+      for (const clearance of focusRingClearance) expect(clearance).toBeGreaterThanOrEqual(4);
+      await page.screenshot({ path: testInfo.outputPath("search-query-focused.png"), animations: "disabled" });
       await page.getByRole("button", { name: "Search knowledge", exact: true }).click();
       const quickSearch = page.getByTestId("global-search-dialog");
       await expect(quickSearch).toBeVisible();

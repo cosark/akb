@@ -1339,7 +1339,9 @@ row, with query and submit below; this follows available container width rather
 than the browser viewport. Query text is 16px in the stacked field and 14px in
 the wide row. Scope names and selected counts cannot squeeze out the input.
 Query clear, method, scope, and submit controls have 44px height. The entire
-field shares one border and focus treatment; do not add a separate title toolbar,
+field shares one border and focus treatment. Keep the alignment frame's overflow
+visible so its outer focus ring is not clipped; the padded viewport and results
+panel own clipping and scrolling. Do not add a separate title toolbar,
 context footer, or individual button outlines. The results panel follows with
 a 16px gap.
 
