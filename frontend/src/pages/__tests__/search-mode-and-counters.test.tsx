@@ -116,7 +116,10 @@ describe("SearchPage · semantic (dense) mode", () => {
     expect(within(commandHeader).getByTestId("search-query-entry")).toHaveClass("border", "bg-surface");
     expect(workspace.contains(commandHeader)).toBe(true);
     expect(workspace.contains(suggestions)).toBe(true);
-    expect(commandHeader).toContainElement(screen.getByRole("button", { name: "Search method" }));
+    const queryEntry = within(commandHeader).getByTestId("search-query-entry");
+    expect(queryEntry).toContainElement(screen.getByRole("button", { name: "Search method" }));
+    expect(queryEntry).toContainElement(screen.getByRole("button", { name: "Search scope: All vaults" }));
+    expect(within(queryEntry).getAllByRole("button", { name: "Search method" })).toHaveLength(1);
     expect(within(commandHeader).getByRole("searchbox", { name: "Search query" })).toBeInTheDocument();
     expect(within(commandHeader).getByRole("button", { name: "Search" })).toHaveAttribute("type", "submit");
     expect(screen.getByRole("region", { name: "Search results" })).toBeTruthy();
@@ -171,8 +174,8 @@ describe("SearchPage · semantic (dense) mode", () => {
     await user.clear(query);
     await user.type(query, "new query");
     expect(within(queryEntry).getByRole("button", { name: "Clear search query" })).toBeInTheDocument();
-    expect(within(form).getByRole("button", { name: "Search scope: engineering" })).toBeInTheDocument();
-    expect(within(form).getByRole("button", { name: "Search method" })).toHaveTextContent("By meaning");
+    expect(within(queryEntry).getByRole("button", { name: "Search scope: engineering" })).toBeInTheDocument();
+    expect(within(queryEntry).getByRole("button", { name: "Search method" })).toHaveTextContent("By meaning");
     await user.click(submit);
     await waitFor(() => expect(mockedSearch).toHaveBeenLastCalledWith(
       "new query", ["engineering"], 25, expect.any(Object),

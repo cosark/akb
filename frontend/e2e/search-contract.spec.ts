@@ -109,6 +109,7 @@ for (const viewport of [
       const entry = page.getByTestId("search-query-entry");
       await expect(entry.getByRole("searchbox", { name: "Search query" })).toBeVisible();
       await expect(entry.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+      await expect(entry.getByRole("button", { name: "Search method", exact: true })).toHaveCount(1);
       await expect(page.getByRole("group", { name: "Filter by content kind" })).toHaveCount(0);
       await expect(page.getByTestId("search-workspace").getByRole("searchbox", { name: "Search query" })).toBeVisible();
       await expect(page.locator(".app-header").getByRole("searchbox", { name: "Search query" })).toHaveCount(0);
@@ -118,6 +119,15 @@ for (const viewport of [
       const headerBox = await page.locator(".app-header").boundingBox();
       const queryBox = await query.boundingBox();
       expect(queryBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height);
+      const titleBox = (await page.getByRole("heading", { name: "Search", exact: true }).boundingBox())!;
+      const entryBox = (await entry.boundingBox())!;
+      if (viewport.width >= 1024) {
+        expect(titleBox.width).toBeLessThanOrEqual(1);
+        expect(entryBox.y - headerBox!.y - headerBox!.height).toBeLessThanOrEqual(25);
+      } else {
+        expect(titleBox.height).toBeGreaterThanOrEqual(20);
+        expect(titleBox.y + titleBox.height).toBeLessThanOrEqual(entryBox.y);
+      }
       await page.getByRole("button", { name: "Search knowledge", exact: true }).click();
       const quickSearch = page.getByTestId("global-search-dialog");
       await expect(quickSearch).toBeVisible();

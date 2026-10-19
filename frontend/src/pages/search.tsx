@@ -30,7 +30,6 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
-import { WorkspacePageHeader } from "@/components/ui/workspace-page-header";
 import {
   Dialog,
   DialogClose,
@@ -629,42 +628,25 @@ function SearchWorkspace() {
       role="search"
       aria-label={`Search in ${scopeLabel}`}
     >
-      <WorkspacePageHeader
-        icon={SearchIcon}
-        iconTone="knowledge"
-        title="Search"
-        className="rounded-none border-0 bg-transparent p-0 shadow-none"
-        actions={
-          <SelectMenu
-            aria-label="Search method"
-            value={mode}
-            onValueChange={(value) => switchMode(value as Mode)}
-            className="h-9 w-fit gap-2 py-1 text-xs"
-            collisionPadding={8}
-            wrapHints
-            contentClassName="w-72 max-w-[calc(100vw-1rem)] [&_[role=menuitemradio]]:min-h-11"
-            options={[
-              { value: "dense", label: "By meaning", hint: "Semantic search with meaning and keywords." },
-              { value: "literal", label: "Exact text", hint: "Literal search, including regular expressions." },
-            ]}
-          />
-        }
-      />
+      <h1 className="text-sm font-semibold text-foreground lg:sr-only">Search</h1>
       <span id="search-query-help" className="sr-only">
         {mode === "dense"
           ? "Semantic search matches meaning and keywords."
           : "Literal search matches exact text or a regular expression."}
       </span>
-      <div data-testid="search-query-entry" className="@container/scope-query flex min-h-11 min-w-0 flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-border bg-surface px-2 py-1 shadow-xs transition-token focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background">
-        <SearchVaultPicker
-          selected={scopeVaults}
-          contextVault={scopedVault}
-          vaults={vaults}
-          error={vaultsError}
-          onRetry={() => setVaultsRetry((retry) => retry + 1)}
-          onChange={setScopeVaults}
-        />
-        <div className="flex min-h-9 min-w-0 flex-[1_0_100%] items-center gap-2 @min-[30rem]/scope-query:flex-[1_1_12rem]">
+      <div data-testid="search-query-entry" className="grid min-h-13 min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-1 rounded-[var(--radius-md)] border border-border bg-surface px-2 py-1 shadow-xs transition-token focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background @min-[45rem]/search:grid-cols-[auto_minmax(0,1fr)_auto_auto]">
+        <div className="col-start-1 row-start-1 min-w-0">
+          <SearchVaultPicker
+            variant="summary"
+            selected={scopeVaults}
+            contextVault={scopedVault}
+            vaults={vaults}
+            error={vaultsError}
+            onRetry={() => setVaultsRetry((retry) => retry + 1)}
+            onChange={setScopeVaults}
+          />
+        </div>
+        <div className="col-span-2 col-start-1 row-start-2 flex min-h-11 min-w-0 items-center gap-2 @min-[45rem]/search:col-span-1 @min-[45rem]/search:col-start-2 @min-[45rem]/search:row-start-1">
           <SearchIcon className="h-4 w-4 shrink-0 text-foreground-muted" aria-hidden />
           <label htmlFor="vault-search" className="sr-only">Search query</label>
           <Input
@@ -682,29 +664,43 @@ function SearchWorkspace() {
                 commitQuery("");
               }
             }}
-            className="h-9 min-w-0 flex-1 rounded-none border-0 bg-transparent px-0 text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 @min-[40rem]/search:text-sm [&::-webkit-search-cancel-button]:hidden"
+            className="h-11 min-w-0 flex-1 rounded-none border-0 bg-transparent px-0 text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 @min-[45rem]/search:text-sm [&::-webkit-search-cancel-button]:hidden"
           />
           {draft && !loading && (
             <button
               type="button"
               aria-label="Clear search query"
               onClick={() => commitQuery("")}
-              className="inline-flex h-9 w-7 shrink-0 cursor-pointer items-center justify-center rounded-[var(--radius-sm)] text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-[var(--radius-sm)] text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <X className="h-3.5 w-3.5" aria-hidden />
             </button>
           )}
-          <Button
-            type="submit"
-            variant="ghost"
-            aria-label="Search"
-            loading={loading}
-            className="h-9 w-9 shrink-0 gap-1.5 px-0 text-link @min-[40rem]/search:w-auto @min-[40rem]/search:px-3"
-          >
-            <span className="hidden @min-[40rem]/search:inline">Search</span>
-            {!loading && <ArrowRight className="h-4 w-4" aria-hidden />}
-          </Button>
         </div>
+        <SelectMenu
+          aria-label="Search method"
+          variant="navigation"
+          value={mode}
+          onValueChange={(value) => switchMode(value as Mode)}
+          className="col-span-2 col-start-2 row-start-1 h-11 w-fit justify-self-end gap-1.5 px-2 text-xs text-foreground-muted @min-[45rem]/search:col-span-1 @min-[45rem]/search:col-start-3"
+          collisionPadding={8}
+          wrapHints
+          contentClassName="w-72 max-w-[calc(100vw-1rem)] [&_[role=menuitemradio]]:min-h-11"
+          options={[
+            { value: "dense", label: "By meaning", hint: "Semantic search with meaning and keywords." },
+            { value: "literal", label: "Exact text", hint: "Literal search, including regular expressions." },
+          ]}
+        />
+        <Button
+          type="submit"
+          variant="ghost"
+          aria-label="Search"
+          loading={loading}
+          className="col-start-3 row-start-2 h-11 w-11 shrink-0 gap-1.5 justify-self-end px-0 text-link @min-[45rem]/search:col-start-4 @min-[45rem]/search:row-start-1 @min-[45rem]/search:w-auto @min-[45rem]/search:px-3"
+        >
+          <span className="hidden @min-[45rem]/search:inline">Search</span>
+          {!loading && <ArrowRight className="h-4 w-4" aria-hidden />}
+        </Button>
       </div>
     </form>
   );

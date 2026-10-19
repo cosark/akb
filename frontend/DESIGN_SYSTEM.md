@@ -1319,18 +1319,29 @@ quick-search trigger and profile remain intact. A dedicated command row below
 owns the URL-backed query form and explicit Search action. The compact
 global trigger opens an independent quick lookup; opening or dismissing it must
 not change the page's query or filters. The workspace uses the same cool-gray
-`background` canvas, compact `WorkspacePageHeader`, and bounded `Panel` list
-as Vault Overview. A single `max-w-6xl` frame aligns the page identity, query
-field, and results panel, with the standard 12 / 16 / 24px responsive gutters.
+`background` canvas and bounded `Panel` list as Vault Overview. A single
+`max-w-6xl` frame aligns the query field and results panel, with the standard
+12 / 16 / 24px responsive gutters. At `lg` and wider, the global location already
+names the page, so the body H1 is visually hidden. Below `lg`, retain a small
+Search text heading without an icon tile because the global location is hidden.
 
-The compact page title places the Search method menu on its trailing edge.
-By meaning / Exact text options explain Semantic / Literal behavior. Below it,
-a normal bordered input surface contains the shared multi-Vault picker, query,
-clear action, and quiet teal Search action at the trailing edge. Enter submits
-the same form. Query text is 16px on narrow screens and 14px on desktop. The
-scope stays inline when there is room; on narrow workspaces it takes a row above
-the query so long Vault names cannot squeeze out the text field. The whole input
-surface shows focus together, without a separate footer or action toolbar.
+One bordered search field contains Vault scope, query, Search method, and the
+quiet teal Search action. The full-page scope picker uses its `summary` variant:
+All vaults, one Vault's name, or N vaults. Long names truncate inside a bounded
+trigger; the existing menu keeps every selection visible and removable even
+when the directory refresh fails. Quick search retains its existing inline
+Vault chips. By meaning / Exact text options explain Semantic / Literal
+behavior. Enter submits the same form as the integrated trailing Search action.
+
+At an available workspace width of 45rem or more, scope / query / method /
+submit share one row of about 52px. Below 45rem, scope and method share the first
+row, with query and submit below; this follows available container width rather
+than the browser viewport. Query text is 16px in the stacked field and 14px in
+the wide row. Scope names and selected counts cannot squeeze out the input.
+Query clear, method, scope, and submit controls have 44px height. The entire
+field shares one border and focus treatment; do not add a separate title toolbar,
+context footer, or individual button outlines. The results panel follows with
+a 16px gap.
 
 There is no permanent refinement rail or resource-kind tab strip. A Result type
 menu in the results panel header selects All content / Documents / Tables / Files
@@ -1353,7 +1364,7 @@ Initial re-entry content shows recent queries, recent documents and suggested
 searches inside the same panel, without a separate hero or nested outer card.
 No illustrative sidebar, invented facet totals, unsupported sort, or query
 qualifier parser is added. Server contracts and saved URL state remain authoritative.
-The shared multi-Vault chips live inside the page query field, not in a second
+The shared multi-Vault picker lives inside the page query field, not in a second
 scope-picker row above results. On a named Vault search route, an absent `v`
 defaults to the route Vault; explicit `v=` selects All, and a comma-delimited
 `v` retains a specific set through reload and browser history. The request uses
