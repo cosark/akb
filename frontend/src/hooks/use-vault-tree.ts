@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
-import { browseVault, type ArchiveScope } from "@/lib/api";
+import { browseVault, type ArchiveScope, type BrowseOptions } from "@/lib/api";
 import { isReservedCollection } from "@/lib/skill";
 import { parseFileUri } from "@/lib/uri";
 
@@ -32,22 +32,8 @@ interface BrowseItem {
   [k: string]: any;
 }
 
-/**
- * A single unbounded browse (`depth=-1` — entire subtree) gives us every
- * collection + doc + table + file in one response. We fold everything into
- * a nested tree on the client so "overview" under many parents renders as
- * `features/overview`, `prd/overview`, etc. — not 14 lookalike cards.
- *
- * `depth=-1` is the tree-depth contract introduced in backend 0.3.0:
- * 0=root-only, N=N levels, -1=unbounded. Pre-0.3.0 the default was the
- * misnomer "depth=2" (= "include documents"); this code requests the
- * unbounded subtree explicitly so the tree builder sees every node.
- *
- * Compatibility note: older backends expose no cursor or kind filter, so the
- * client still requests the full subtree. VaultExplorer limits DOM work with
- * kind disclosures and progressive pages. True network/memory scaling will
- * require a future browse contract with collection + kind + cursor inputs.
- */
+/** Account/grant-scoped pages. Loading another page is an explicit action,
+ * never a background full-Vault download disguised as pagination. */
 export function vaultTreeQueryKey(
   userId: string | undefined,
   revision: number,
@@ -57,37 +43,29 @@ export function vaultTreeQueryKey(
   return ["vault-tree", userId, revision, vault, archiveScope] as const;
 }
 
-/**
- * One cached full-subtree browse per account, access revision, Vault and
- * scope. The explorer, breadcrumb and move dialog share it, so returning to a
- * Vault or opening a document inside it reuses the tree instead of
- * downloading the whole Vault again.
- */
-export function vaultTreeQueryOptions(
-  userId: string | undefined,
-  revision: number,
-  vault: string,
+export function useVaultTree(
+  vault: string | undefined,
   archiveScope: ArchiveScope = "unarchived",
+  options: { content_type?: BrowseOptions["content_type"]; collection?: string; enabled?: boolean } = {},
 ) {
-  return {
-    queryKey: vaultTreeQueryKey(userId, revision, vault, archiveScope),
-    queryFn: () => archiveScope === "unarchived"
-      ? browseVault(vault, undefined, -1)
-      : browseVault(vault, undefined, -1, { archive_scope: archiveScope }),
-    staleTime: 30_000,
-    retry: false,
-  };
-}
-
-export function useVaultTree(vault: string | undefined, archiveScope: ArchiveScope = "unarchived") {
   const user = useCurrentUser();
   const { checking, revision } = useAccessVerification();
-  const query = useQuery({
-    ...vaultTreeQueryOptions(user?.user_id, revision, vault ?? "", archiveScope),
-    enabled: Boolean(vault) && !checking,
+  const query = useInfiniteQuery({
+    queryKey: [...vaultTreeQueryKey(user?.user_id, revision, vault ?? "", archiveScope), options.content_type ?? "all", options.collection ?? ""],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => browseVault(vault!, options.collection, -1, {
+      page_size: 100, archive_scope: archiveScope,
+      ...(options.content_type ? { content_type: options.content_type } : {}),
+      ...(pageParam ? { cursor: pageParam } : {}),
+    }),
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    staleTime: 30_000,
+    retry: false,
+    enabled: Boolean(vault) && !checking && options.enabled !== false,
     // While another scope of the same Vault loads, keep showing the last one;
     // never show a different Vault's tree.
     placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === user?.user_id && previousQuery?.queryKey[2] === revision &&
       previousQuery?.queryKey[3] === vault ? previous : undefined,
   });
   const queryClient = useQueryClient();
@@ -105,26 +83,44 @@ export function useVaultTree(vault: string | undefined, archiveScope: ArchiveSco
     return () => window.removeEventListener("akb:document-status-changed", refresh);
   }, [vault, refetch]);
 
-  const data = vault ? query.data : undefined;
+  const data = vault && !checking ? query.data : undefined;
+  const lastPage = data?.pages.at(-1);
   const showingPreviousScope = query.isPlaceholderData;
   const unsupported = Boolean(
-    data && !showingPreviousScope && archiveScope !== "unarchived" && data.archive_scope !== archiveScope,
+    lastPage && !showingPreviousScope && archiveScope !== "unarchived" && lastPage.archive_scope !== archiveScope,
   );
   const items = useMemo(
-    () => (data ? (unsupported ? [] : data.items as BrowseItem[]) : null),
+    () => {
+      if (!data) return null;
+      if (unsupported) return [];
+      const unique = new Map<string, BrowseItem>();
+      for (const page of data.pages) for (const item of page.items as BrowseItem[]) {
+        unique.set(item.uri || `${item.type}:${item.path}`, item);
+      }
+      return [...unique.values()];
+    },
     [data, unsupported],
   );
   const error = vault && query.error ? (query.error as Error).message || String(query.error) : "";
 
   const tree = useMemo<TreeNode[] | null>(() => {
     if (!items) return null;
-    return buildTree(items);
-  }, [items]);
+    const context = lastPage?.context;
+    return buildTree(context?.type === "collection"
+      ? [{ type: "collection", name: context.name, path: context.path, summary: context.summary }, ...items]
+      : items);
+  }, [items, lastPage?.context]);
 
   return {
     tree,
+    items,
+    complete: lastPage?.complete === true,
+    paginationUnsupported: Boolean(lastPage && typeof lastPage.complete !== "boolean"),
+    hasMore: query.hasNextPage,
+    loadingMore: query.isFetchingNextPage,
+    loadMore: () => { if (!checking && options.enabled !== false && query.hasNextPage && !query.isFetching) void query.fetchNextPage(); },
     loading: items === null && !error && Boolean(vault),
-    refreshing: Boolean(vault) && query.isFetching && items !== null,
+    refreshing: Boolean(vault) && query.isFetching && !query.isFetchingNextPage && items !== null,
     showingPreviousScope,
     unsupported,
     error,

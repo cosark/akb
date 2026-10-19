@@ -36,6 +36,7 @@ from app.exceptions import (
     ConflictError,
     DOCUMENT_TITLE_CONFLICT,
     ForbiddenError,
+    GrepScopeTooLargeError,
     InvalidColumnTypeError,
     NotFoundError,
     RESERVED_SYSTEM_PATH_CODE,
@@ -75,6 +76,7 @@ INSUFFICIENT_SCOPE = "insufficient_scope"
 
 # Caller-side input
 INVALID_ARGUMENT = "invalid_argument"  # generic argument shape problem
+GREP_SCOPE_TOO_LARGE = "grep_scope_too_large"
 INVALID_COLUMN_TYPE = "invalid_column_type"
 INVALID_URI = "invalid_uri"  # akb:// URI parse failure
 INVALID_PATH = "invalid_path"  # collection / file path failure
@@ -215,6 +217,8 @@ def exception_envelope(e: Exception) -> dict:
         return err(str(e), code=GIT_HISTORY_OUTPUT_CAPPED)
     if getattr(e, "code", None) == GIT_HISTORY_ENTRY_CAPPED:
         return err(str(e), code=GIT_HISTORY_ENTRY_CAPPED)
+    if isinstance(e, GrepScopeTooLargeError):
+        return err(str(e), code=GREP_SCOPE_TOO_LARGE, hint=e.hint, **(e.details or {}))
     if isinstance(e, ValidationError):
         return err(str(e), code=INVALID_ARGUMENT)
     return err(str(e), code=INTERNAL)

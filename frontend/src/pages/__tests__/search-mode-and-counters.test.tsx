@@ -74,6 +74,21 @@ function renderAuthenticatedAt(url: string) {
   );
 }
 
+it("explains protective grep scope rejection without retrying the unchanged scope", async () => {
+  const user = userEvent.setup();
+  mockedGrep.mockRejectedValueOnce(Object.assign(new Error("Candidate resources exceed 10000. Narrow the collection scope."), {
+    status: 422, detail: { code: "grep_scope_too_large" },
+  }));
+  renderAt("/search?q=needle&mode=literal&v=eng");
+  expect(await screen.findByText("Narrow the search scope")).toBeVisible();
+  expect(screen.getByText("Search scope too large", { exact: true })).toBeVisible();
+  expect(screen.queryByText("Search unavailable", { exact: true })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Choose a Collection in More filters" }));
+  expect(screen.getByRole("button", { name: "More filters" })).toHaveAttribute("aria-expanded", "true");
+  expect(mockedGrep).toHaveBeenCalledTimes(1);
+});
+
 function SearchLocationProbe() {
   const location = useLocation();
   return (

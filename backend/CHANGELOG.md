@@ -7,6 +7,16 @@ specifically; the proxy has its own log in
 
 ## Unreleased
 
+- Add opt-in identity/Native-body-bounded Vault browse pages with scoped
+  keyset cursors and explicit completeness. The web explorer requests pages
+  rather than a full Vault, keeps prior rows on retry, and labels loaded-only
+  counts. Collection/kind narrowing is applied before paging; breadcrumbs use
+  a bounded ancestry lookup. Existing full-list callers remain supported.
+- Keep Native grep scan ceilings unchanged, but return an actionable
+  `grep_scope_too_large` error for protective scope rejections. Search and MCP
+  help distinguish candidate limits, returned previews, client byte budgets
+  and service failures. See the [large-Vault navigation guide](../docs/operations/large-vault-navigation.md).
+
 ## 0.16.2 — 2026-10-13
 
 ### Authentication

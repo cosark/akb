@@ -708,6 +708,8 @@ class NativeRevisionRepository:
         surface: str,
         path_like: str | None = None,
         max_slashes: int | None = None,
+        resource_ids: list[uuid.UUID] | None = None,
+        conn: asyncpg.Connection | None = None,
     ) -> list[dict]:
         """Read every live Head with its manifest and stored body in one query.
 
@@ -719,6 +721,9 @@ class NativeRevisionRepository:
         """
         params: list[object] = [namespace_id, surface]
         clauses = ["rs.namespace_id = $1", "rs.surface = $2", "rs.lifecycle = 'live'"]
+        if resource_ids is not None:
+            params.append(resource_ids)
+            clauses.append(f"rs.resource_id = ANY(${len(params)}::uuid[])")
         if path_like is not None:
             params.append(path_like)
             clauses.append(f"rs.current_path LIKE ${len(params)} ESCAPE '\\'")
@@ -756,8 +761,11 @@ class NativeRevisionRepository:
              WHERE {" AND ".join(clauses)}
              ORDER BY rs.updated_at DESC, rs.resource_id DESC
         """
-        async with self.pool.acquire() as conn:
+        if conn is not None:
             rows = await conn.fetch(sql, *params)
+        else:
+            async with self.pool.acquire() as acquired:
+                rows = await acquired.fetch(sql, *params)
         return [dict(row) for row in rows]
 
     async def list_history(

@@ -74,6 +74,9 @@ async def browse_vault(
     include_hashes: bool = Query(False, description="Include content hash/version metadata for documents and files."),
     include_archived: bool = Query(False, description="Include archived documents (hidden from browse by default)."),
     archive_scope: ArchiveScope | None = Query(None, description="Document archive scope; overrides include_archived."),
+    content_type: Literal["all", "collections", "documents", "tables", "files"] = Query("all"),
+    page_size: int | None = Query(None, ge=1, le=200, description="Opt into identity-bounded pages; follow next_cursor until complete=true."),
+    cursor: str | None = Query(None, max_length=32768, description="Continuation for the same Vault, collection, depth, kind and archive scope."),
     user: AuthenticatedUser = Depends(get_current_user),
 ):
     await check_vault_access(user.user_id, vault, required_role="reader")
@@ -81,6 +84,8 @@ async def browse_vault(
         vault, collection=collection, depth=depth, include_hashes=include_hashes,
         include_archived=include_archived,
         archive_scope=archive_scope,
+        content_type=content_type,
+        page_size=page_size, cursor=cursor,
     )
 
 

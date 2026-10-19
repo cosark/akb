@@ -695,7 +695,7 @@ async def test_head_body_query_rejects_aggregate_before_materializing_bodies(
     conn = _Conn(_row(), aggregate=aggregate)
     service = M1NativeGrepService(_Pool(conn))
 
-    with pytest.raises(ValidationError, match=message):
+    with pytest.raises(ValidationError, match=message) as caught:
         await service._head_bodies(
             user_id=uuid.uuid4(),
             vaults=None,
@@ -706,6 +706,10 @@ async def test_head_body_query_rejects_aggregate_before_materializing_bodies(
 
     assert conn.body_fetches == 0
     assert "canonical_bytes" not in conn.aggregate_sql
+    assert caught.value.status_code == 422
+    assert caught.value.code == "grep_scope_too_large"
+    assert "collection" in caught.value.hint
+    assert "result limit does not reduce" in caught.value.message
 
 
 def test_public_surface_selection_keeps_w3a_document_only_and_guards_w3b():

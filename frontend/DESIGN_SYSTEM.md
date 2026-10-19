@@ -707,6 +707,15 @@ an `sr-only` summary, never the only signal.
   document set can never bury tables or files at the end of the tree. A final
   300-row progressive guard prevents one action from mounting a multi-thousand
   node Vault. Small single-kind Collections stay flat and compact.
+  Network work is independently paged: request at most 100 identities at a
+  time and expose Load next page rather than fetching the full Vault behind a
+  DOM-only limit. Keep loaded rows on retry. A partial view explicitly labels
+  loaded counts and name-filter scope; only a server completeness receipt
+  permits an empty-inventory claim. Collection/kind choices also narrow the
+  server request. Unknown Collection contents require the typed recursive
+  deletion confirmation, never an empty-Collection assumption. Details labels
+  loaded counts unless the complete, unfiltered archive-inclusive scope is
+  available. Older servers without paging receipts show an update notice.
   Each group can be manually collapsed even while its resource is open in the
   reader. New resource navigation reveals its actual Collection and kind once;
   tree refresh does not undo a manual collapse. File/table ownership comes from
@@ -915,7 +924,7 @@ an `sr-only` summary, never the only signal.
   its inactive background header. Promotion opens this same document/mode.
   `ResourceLocationProvider` scopes labels to the current identity, route and
   access revision. Resolved resource data supplies the title and canonical
-  collection; a single authorized browse snapshot resolves ancestor display
+  collection; a bounded authorized ancestry lookup resolves ancestor display
   names. Never infer a human title from a UUID or expose a previous resource's
   name during loading/denied/account-change states.
   Deep ancestry collapses behind a keyboard-operable menu, which retains all

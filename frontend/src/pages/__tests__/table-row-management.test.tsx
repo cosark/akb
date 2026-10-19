@@ -228,7 +228,7 @@ describe("table row management", () => {
     const { container } = renderTable();
     await screen.findByRole("button", { name: "Add row" });
     expect(screen.getByTestId("resource-location")).toHaveTextContent(JSON.stringify({
-      vault: "ops", title: "incidents", kind: "Table", collectionPath: "operations",
+      vault: "ops", title: "incidents", kind: "Table", collectionPath: "operations", resourceRef: "incidents",
     }));
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(screen.getByRole("heading", { level: 1 })).toHaveClass("sr-only");

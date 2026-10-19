@@ -1659,6 +1659,8 @@ class NativeRevisionService:
         surface: str,
         path_like: str | None = None,
         max_slashes: int | None = None,
+        resource_ids: list[uuid.UUID] | None = None,
+        conn: asyncpg.Connection | None = None,
     ) -> list[NativeRevisionSnapshot]:
         """Read and verify every live Head under a namespace in one query.
 
@@ -1673,6 +1675,8 @@ class NativeRevisionService:
             surface=surface,
             path_like=path_like,
             max_slashes=max_slashes,
+            **({"resource_ids": resource_ids} if resource_ids is not None else {}),
+            **({"conn": conn} if conn is not None else {}),
         )
         for row in rows:
             if row["revision_id"] is None:

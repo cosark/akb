@@ -240,6 +240,11 @@ root. Walking up a URI to its parent collection is a pure string
 operation — paste the parent into `akb_browse(uri=...)` to list
 siblings without an extra lookup.
 
+For large Vaults, start with `akb_browse(uri=..., depth=0, page_size=100)`
+and follow `next_cursor` until `complete=true`, or drill into a Collection.
+See [bounded navigation and literal-search scope limits](docs/operations/large-vault-navigation.md)
+for paging, partial results and protective grep errors.
+
 ```yaml
 ---
 title: "Payment API v2 migration plan"

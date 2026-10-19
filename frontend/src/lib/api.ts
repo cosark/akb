@@ -345,7 +345,7 @@ async function throwJsonApiError(res: Response): Promise<never> {
       body.detail,
     );
   }
-  throw new ApiError(typeof body?.error === "string" ? body.error : typeof body?.detail === "string" ? body.detail : `${res.status} ${res.statusText}`, res.status, body?.detail ?? null);
+  throw new ApiError(typeof body?.error === "string" ? body.error : typeof body?.detail === "string" ? body.detail : `${res.status} ${res.statusText}`, res.status, body?.detail ?? (typeof body?.code === "string" ? body : null));
 }
 
 async function api<T>(
@@ -2081,10 +2081,20 @@ export const deleteVaultTable = (vault: string, tableName: string) =>
 // ── Browse ──
 export type ArchiveScope = "unarchived" | "archived" | "all";
 
-export const browseVault = (vault: string, collection?: string, depth = 1, options: { archive_scope?: ArchiveScope } = {}) => {
+export interface BrowseOptions {
+  archive_scope?: ArchiveScope;
+  page_size?: number;
+  cursor?: string;
+  content_type?: "all" | "collections" | "documents" | "tables" | "files";
+}
+
+export const browseVault = (vault: string, collection?: string, depth = 1, options: BrowseOptions = {}) => {
   const p = new URLSearchParams({ depth: String(depth) });
   if (collection) p.set("collection", collection);
   if (options.archive_scope) p.set("archive_scope", options.archive_scope);
+  if (options.page_size !== undefined) p.set("page_size", String(options.page_size));
+  if (options.cursor) p.set("cursor", options.cursor);
+  if (options.content_type) p.set("content_type", options.content_type);
   return api<{
     archive_scope?: ArchiveScope;
     vault: string;
@@ -2096,9 +2106,13 @@ export const browseVault = (vault: string, collection?: string, depth = 1, optio
       path: string;
       summary?: string | null;
       description?: string | null;
+      ancestry?: { path: string; name: string }[] | null;
     } | null;
     items: any[];
-  }>(`/browse/${vault}?${p}`);
+    scanned?: number | null;
+    complete?: boolean | null;
+    next_cursor?: string | null;
+  }>(`/browse/${encodeURIComponent(vault)}?${p}`);
 };
 
 export interface KnowledgeImportResult {

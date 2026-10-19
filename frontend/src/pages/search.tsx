@@ -28,7 +28,7 @@ import {
   Tag,
   X,
 } from "lucide-react";
-import { searchDocs, grepDocs, listVaults, type GrepDoc } from "@/lib/api";
+import { searchDocs, grepDocs, listVaults, type ApiError, type GrepDoc } from "@/lib/api";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -188,6 +188,7 @@ function SearchWorkspace() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scopeTooLarge, setScopeTooLarge] = useState(false);
   const [vaults, setVaults] = useState<string[] | null>(null);
   const [vaultsError, setVaultsError] = useState(false);
   const [vaultsRetry, setVaultsRetry] = useState(0);
@@ -208,6 +209,7 @@ function SearchWorkspace() {
   );
   const reqId = useRef(0);
   const queryInputRef = useRef<HTMLInputElement>(null);
+  const collectionInputRef = useRef<HTMLInputElement>(null);
 
   const doSearch = useCallback(
     async (searchQuery: string, searchMode: Mode, selectedVaults: string[]) => {
@@ -216,6 +218,7 @@ function SearchWorkspace() {
       setLoading(true);
       setSearched(true);
       setError(null);
+      setScopeTooLarge(false);
 
       try {
         if (searchMode === "dense") {
@@ -288,6 +291,8 @@ function SearchWorkspace() {
       } catch (caught) {
         if (id !== reqId.current) return;
         setError(caught instanceof Error ? caught.message : "Search failed");
+        const apiError = caught as ApiError<{ code?: string }> | null;
+        setScopeTooLarge(apiError?.status === 422 && apiError?.detail?.code === "grep_scope_too_large");
         setDenseResults([]);
         setLiteralResults([]);
         setTotal(0);
@@ -526,7 +531,7 @@ function SearchWorkspace() {
   const resultStatus = loading
     ? "Searching…"
     : error
-      ? "Search unavailable"
+      ? scopeTooLarge ? "Search scope too large" : "Search unavailable"
       : archiveUnsupported
         ? "Document state filter unavailable"
         : !searched
@@ -680,7 +685,7 @@ function SearchWorkspace() {
         {loading
           ? "Searching…"
           : error
-            ? "Search failed"
+            ? scopeTooLarge ? "Search scope too large; choose a narrower Collection" : "Search failed"
             : !searched
               ? ""
               : degraded
@@ -908,6 +913,7 @@ function SearchWorkspace() {
                     <div className="flex gap-2">
                       <Input
                         id="search-collection"
+                        ref={collectionInputRef}
                         value={collectionDraft}
                         onChange={(event) =>
                           setCollectionDraft(event.target.value)
@@ -1115,18 +1121,21 @@ function SearchWorkspace() {
 
                 {error && !loading && (
                   <Alert
-                    variant="destructive"
-                    title="Search unavailable"
+                    variant={scopeTooLarge ? "warning" : "destructive"}
+                    title={scopeTooLarge ? "Narrow the search scope" : "Search unavailable"}
                     className="rounded-[var(--radius-md)]"
                   >
-                    {error}.{" "}
-                    <button
+                    {error}{" "}
+                    {scopeTooLarge ? <button type="button" onClick={() => {
+                      setFiltersOpen(true);
+                      requestAnimationFrame(() => collectionInputRef.current?.focus());
+                    }} className={inlineActionClass}>Choose a Collection in More filters</button> : <button
                       type="button"
                       onClick={() => void doSearch(q, mode, scopeVaults)}
                       className={inlineActionClass}
                     >
                       Retry
-                    </button>
+                    </button>}
                   </Alert>
                 )}
 

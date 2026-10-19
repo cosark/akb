@@ -98,7 +98,7 @@ describe("file reading workspace", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveClass("sr-only");
     expect(container.querySelectorAll('[data-slot="resource-command-row"]')).toHaveLength(1);
     expect(screen.getByTestId("location")).toHaveTextContent(JSON.stringify({
-      vault: "ops", title: firstFile.name, kind: "File", collectionPath: "guides",
+      vault: "ops", title: firstFile.name, kind: "File", collectionPath: "guides", resourceRef: "f-first",
     }));
     expect(screen.queryByText("Mina")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Actions for/ })).not.toBeInTheDocument();

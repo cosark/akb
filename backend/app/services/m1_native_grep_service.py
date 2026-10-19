@@ -22,7 +22,7 @@ from app.services.search_filters import ArchiveScope, collection_predicate
 
 import asyncpg
 
-from app.exceptions import AKBError, ForbiddenError, ValidationError
+from app.exceptions import AKBError, ForbiddenError, GrepScopeTooLargeError, ValidationError
 from app.services.document_service import _parse_markdown
 from app.services.grep_replace import (
     DEFAULT_MAX_REPLACEMENTS,
@@ -706,13 +706,9 @@ class M1NativeGrepService:
                 resource_count = int(aggregate["resource_count"])
                 total_bytes = int(aggregate["total_bytes"])
                 if resource_count > NATIVE_GREP_MAX_RESOURCES:
-                    raise ValidationError(
-                        f"native grep candidate resources exceed {NATIVE_GREP_MAX_RESOURCES}"
-                    )
+                    raise GrepScopeTooLargeError("resources", NATIVE_GREP_MAX_RESOURCES)
                 if total_bytes > NATIVE_GREP_MAX_SEARCH_BYTES:
-                    raise ValidationError(
-                        f"native grep candidate bytes exceed {NATIVE_GREP_MAX_SEARCH_BYTES}"
-                    )
+                    raise GrepScopeTooLargeError("bytes", NATIVE_GREP_MAX_SEARCH_BYTES)
                 rows = await conn.fetch(
                     f"""
                     SELECT rs.namespace_id, v.name AS vault, rs.resource_id,
