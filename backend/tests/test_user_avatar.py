@@ -96,6 +96,7 @@ def test_exif_rotation_and_metadata_are_applied_then_removed():
     assert not result.getexif()
 
 
+# Keep binary fixtures, especially the 10 MiB body, out of verbose CI test IDs.
 @pytest.mark.parametrize("body,mime,code,status", [
     (b"", "image/png", "avatar_unsupported_image", 415),
     (b"<svg><script/></svg>", "image/png", "avatar_unsupported_image", 415),
@@ -106,6 +107,9 @@ def test_exif_rotation_and_metadata_are_applied_then_removed():
     (b"x" * (service.MAX_UPLOAD_BYTES + 1), "image/png", "avatar_too_large", 413),
     (photo(size=(8193, 1)), "image/png", "avatar_dimensions_exceeded", 413),
     (photo(size=(4000, 3001)), "image/png", "avatar_dimensions_exceeded", 413),
+], ids=[
+    "empty-body", "svg-payload", "unsupported-mime", "gif-format", "mime-mismatch",
+    "truncated-png", "oversize-body", "oversize-width", "oversize-pixels",
 ])
 def test_rejects_invalid_or_excessive_inputs(body, mime, code, status):
     with pytest.raises(AKBError) as caught:
