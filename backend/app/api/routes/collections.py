@@ -67,8 +67,9 @@ async def browse_vault(
         1,
         ge=-1,
         description=(
-            "Tree depth from browse root. 0 = root only; N = descend N levels; "
-            "-1 = unbounded entire subtree."
+            "Paged browse: 0 = direct children; N = N additional levels; "
+            "-1 = all depths, still limited by page_size. Historical unpaged "
+            "Collection navigation rows are depth-independent."
         ),
     ),
     include_hashes: bool = Query(False, description="Include content hash/version metadata for documents and files."),

@@ -134,6 +134,10 @@ async def test_wrong_json_cursor_field_types_are_validation_errors():
             encoded = base64.urlsafe_b64encode(json.dumps([*raw[:-1], value]).encode()).decode()
             with pytest.raises(ValidationError, match="cursor"):
                 await facade.browse("browse-cursor-types", page_size=1, cursor=encoded, archive_scope="all")
+        for path in ("bad\x00path", "bad\ud800path"):
+            encoded = base64.urlsafe_b64encode(json.dumps([*raw[:3], path, raw[-1]]).encode()).decode()
+            with pytest.raises(ValidationError, match="cursor"):
+                await facade.browse("browse-cursor-types", page_size=1, cursor=encoded, archive_scope="all")
 
 
 async def test_body_byte_budget_pages_without_skipping_or_dropping_integrity(monkeypatch):
@@ -142,8 +146,8 @@ async def test_body_byte_budget_pages_without_skipping_or_dropping_integrity(mon
     async with _fresh_database() as pool:
         vault = await _make_vault(pool, "browse-byte-budget")
         await _seed(pool, vault, ["a.md", "b.md", "c.md"])
-        # Each fixture is larger than this deliberately small test budget.
-        # One identity always makes progress; real Documents have a 10 MiB ceiling.
+        # Each fixture fits, but two together exceed this small test budget.
+        # Normal Documents have a 10 MiB admission ceiling.
         monkeypatch.setattr(browse_pages, "MAX_PAGE_BODY_BYTES", 60)
         facade = NativeDocumentService(pool=pool)
         items, cursor = [], None
@@ -155,6 +159,9 @@ async def test_body_byte_budget_pages_without_skipping_or_dropping_integrity(mon
             if cursor is None:
                 break
         assert items == ["a.md", "b.md", "c.md"]
+        monkeypatch.setattr(browse_pages, "MAX_PAGE_BODY_BYTES", 1)
+        with pytest.raises(ValidationError, match="exceeds the browse body budget"):
+            await facade.browse("browse-byte-budget", page_size=100, archive_scope="all")
 
 
 async def test_legacy_hash_repair_uses_the_existing_connection(monkeypatch):
