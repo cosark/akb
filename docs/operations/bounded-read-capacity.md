@@ -53,10 +53,12 @@ Vault**, even when the consumer needed schema only.
 
 Counts describe the requested snapshot, not a live counter. Changing filters,
 account/access identity, refreshing or mutating rows clears the observation.
-An old count never automatically sends the user back or caps a direct page
-jump after another writer inserts rows. Last counted page is explicitly a
-snapshot shortcut; sentinel-based Next remains authoritative. Empty deep pages
-retain navigation rather than triggering a potentially long chain of requests.
+An old count never discards an observed row/sentinel or caps a direct page jump
+after another writer inserts rows. Last counted page is explicitly a snapshot
+shortcut; sentinel-based Next remains authoritative. An exact count can correct
+a genuinely empty, current (not placeholder) out-of-range page by replacing its
+URL, preserving the previous history entry. Unknown counts do not trigger this
+correction or a chain of speculative page requests.
 
 A filtered count is never presented as the total destroyed by dropping the
 Table. If its size is unknown, deletion says all its rows rather than claiming
@@ -142,6 +144,9 @@ design checks, TypeScript, lint and secret scanning passed. The local frontend
 runtime was Node 24; hosted CI remains responsible for the pinned Node 22 lane.
 An independent review caught stale-count navigation and its input maximum;
 both were removed and covered by deterministic concurrent-insert regressions.
+Integration with the current Table workspace also covers schema-overlay focus,
+roving cell keys, page history, and exact-count correction only after a current
+empty-page receipt. Loaded rows always take precedence over a historical count.
 
 ## Upgrade and limits
 
