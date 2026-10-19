@@ -23,7 +23,8 @@ for (const width of [375, 2560]) for (const dark of [false, true]) {
       if (path.endsWith("/auth/me")) return route.fulfill({ json: { user_id: "collection-reader", username: "reader", display_name: "Collection reader", email: "reader@example.invalid", auth_method: "local", is_admin: false } });
       if (path.endsWith("/vaults")) return route.fulfill({ json: { vaults: [{ id: "alpha", name: "alpha", role: "reader" }] } });
       if (path.endsWith("/info")) return route.fulfill({ json: { name: "alpha", role: "reader", document_count: 1, collection_count: 2, is_archived: false, is_external_git: false } });
-      if (path.includes("/browse/")) return route.fulfill({ json: { vault: "alpha", items: [
+      if (path.includes("/browse/")) {
+        const items = [
         { type: "collection", name: "Notes", path: "notes" },
         { type: "collection", name: "팀 자료 & 운영", path: collection },
         { type: "collection", name: "Other", path: `${collection}-old` },
@@ -33,7 +34,23 @@ for (const width of [375, 2560]) for (const dark of [false, true]) {
         { type: "document", name: "Deployment outside", path: `${collection}-old/outside.md` },
         { type: "table", name: "deployment_table", path: "deployment_table", collection },
         { type: "file", name: "Deployment checklist", path: "checklist.txt", collection, uri: `akb://alpha/coll/${collection}/file/file-1` },
-      ] } });
+        ];
+        const scope = url.searchParams.get("collection") || "";
+        const kind = url.searchParams.get("content_type") || "all";
+        const selected = items.filter(item => {
+          const itemPath = (item.type === "table" || item.type === "file")
+            ? `${item.collection || ""}/${item.name}` : item.path;
+          const inScope = !scope || itemPath.startsWith(`${scope}/`);
+          const inKind = kind === "all" || `${item.type}s` === kind || (kind === "documents" && item.type === "collection");
+          return inScope && inKind;
+        });
+        return route.fulfill({ json: { vault: "alpha", path: scope,
+          archive_scope: "unarchived", scanned: selected.length, complete: true, next_cursor: null,
+          context: scope ? { type: "collection", name: items.find(item => item.type === "collection" && item.path === scope)?.name || scope, path: scope,
+            uri: `akb://alpha/coll/${scope}` } : { type: "vault", name: "alpha", path: "", uri: "akb://alpha" },
+          items: selected,
+        } });
+      }
       if (path.endsWith("/search")) {
         searches.push(url);
         return route.fulfill({ json: { results: [{ source_type: "file", title: "Deployment checklist", vault: "alpha", collection, path: "checklist.txt", uri: `akb://alpha/coll/${collection}/file/file-1`, score: 1 }], total: 1, returned: 1 } });
