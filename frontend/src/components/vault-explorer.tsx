@@ -57,7 +57,7 @@ import {
   type ArchiveScope,
 } from "@/lib/api";
 import { recentTone } from "@/lib/recent";
-import { isReservedCollection } from "@/lib/skill";
+import { isReservedCollection, VAULT_SKILL_PATH } from "@/lib/skill";
 import { CreateCollectionDialog } from "@/components/create-collection-dialog";
 import {
   CollectionDetailsDialog,
@@ -186,15 +186,21 @@ export function VaultExplorer({
   }, [pageTree, pageItems, currentResource, vault, archiveScope]);
   const resourceRevealKey = currentResource?.vault === vault && currentResource.resourceRef
     ? `${filterOwner}:${currentResource.kind}:${currentResource.resourceRef}` : null;
-  const revealedResource = useRef<string | null>(null);
+  const revealedResource = useRef<{ key: string; pathname: string } | null>(null);
   useEffect(() => {
-    if (!resourceRevealKey || revealedResource.current === resourceRevealKey || !currentResource) return;
-    revealedResource.current = resourceRevealKey;
+    if (!resourceRevealKey || !currentResource) {
+      // Leaving this reader permits a later visit to reveal it again. A
+      // same-route access proof must not undo the user's manual collapse.
+      if (revealedResource.current?.pathname !== pathname) revealedResource.current = null;
+      return;
+    }
+    if (revealedResource.current?.key === resourceRevealKey) return;
+    revealedResource.current = { key: resourceRevealKey, pathname };
     setFilter("");
     changeCollectionScope(currentResource.collectionPath || "");
     setKindFilter("all");
     setScopeSelection({ vault, scope: currentResource.status === "archived" ? "all" : "unarchived" });
-  }, [resourceRevealKey, currentResource, vault, setFilter, changeCollectionScope]);
+  }, [resourceRevealKey, currentResource, vault, pathname, setFilter, changeCollectionScope]);
   useEffect(() => {
     onRefetchReady?.(refetch);
   }, [onRefetchReady, refetch]);
@@ -1075,7 +1081,7 @@ const TreeRow = memo(function TreeRow({
   }
 
   const href = leafHref(vault, node);
-  const isSkill = node.kind === "document" && node.raw?.doc_type === "skill";
+  const isSkill = node.kind === "document" && (node.raw?.doc_type === "skill" || node.path === VAULT_SKILL_PATH);
   const LeafIcon = isSkill ? Sparkles : node.kind === "document" ? FileText : node.kind === "table" ? Table : Paperclip;
   // Tint the leaf icon by resource kind from the categorical ramp (the same
   // doc=cat-1 / table=cat-3 / file=cat-4 mapping the Home + overview rows use),

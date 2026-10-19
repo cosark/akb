@@ -360,6 +360,33 @@ describe("VaultExplorer — rendering", () => {
     expect(tables).toHaveTextContent("Not loaded in this view");
     expect(tables).not.toHaveTextContent("0 tables");
   });
+
+  it("reveals the same resource again after visiting the Vault and changing filters", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={["/vault/v/doc/guides%2Flast.md"]}><ResourceLocationProvider identity="reader">
+      <Link to="/vault/v">Return to Vault</Link><Link to="/vault/v/doc/guides%2Flast.md">Reopen outlier</Link>
+      <PublishCurrent onlyOnResource value={{ vault: "v", title: "Outlier", kind: "Document", collectionPath: "guides", resourceRef: "guides/last.md" }} />
+      <VaultExplorer vault="v" />
+    </ResourceLocationProvider></MemoryRouter>);
+    await screen.findByRole("treeitem", { name: /^Document:\s*Outlier$/ });
+    await user.click(screen.getByRole("link", { name: "Return to Vault" }));
+    await user.click(screen.getByRole("button", { name: /^Filter collections/ }));
+    await user.click(screen.getByRole("button", { name: "Resource type" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^Tables/ }));
+    await user.click(screen.getByRole("link", { name: "Reopen outlier" }));
+    expect(await screen.findByRole("treeitem", { name: /^Document:\s*Outlier$/ })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("keeps the reserved guide protected when its authorized row is outside the page", async () => {
+    vaultInfoMock.mockResolvedValue({ role: "writer" });
+    browseMock.mockResolvedValue({ ...sample, complete: false, next_cursor: "next", items: [sample.items[0]] });
+    render(<MemoryRouter initialEntries={["/vault/v/doc/overview%2Fvault-skill.md"]}><ResourceLocationProvider identity="writer">
+      <PublishCurrent value={{ vault: "v", title: "Vault guide", kind: "Document", collectionPath: "overview", resourceRef: "overview/vault-skill.md" }} />
+      <VaultExplorer vault="v" />
+    </ResourceLocationProvider></MemoryRouter>);
+    expect(await screen.findByRole("treeitem", { name: /^Skill:\s*Vault guide/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Actions for Vault guide" })).not.toBeInTheDocument();
+  });
   it("renders collections from browse response", async () => {
     renderAt("/vault/v");
     expect(await screen.findByRole("button", { name: /^architecture/i })).toBeInTheDocument();

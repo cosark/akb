@@ -26,6 +26,10 @@ Do not combine MCP `page_size`/`cursor` with the legacy `limit`/`offset` pair.
 `content_type=collections` is a bounded Collection directory; `documents`,
 `tables`, and `files` narrow resource kinds before selecting the page.
 
+The TypeScript SDK exposes the same options as `docs.browse({ collection:
+"guides", depth: 0, pageSize: 100, contentType: "documents", archiveScope:
+"all", cursor })`. Omit `cursor` for the first page.
+
 | Field | Meaning |
 | --- | --- |
 | `items` | Visible resources selected on this page |
