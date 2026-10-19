@@ -958,7 +958,8 @@ body::before {
   margin-inline: auto;
 }
 .document-reading-flow .ProseMirror > :first-child { margin-top: 0; }
-.document-reading-flow .ProseMirror > p:has(img) { max-width: none; }
+/* Image frames live inside paragraphs: keep that paragraph on the same
+   reading measure as prose, including loading and unavailable placeholders. */
 .document-reading-flow .ProseMirror img { max-width: 100%; height: auto; }
 .document-reading-flow .ProseMirror table {
   display: table;

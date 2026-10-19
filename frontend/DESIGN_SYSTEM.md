@@ -994,7 +994,10 @@ an `sr-only` summary, never the only signal.
   mode change. Wide removes the measure for all these blocks together. Target the actual
   `.ProseMirror` / `.tableWrapper` DOM, not legacy direct-child selectors.
   Code and wide tables scroll inside their own labelled, keyboard-focusable
-  regions. Small images retain natural dimensions and aspect ratio.
+  regions. Image-containing paragraphs and their loading/unavailable frames
+  share the same reading measure as prose; images never escape to the full
+  canvas independently. Small images retain natural dimensions and aspect
+  ratio; larger images shrink to their parent without stretching or cropping.
   Context has one entry per view in a 3rem right-edge icon rail: Document info,
   Table of contents, Relations and Version history. Do not duplicate these entries
   in overflow or add another header Info button. Each control has a tooltip,
@@ -1437,30 +1440,60 @@ existing inline pattern and flag for extraction.
 
 ### Personal notification ledger
 
-Personal notifications use one shared ledger in the header panel and full inbox.
-Use two header bands: title and overflow actions, then text-only category
-underline tabs (All / Documents / Access) with an independent Unread only
-checkbox. Allow the filter band to wrap on narrow screens. Do not mix read state
-and event categories in one tab list.
-Category filters are server predicates applied before pagination, not a filter
-over the first loaded page. The full inbox URL and the panel's View all action
-retain both filters. The header overflow groups Mark all notifications read
-(explicitly global) and Notification settings. Unknown server category support
-shows a recovery notice, never a misleading filtered-empty result. Rows stay
-title-first with a short event label and non-repeated Vault context; unread
-weight and a narrow indicator complement accessible state text. Times and
-always-accessible read actions sit side by side at the trailing edge. Group rows
-under Today / Yesterday / Earlier using local calendar boundaries, preserving
-server order. Avoid repeated row dividers and icon boxes. Category color stays
-on compact glyphs; do not tint entire rows or add invented counters.
-Navigable titles use link color and an always-visible arrow, with destination
-purpose in the accessible description. Notice-only rows retain neutral titles,
-say Notice only beside the event label, and have no row hover treatment or fake
-disabled navigation button. Read/unread controls remain available independently.
-Use 8px vertical row padding, 14px/20px titles and 12px/16px metadata separated
-by 2px: a normal two-line notification is approximately 54px tall. Keep long
-titles readable rather than fixing the row height. Header bands use 48px and
-36px minimum heights; read controls remain 36px.
+Personal notifications share query/mutation ownership and resource navigation,
+but the header's approved Compact dropdown is distinct from the full inbox.
+The bell anchors a nonmodal 404px Popover at every viewport width, bounded by
+an 8px viewport inset. Let its height follow content, capped at 40rem and the
+available viewport height; the feed scrolls while header and footer remain
+visible. Do not add a category rail, fullscreen mobile shell, transparent
+overlay, scroll lock, or focus trap. Outside actions work on their first click.
+Keep the same mounted controller and surface when the viewport changes.
+
+The compact header is 56px minimum: title, plain global unread text and two
+quiet icon controls (Mark all notifications read / Close). No large Bell tile,
+count pill, or separate text CTA. All / Unread are horizontal underline state
+tabs; compact queries include every event category. The state is a server
+predicate before pagination, not a local filter of one loaded page. Category
+filtering belongs on the full page. Initial focus goes to the selected state
+tab, not a tooltip-bearing header action, so the first Escape closes the panel.
+
+Compact rows are a flat list divided by quiet hairlines, not individual cards.
+Use a plain 16px event glyph, a 14px/20px title and 12px/16px event, Vault and
+time metadata beneath it, with 12px vertical padding. Unread uses a heavier
+title and a small trailing dot; the labelled dot control marks read. Read rows
+have a check control revealed on pointer hover, keyboard focus and coarse
+pointers, labelled to mark unread. These controls stay focusable while busy,
+with aria-disabled and guarded handlers. If marking read removes a focused row
+from Unread, focus its surviving neighbor or the Unread tab. Never invent
+per-category counts, actors or role details from unavailable data. Link and
+description IDs remain distinct between the panel and page.
+
+Navigable compact titles retain foreground with teal hover/focus; notice-only
+rows have neutral titles, Notice only metadata, no fake navigation and no row
+hover fill. Read actions remain independent of resource navigation. The compact
+footer is one 48px band: View all notifications on the left, a tooltip-labelled
+Watched documents settings icon on the right. View all preserves read state
+with category=all. Match the approved Lucide outline glyphs at 16px and 1.7px
+stroke: FilePenLine / ArrowRightLeft / UserRoundCheck / Archive / Trash2 for
+updated / moved / access granted / archived / deleted; CheckCheck / X /
+Settings2 for header and footer actions. Ownership changes use UserRoundKey;
+KeyRound remains reserved for access changes. Desktop fine-pointer header/footer
+controls are 32px and row read controls are 24px with a 1px top inset. Keep
+44px targets on small screens and coarse pointers. The header bell uses the
+same stroke and a 5px unread dot, not a numeric badge; keep the exact global
+count in its accessible name and the panel header. Empty-state glyphs are 24px.
+Keep long titles wrapping, never fixed-height or clipped.
+
+The full page keeps its single compact header aligned to a 56rem ledger,
+visible Watched documents action, All / Documents / Vault access underline
+category tabs and independent Unread only checkbox. Categories are server
+predicates before pagination, with unknown support shown as a recovery notice.
+Its dated Today / Yesterday / Earlier groups, row cards with TonalIcons,
+per-row read menus and header Mark all overflow remain available for detailed
+review. Retention information belongs only at the full ledger's foot. Mark all
+uses the observed global snapshot in either view. Unknown counts show loading
+or unavailable feedback, never claim zero; pending actions retain focus and
+prevent duplicate writes.
 The app-header notification and account controls use content-sized, non-shrinking
 slots, never share a fixed account-width box. Account names stay visible from
 `sm` (bounded only for unusually long names); smaller screens use the avatar

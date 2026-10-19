@@ -1977,7 +1977,7 @@ for (const scenario of [
   expect(inset).toBeGreaterThanOrEqual(16);
   expect(inset).toBeLessThanOrEqual(32);
   if (scenario.width >= 1920) expect(inset).toBeCloseTo(32, 0);
-  for (const block of await flow.locator(":scope > h2, :scope > p:not(:has(img)), :scope > ul, :scope > pre, :scope > .akb-md-table, :scope > .tableWrapper").all()) {
+  for (const block of await flow.locator(":scope > h2, :scope > p, :scope > ul, :scope > pre, :scope > .akb-md-table, :scope > .tableWrapper").all()) {
     const box = (await block.boundingBox())!;
     expect(box.x - canvasBox.x).toBeCloseTo(inset, 0);
     expect(box.width).toBeCloseTo(canvasWidth - inset * 2, 0);
@@ -2194,6 +2194,100 @@ for (const dark of [false, true]) test(`code blocks follow Standard and Wide rea
   await expect.poll(() => longCode.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
   await page.screenshot({ path: testInfo.outputPath("mobile-code-width.png") });
 });
+
+for (const dark of [false, true]) for (const entry of ["document", "search", "quick-search"] as const) {
+  test(`images share the reading measure in ${entry} (${dark ? "dark" : "light"})`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 2560, height: 1440 });
+    await fixture(page, dark, true, [
+      "# Image alignment",
+      "Images and their surrounding text share one reading boundary.",
+      "![Small diagram](/reading-fixture.svg)",
+      "![Wide diagram](/reading-large.svg)",
+      "![Tall diagram](/reading-tall.svg)",
+      "> ![Quoted diagram](/reading-fixture.svg)",
+      "- List image ![Listed diagram](/reading-fixture.svg)",
+      "Before ![Inline diagram](/reading-fixture.svg) after.",
+    ].join("\n\n"));
+    for (const image of [
+      { path: "reading-large.svg", width: 2400, height: 1200 },
+      { path: "reading-tall.svg", width: 240, height: 960 },
+    ]) {
+      await page.route(`**/${image.path}`, route => route.fulfill({
+        contentType: "image/svg+xml",
+        body: `<svg xmlns="http://www.w3.org/2000/svg" width="${image.width}" height="${image.height}"><rect width="100%" height="100%" fill="teal"/></svg>`,
+      }));
+    }
+    if (entry === "document") await page.goto(`/vault/fixture/doc/${encodeURIComponent(path)}`);
+    else {
+      await page.goto("/search?q=reading&source=document");
+      if (entry === "quick-search") {
+        await page.getByRole("button", { name: "Search knowledge", exact: true }).click();
+        const search = page.getByTestId("global-search-dialog");
+        await search.getByRole("combobox").fill("reading");
+        await search.getByRole("option", { name: /문서 읽기 작업공간/ }).click();
+      } else await page.getByRole("link", { name: /문서 읽기 작업공간/ }).first().click();
+      await expect(page.getByTestId("document-preview-dialog")).toBeVisible();
+    }
+    const flow = page.locator(".document-reading-flow .ProseMirror");
+    const images = flow.locator("img[data-markdown-image]");
+    await expect(images).toHaveCount(6);
+    await expect.poll(() => images.evaluateAll(elements => elements.every(element => {
+      const image = element as HTMLImageElement;
+      return image.complete && image.naturalWidth > 0;
+    }))).toBe(true);
+
+    const checkAlignment = async () => {
+      const heading = (await flow.locator(":scope > h2").boundingBox())!;
+      for (const block of await flow.locator(":scope > p, :scope > blockquote, :scope > ul").all()) {
+        const box = (await block.boundingBox())!;
+        expect(box.x).toBeCloseTo(heading.x, 0);
+        expect(box.width).toBeCloseTo(heading.width, 0);
+      }
+      // Nested images respect their parent indentation; natural-size images
+      // never stretch, and large images shrink without changing aspect ratio.
+      for (const image of await images.all()) {
+        const geometry = await image.evaluate(element => {
+          const imageElement = element as HTMLImageElement;
+          const box = element.getBoundingClientRect();
+          // The shared renderer can flatten a single image-only quote.
+          const parent = element.closest<HTMLElement>("p, blockquote")!;
+          const parentBox = parent.getBoundingClientRect();
+          const style = getComputedStyle(parent);
+          const paddingLeft = parseFloat(style.paddingLeft);
+          const paddingRight = parseFloat(style.paddingRight);
+          return {
+            x: box.x, width: box.width, height: box.height,
+            parentX: parentBox.x + parent.clientLeft + paddingLeft,
+            parentWidth: parent.clientWidth - paddingLeft - paddingRight,
+            naturalWidth: imageElement.naturalWidth, naturalHeight: imageElement.naturalHeight,
+          };
+        });
+        expect(geometry.x).toBeCloseTo(geometry.parentX, 0);
+        expect(geometry.width).toBeCloseTo(Math.min(geometry.naturalWidth, geometry.parentWidth), 0);
+        expect(geometry.width / geometry.height).toBeCloseTo(geometry.naturalWidth / geometry.naturalHeight, 2);
+        expect(geometry.x + geometry.width).toBeLessThanOrEqual(heading.x + heading.width + 1);
+      }
+      await expect(flow.locator(":scope > p").last()).toHaveText("Before  after.");
+      expect(await page.locator("#document-reading-canvas").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      return heading.width;
+    };
+    const actions = page.getByRole("button", { name: `Actions for ${title}`, exact: true });
+    if (entry !== "document") expect(await checkAlignment()).toBeGreaterThan(1024);
+    await actions.click();
+    await page.getByRole("menuitemradio", { name: "Standard", exact: true }).click();
+    expect(await checkAlignment()).toBe(1024);
+    await page.screenshot({ path: testInfo.outputPath("standard-image-alignment.png") });
+    await actions.click();
+    await page.getByRole("menuitemradio", { name: "Wide", exact: true }).click();
+    expect(await checkAlignment()).toBeGreaterThan(1024);
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      await checkAlignment();
+    }
+    await page.screenshot({ path: testInfo.outputPath("mobile-image-alignment.png") });
+  });
+}
 
 test("short prose has no artificial body height", async ({ page }) => {
   await fixture(page, false, false, "One line of knowledge.");
