@@ -191,7 +191,7 @@ async def akb_error_handler(request: Request, exc: AKBError):
     retry_after = getattr(exc, "retry_after_secs", None)
     if retry_after is not None:
         headers = {"Retry-After": str(int(retry_after))}
-    if request.url.path == "/api/v1/auth/me/avatar":
+    if request is not None and request.url.path == "/api/v1/auth/me/avatar":
         headers = {**(headers or {}), "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
     return JSONResponse(
         status_code=exc.status_code,

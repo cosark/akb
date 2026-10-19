@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import threading
 import uuid
 from unittest.mock import AsyncMock, Mock
@@ -34,6 +35,35 @@ def photo(format="PNG", mode="RGB", size=(64, 80), **kwargs):
     data = io.BytesIO()
     image.save(data, format=format, **kwargs)
     return data.getvalue()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", [None, "/api/v1/vaults", "/api/v1/auth/me/avatar"])
+@pytest.mark.parametrize("retry_after", [None, 5])
+async def test_error_handler_scopes_photo_privacy_headers_without_changing_generic_errors(
+    monkeypatch, tmp_path, path, retry_after,
+):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "git_storage_path", str(tmp_path / "vaults"))
+    from app.main import akb_error_handler
+
+    request = None if path is None else Request({
+        "type": "http", "method": "PUT", "path": path, "headers": [],
+    })
+    error = AKBError("Please retry.", 429, code="write_busy")
+    if retry_after is not None:
+        error.retry_after_secs = retry_after
+    response = await akb_error_handler(request, error)
+    assert response.status_code == 429
+    assert json.loads(response.body)["detail"] == {"message": "Please retry.", "code": "write_busy"}
+    assert response.headers.get("Retry-After") == (None if retry_after is None else str(retry_after))
+    if path == "/api/v1/auth/me/avatar":
+        assert response.headers["Cache-Control"] == "private, no-store"
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+    else:
+        assert "Cache-Control" not in response.headers
+        assert "X-Content-Type-Options" not in response.headers
 
 
 @pytest.mark.parametrize("format,mime,mode", [
