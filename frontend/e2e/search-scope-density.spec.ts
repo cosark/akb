@@ -47,6 +47,13 @@ for (const width of [375, 1440, 2560]) {
       await assertQuerySpace(scope, query, count, width);
       if (count > 2) await expect(scope.getByText(`+${count - 2}`, { exact: true })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      const commandFrame = (await page.getByTestId("search-command-header").boundingBox())!;
+      const resultFrame = (await page.getByTestId("search-results-pane").locator(":scope > div").boundingBox())!;
+      const countFrame = (await page.getByTestId("search-tool-row").locator(":scope > div").boundingBox())!;
+      for (const frame of [resultFrame, countFrame]) {
+        expect(Math.abs(frame.x - commandFrame.x)).toBeLessThanOrEqual(1);
+        expect(Math.abs(frame.x + frame.width - commandFrame.x - commandFrame.width)).toBeLessThanOrEqual(1);
+      }
     }
     await page.screenshot({ path: testInfo.outputPath("page-forty-scopes.png") });
 

@@ -5,6 +5,7 @@ import { test, expect } from "@playwright/test";
 for (const viewport of [
   { width: 1440, height: 1000 },
   { width: 390, height: 844 },
+  { width: 320, height: 740 },
   { width: 667, height: 375 },
 ]) {
   for (const dark of [false, true]) {
@@ -128,6 +129,14 @@ for (const viewport of [
       const results = await page.getByRole("region", { name: "Search results" }).boundingBox();
       if (!kinds || !results) throw new Error("Search workspace is not visible");
       expect(kinds.y + kinds.height).toBeLessThanOrEqual(results.y + 1);
+      const commandFrame = (await page.getByTestId("search-command-header").boundingBox())!;
+      const resultFrame = (await page.getByRole("list", { name: "Semantic search results" }).boundingBox())!;
+      const countFrame = (await page.getByTestId("search-tool-row").locator(":scope > div").boundingBox())!;
+      for (const frame of [resultFrame, countFrame]) {
+        expect(Math.abs(frame.x - commandFrame.x)).toBeLessThanOrEqual(1);
+        expect(Math.abs(frame.x + frame.width - commandFrame.x - commandFrame.width)).toBeLessThanOrEqual(1);
+      }
+      await expect(page.getByRole("button", { name: "Filters", exact: true })).toBeInViewport();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await page.screenshot({ path: testInfo.outputPath("search-results.png"), animations: "disabled" });
       await page

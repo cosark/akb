@@ -647,7 +647,7 @@ function SearchWorkspace() {
           ? "Semantic search matches meaning and keywords."
           : "Literal search matches exact text or a regular expression."}
       </span>
-      <div className="@container/scope-query order-1 flex min-h-12 min-w-0 flex-1 flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-border-strong bg-surface px-2 py-1.5 shadow-xs transition-token focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-surface">
+      <div className="@container/scope-query order-1 flex min-h-11 min-w-0 flex-1 flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-border-strong bg-surface px-2 py-0.5 shadow-xs transition-token focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-surface">
         <SearchVaultPicker
           selected={scopeVaults}
           contextVault={scopedVault}
@@ -693,7 +693,7 @@ function SearchWorkspace() {
       <div
         role="group"
         aria-label="Search mode"
-        className="order-3 col-span-2 inline-flex w-fit items-center gap-1 rounded-[var(--radius-md)] bg-surface-2 p-1 @min-[56rem]/search:order-2 @min-[56rem]/search:col-span-1"
+        className="order-3 col-span-2 inline-flex w-fit items-center rounded-[var(--radius-md)] border border-border bg-surface p-px @min-[56rem]/search:order-2 @min-[56rem]/search:col-span-1"
       >
         <button
           type="button"
@@ -721,7 +721,7 @@ function SearchWorkspace() {
         variant="default"
         size="md"
         loading={loading}
-        className="order-2 h-12 shrink-0 px-5 @min-[56rem]/search:order-3"
+        className="order-2 h-11 shrink-0 px-5 @min-[56rem]/search:order-3"
       >
         Search
       </Button>
@@ -754,7 +754,7 @@ function SearchWorkspace() {
       >
         <header
           aria-label="Page search controls"
-          className="shrink-0 bg-surface px-4 pb-3 pt-5 sm:px-6 sm:pt-6"
+          className="rail-scroll rail-scroll-centered shrink-0 overflow-hidden bg-surface px-search-workspace-gutter pb-3 pt-5 @min-[40rem]/search:pt-6"
         >
           <div className="mx-auto w-full max-w-[76rem]">
             {queryForm}
@@ -773,11 +773,11 @@ function SearchWorkspace() {
           </div>
         </header>
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="shrink-0 border-b border-border px-4 sm:px-6">
-            <div className="mx-auto flex min-h-14 w-full max-w-[76rem] items-center justify-between gap-2">
+          <div className="rail-scroll rail-scroll-centered shrink-0 overflow-hidden border-b border-border px-search-workspace-gutter">
+            <div className="mx-auto flex min-h-12 w-full max-w-[76rem] items-center justify-between gap-3">
               {mode === "dense" ? (
-                <div className="flex min-w-0 items-center gap-1" role="group" aria-label="Filter by content kind">
-                  {SOURCE_FILTERS.map(({ key, label, icon: Icon }) => (
+                <div className="flex min-w-0 items-center gap-1 @min-[40rem]/search:gap-3" role="group" aria-label="Filter by content kind">
+                  {SOURCE_FILTERS.map(({ key, label }) => (
                     <button
                       key={key}
                       type="button"
@@ -786,8 +786,7 @@ function SearchWorkspace() {
                       onClick={() => setFilter("source", key === "all" ? [] : [key])}
                       className={sourceFilterClass(activeSource === key)}
                     >
-                      <Icon className="hidden h-3.5 w-3.5 shrink-0 @min-[40rem]/search:block" aria-hidden />
-                      {label}
+                      <span>{label}</span>
                     </button>
                   ))}
                 </div>
@@ -807,7 +806,7 @@ function SearchWorkspace() {
                     aria-controls={filtersOpen ? "search-filter-panel" : undefined}
                     onClick={(event) => openFilters(event.currentTarget, section)}
                     className={cn(
-                      "hidden min-h-11 items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 text-xs font-medium transition-token hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[56rem]/search:inline-flex",
+                      "hidden min-h-11 cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 text-[13px] font-medium transition-token hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[56rem]/search:inline-flex",
                       active ? "text-link" : "text-foreground-muted",
                     )}
                   >
@@ -823,10 +822,10 @@ function SearchWorkspace() {
                   aria-expanded={filtersOpen}
                   aria-controls={filtersOpen ? "search-filter-panel" : undefined}
                   onClick={(event) => openFilters(event.currentTarget)}
-                  className="inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-xs font-medium text-foreground transition-token hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/search:px-3"
+                  className="inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-border bg-surface px-2 text-[13px] font-medium text-foreground transition-token hover:border-border-strong hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/search:min-h-9 @min-[40rem]/search:px-3"
                 >
                   <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
-                  Filters
+                  <span className="hidden @min-[24rem]/search:inline">Filters</span>
                   {activeFilterCount > 0 && <Badge variant="secondary">{activeFilterCount}</Badge>}
                 </button>
               </div>
@@ -835,17 +834,19 @@ function SearchWorkspace() {
           <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface">
             <div
               data-testid="search-tool-row"
-              className="mx-auto flex min-h-10 w-full max-w-[79rem] shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 text-xs sm:px-6"
+              className="rail-scroll rail-scroll-centered min-h-10 shrink-0 overflow-hidden px-search-workspace-gutter"
             >
-              <p className="text-xs font-medium tabular-nums text-foreground-muted">
-                {resultStatus}
-              </p>
-              <p
-                data-testid="search-scope-row"
-                className="min-w-0 break-words text-foreground-muted"
-              >
-                {scopeVaults.length === 0 ? "Across all accessible vaults" : `Across ${scopeVaults.length} ${scopeVaults.length === 1 ? "vault" : "vaults"}`}
-              </p>
+              <div className="mx-auto flex min-h-10 w-full max-w-[76rem] flex-wrap items-center justify-between gap-x-4 gap-y-1 pb-1 pt-3 text-xs">
+                <p className="text-xs font-medium tabular-nums text-foreground-muted">
+                  {resultStatus}
+                </p>
+                <p
+                  data-testid="search-scope-row"
+                  className="min-w-0 break-words text-foreground-muted"
+                >
+                  {scopeVaults.length === 0 ? "Across all accessible vaults" : `Across ${scopeVaults.length} ${scopeVaults.length === 1 ? "vault" : "vaults"}`}
+                </p>
+              </div>
             </div>
 
             <div
@@ -853,7 +854,7 @@ function SearchWorkspace() {
               aria-label="Search results"
               aria-busy={loading}
               data-testid="search-results-pane"
-              className="rail-scroll min-h-0 min-w-0 flex-1 overflow-y-auto bg-surface px-4 pb-6 pt-1 sm:px-6"
+              className="rail-scroll rail-scroll-centered min-h-0 min-w-0 flex-1 overflow-y-auto bg-surface px-search-workspace-gutter pb-6 pt-1"
             >
               <div className="mx-auto w-full max-w-[76rem] space-y-4">
                 {activeFilters.length > 0 && (
@@ -1560,9 +1561,9 @@ function DenseResultList({ items }: { items: DenseResult[] }) {
                     )
                   : undefined
               }
-              className="group block rounded-[var(--radius-sm)] px-2 py-5 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-3"
+              className="group grid grid-cols-[1rem_minmax(0,1fr)] gap-x-3 rounded-[var(--radius-sm)] py-4 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             >
-              <div className="mb-1.5 flex min-w-0 items-center justify-between gap-3 text-xs text-foreground-muted">
+              <div className="col-start-2 mb-1.5 flex min-w-0 items-center justify-between gap-3 text-xs text-foreground-muted">
                 <span
                   className="min-w-0 truncate"
                   title={`${result.vault} / ${result.path}`}
@@ -1582,22 +1583,20 @@ function DenseResultList({ items }: { items: DenseResult[] }) {
                   <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
                 </span>
               </div>
-              <div className="flex items-start gap-2">
-                <SourceIcon
-                  className="mt-0.5 h-4 w-4 shrink-0 text-foreground-muted"
-                  aria-hidden
-                />
+              <SourceIcon
+                className="col-start-1 row-start-2 mt-1 h-4 w-4 text-foreground-muted"
+                aria-hidden
+              />
+              <span className="col-start-2 min-w-0 text-base font-semibold leading-6 text-link [overflow-wrap:anywhere] group-hover:underline">
                 <span className="sr-only">Result {index + 1}: </span>
-                <span className="min-w-0 text-base font-semibold text-link [overflow-wrap:anywhere] group-hover:underline">
-                  {result.title}
-                </span>
-              </div>
+                {result.title}
+              </span>
               {detail && (
-                <p className="mt-2 max-w-[88ch] line-clamp-2 whitespace-pre-line text-sm leading-relaxed text-foreground-muted">
+                <p className="col-start-2 mt-1.5 max-w-[88ch] line-clamp-2 whitespace-pre-line text-sm leading-relaxed text-foreground-muted">
                   {detail}
                 </p>
               )}
-              <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-foreground-muted">
+              <div className="col-start-2 mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-foreground-muted">
                 <span>{sourceLabel}</span>
                 {result.doc_type && (
                   <Badge variant="outline">{result.doc_type}</Badge>
@@ -1644,7 +1643,7 @@ function LiteralResultList({ items }: { items: GrepDoc[] }) {
                     `search-literal-result-${index}`,
                   )
             }
-            className="group grid grid-cols-[1rem_minmax(0,1fr)] gap-3 rounded-[var(--radius-sm)] px-2 py-5 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[1rem_minmax(0,1fr)_6.5rem] sm:px-3"
+            className="group grid grid-cols-[1rem_minmax(0,1fr)] gap-3 rounded-[var(--radius-sm)] py-4 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[1rem_minmax(0,1fr)_6.5rem]"
           >
             <span className="mt-0.5 text-foreground-muted">
               {result.resource_type === "file" ? (
@@ -1739,18 +1738,18 @@ function LiteralResultList({ items }: { items: GrepDoc[] }) {
 
 function searchModeClass(active: boolean) {
   return cn(
-    "inline-flex min-h-10 cursor-pointer items-center justify-center gap-1.5 rounded-[var(--radius-sm)] px-3 text-xs font-medium transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+    "inline-flex min-h-10 cursor-pointer items-center justify-center gap-1.5 rounded-[var(--radius-sm)] px-3 text-[13px] font-medium transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     active
-      ? "bg-surface text-link shadow-xs"
+      ? "bg-surface-selected text-surface-selected-foreground"
       : "text-foreground-muted hover:bg-surface-hover hover:text-foreground",
   );
 }
 
 function sourceFilterClass(active: boolean) {
   return cn(
-    "relative -mb-px inline-flex min-h-14 cursor-pointer items-center justify-center gap-1.5 border-b-2 px-1.5 text-xs font-medium transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring @min-[40rem]/search:px-3 @min-[40rem]/search:text-sm",
+    "relative -mb-px inline-flex min-h-12 min-w-8 cursor-pointer items-center justify-center border-b-2 px-1 text-[13px] font-medium transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring @min-[40rem]/search:px-2 @min-[40rem]/search:text-sm",
     active
-      ? "border-primary text-link"
+      ? "border-primary font-semibold text-link"
       : "border-transparent text-foreground-muted hover:bg-surface-hover hover:text-foreground",
   );
 }

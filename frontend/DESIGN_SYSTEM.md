@@ -1326,7 +1326,12 @@ Semantic / Literal sits beside it as a compact segmented control, and the explic
 Search action completes the command. On narrow workspaces the mode control moves
 below the query. A quiet mode-specific helper explains what will be searched.
 There is no permanent second filter rail. All / Documents / Tables / Files use
-short underline choices above the results. Collection, Document type and Tags
+compact text-only underline choices above the results. Keep the resource tabs
+48px tall, with a stronger active label; reserve glyphs for the result kind.
+The mode switch uses a quiet bordered group and a soft selected fill without a
+raised shadow. Single-row query field, mode switch and Search action share a
+44px height; a narrow query field can wrap the Vault scope above its input.
+Collection, Document type and Tags
 are quick entries into one Search filters dialog; below 56rem of *available
 workspace*, keep the single Filters entry and all controls inside that dialog.
 The dialog preserves independent Collection Apply, immediate metadata/state
@@ -1336,7 +1341,12 @@ quick entries focus their corresponding field. Active filter chips remain
 removable above results when the dialog is closed, and removal retains focus
 on a remaining chip or Filters.
 Search owns its viewport and results scroll. Flat result rows use quiet dividers,
-16px/24px outer gutters and a 76rem reading cap. Titles use 16px semibold type;
+a shared 16–32px container-based gutter (`--spacing-search-workspace-gutter`)
+and a 76rem reading cap. Fixed command, kind and count rows reserve the same
+scrollbar gutters on both edges as the scrolling results, keeping the frame
+centered and both edges aligned at any width.
+Result rows add no second horizontal inset; location, title, excerpt and metadata
+share one text column beside the resource glyph. Titles use 16px semibold type;
 location, a two-line excerpt and compact metadata support comparison without
 separate card borders. Top match stays beside metadata rather than at the far
 edge. Initial re-entry content is narrower, with recent queries, recent documents
