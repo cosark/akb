@@ -313,7 +313,16 @@ for (const scenario of [
     url.searchParams.get("q") === "reading" && url.searchParams.get("source") === "document" &&
     url.searchParams.get("v") === (selectedVaults.length === 2 ? "fixture,팀-beta" : null),
   );
-  await expect(page.getByRole("button", { name: `Search scope: ${selectedVaults.join(", ")}`, exact: true })).toBeVisible();
+  const scopeSummary = selectedVaults.length > 1 ? `${selectedVaults.length} vaults` : selectedVaults[0];
+  const pageScope = page.getByTestId("search-query-entry").getByRole("button", { name: `Search scope: ${scopeSummary}`, exact: true });
+  await expect(pageScope).toBeVisible();
+  await pageScope.click();
+  await expect(page.getByRole("menuitemcheckbox", { checked: true })).toHaveCount(selectedVaults.length);
+  for (const vault of selectedVaults) {
+    await expect(page.getByRole("menuitemcheckbox", { name: new RegExp(`^${vault}(?:\\s*Current vault)?$`) })).toHaveAttribute("aria-checked", "true");
+  }
+  await page.keyboard.press("Escape");
+  await expect(pageScope).toBeFocused();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
