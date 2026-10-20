@@ -229,6 +229,14 @@ an `sr-only` summary, never the only signal.
 - **Body = `text-sm` (14px).** Headings via `font-display` (Pretendard 600/700,
   tight tracking, `text-foreground` — not pure black). Weights: **400 / 500 /
   600 / 700**.
+- **Compact workspace UI = `text-ui` (13px / 20px).** Vault Overview and its
+  administration ledgers use this step for names, labels and short descriptions,
+  with 14px section titles and 12px metadata. Search result copy stays 14px and
+  document prose stays 16px. The `--text-ui` token is registered as a font-size
+  group in `cn` so foreground colors and primitive overrides remain independent.
+  Compact administration controls are 32px on wide, fine-pointer screens and
+  at least 44px on narrow or coarse-pointer screens. Icon controls opt into
+  their square size explicitly; a text button must retain its natural width.
 - **Numbers in tables/lists/stats: `tabular-nums`** (prevents async jitter), in
   Pretendard — not monospace, and **not zero-padded** (`1`, not `01`).
 - **Mono is for technical refs, not display names.** Code/secrets, `akb://`
@@ -640,20 +648,22 @@ an `sr-only` summary, never the only signal.
   Restore focus to the invoking control and never persist token secrets.
   Vault Settings uses the Members/Public links workspace family: the same
   `WorkspaceSectionHeader`, route-owned gutters and one bounded workspace Panel.
-  The visible Settings heading is 16px with its quiet tonal icon; an archived
+  The visible Settings heading is 14px with its quiet 28px tonal icon; an archived
   badge appears only when applicable. Vault details (`#general`) and Access
   permissions (`#access`) are full-width, purpose-led form sections. Each has a
-  16px semibold H3, a meaningful small tonal icon and one short explanation;
+  14px semibold H3, a meaningful 28px tonal icon and one short 12px explanation;
   they do not use the small ledger header strip. At 64rem of actual workspace
   width the intent occupies a 13rem left column and controls fill the right;
   below that width the intent sits above the controls. Sections share neutral
   hairline separators, with no nested card shells or category tabs. Preserve
   one mounted form per scope, all deep-link IDs and one route scroll surface.
-  Use the same route-owned gutters as Members/Public links.
+  Use the same route-owned gutters as Members/Public links, with 16px section
+  padding and gaps, and 16px above the page header. Description uses a compact
+  80px minimum field on desktop and keeps 16px input text on narrow screens.
   Vault details places the labelled description field and permanent copyable
   Vault address side by side at 44rem of actual controls width, otherwise
-  stacked. The address has a quiet read-only field surface and a 44px copy
-  target; metadata about ownership, dates and inventory belongs to Overview.
+  stacked. The address has a quiet read-only field surface and a compact copy
+  target (44px on touch); metadata about ownership, dates and inventory belongs to Overview.
   Access permissions starts with Who can access and a Sign-in required cue.
   The three native choices retain their explicit audience and permission
   descriptions. At 44rem of controls width they share one horizontal comparison
@@ -835,9 +845,13 @@ an `sr-only` summary, never the only signal.
   Members / Settings have a small grouping gap. Every link is at least 44×44px;
   icons hide below 30rem of workspace width while readable labels remain.
   Native modifier clicks stay native, and accepted page departures focus the
-  destination content without pulling focus away from a blocked leave dialog. Preserve the 12px mobile, 16px intermediate, and 24px
+  destination content without pulling focus away from a blocked leave dialog. Preserve the 12px mobile, 16px intermediate, and 20px
   desktop route gutter; do not add an Inventory band, equal-width stat cells, or
   another enclosing card. Graph-link health stays out of Overview.
+  Overview keeps 20px between major regions, a 14px identity heading, 13px
+  recent-item titles and context copy, and 12px metadata. Recent rows remain
+  content-driven with a 48px minimum. Context headings use 44px rows and
+  quiet 24px icon tiles. Navigation links retain their 44px targets.
   Recent activity leads directly below the summary. When the actual working
   area's content width reaches 60rem, a 20rem contextual column sits beside it
   with a 24px gap; narrower workspaces stack in DOM order. Use container queries, not
@@ -966,8 +980,10 @@ an `sr-only` summary, never the only signal.
   and a separate overflow-action column. Joined is shown only when the actual
   content container has room, rather than using viewport breakpoints that ignore
   both left navigation rails. Long names and emails wrap; compact screens omit
-  decorative avatars. Role selectors keep a usable 36px target with neutral
+  decorative avatars. Role selectors keep a 32px desktop / 44px touch target with neutral
   surfaces and foreground text in both themes, not competing role-colored fills.
+  The compact header uses a 14px title and 28px icon; names use 13px medium,
+  contact metadata stays 12px, and ledger cells use 8px vertical padding.
   Filtering appears for more than eight members and remains visible while active.
   Keep invite, role changes with Undo, revoke and ownership-transfer confirmations.
   Reader and unknown-role views do not expose management controls; row actions
@@ -1367,7 +1383,7 @@ global trigger opens an independent quick lookup; opening or dismissing it must
 not change the page's query or filters. The workspace uses the same cool-gray
 `background` canvas and bounded `Panel` list as Vault Overview. A single
 `max-w-6xl` frame aligns the query field and results panel, with the standard
-12 / 16 / 24px responsive gutters. At `lg` and wider, the global location already
+12 / 16 / 20px responsive gutters. At `lg` and wider, the global location already
 names the page, so the body H1 is visually hidden. Below `lg`, retain a small
 Search text heading without an icon tile because the global location is hidden.
 
@@ -1380,16 +1396,17 @@ Vault chips. By meaning / Exact text options explain Semantic / Literal
 behavior. Enter submits the same form as the integrated trailing Search action.
 
 At an available workspace width of 45rem or more, scope / query / method /
-submit share one row of about 52px. Below 45rem, scope and method share the first
+submit share one row of 44px on desktop fine-pointer screens. Below 45rem, scope and method share the first
 row, with query and submit below; this follows available container width rather
 than the browser viewport. Query text is 16px in the stacked field and 14px in
 the wide row. Scope names and selected counts cannot squeeze out the input.
-Query clear, method, scope, and submit controls have 44px height. The entire
+Query clear, method, scope, and submit controls have 36px height on desktop
+fine-pointer screens, retaining 44px on narrow/coarse-pointer screens. The entire
 field shares one border and focus treatment. Keep the alignment frame's overflow
 visible so its outer focus ring is not clipped; the padded viewport and results
 panel own clipping and scrolling. Do not add a separate title toolbar,
 context footer, or individual button outlines. The results panel follows with
-a 16px gap.
+a 12px gap.
 
 There is no permanent refinement rail or resource-kind tab strip. A Result type
 menu in the results panel header selects All content / Documents / Tables / Files
@@ -1406,7 +1423,9 @@ Search owns its viewport and results scroll. The results panel follows content
 height until the viewport fills, then scrolls below its fixed header. Result rows
 use the same 14px dark semibold titles, teal resource glyphs, quiet dividers, and
 16px panel inset as the existing workspace ledgers. A two-line excerpt follows
-the title; location, source type and compact metadata share a quiet line below.
+the title at 20px line-height; location, source type and compact metadata share a quiet line below.
+Rows use 10px vertical padding. Filter dialogs use 16px insets, 14px titles and
+13px form labels; their touch controls remain 44px.
 Preview / Open occupies the trailing edge. Top match stays beside metadata.
 Initial re-entry content shows recent queries, recent documents and suggested
 searches inside the same panel, without a separate hero or nested outer card.
@@ -1415,7 +1434,7 @@ filled `surface-2/60` header band, small semibold H3 label, and divided list row
 immediately below. Recent searches and Recently viewed share the upper row with
 a continuous vertical boundary when the available workspace reaches 40rem;
 stacked regions use a horizontal boundary. Omit absent ledgers. Recent items
-retain their compact tonal icon tiles. Suggested searches occupy a full-width
+retain their 28px tonal icon tiles in content-driven rows at least 48px tall. Suggested searches occupy a full-width
 header band followed by three joined action cells at 40rem, or stacked cells
 below it. Preserve wrapping labels and a visible forward arrow. The ready state
 has no outer body padding: section bands and dividers reach the panel edges.

@@ -70,13 +70,13 @@ export default function GuidePreview({ vault, content, onNavigate }: {
   }
 
   return (
-    <div className="mt-4 border-t border-border pt-4" onClick={followLink}>
+    <div className="mt-3 border-t border-border pt-3" onClick={followLink}>
       <div ref={previewRef} id={id} role="region" aria-label="Vault guide preview"
         className={cn("max-w-prose", !showAll && "[&_.ProseMirror>:nth-child(n+5)]:hidden")}>
         <MarkdownRender markdown={markdown}
           assetContext={{ mode: "authenticated", vault, document: VAULT_SKILL_PATH }}
           headingIdPrefix={headingPrefix} headingLevelOffset={3}
-          className="text-sm leading-relaxed prose-headings:mb-2 prose-headings:mt-4 prose-headings:text-sm prose-headings:font-semibold prose-p:my-2 prose-li:my-0.5 prose-pre:my-3 [&_.ProseMirror>:first-child]:mt-0 [&_.ProseMirror>:last-child]:mb-0 [&_img]:max-h-40 [&_img]:object-contain" />
+          className="text-ui leading-relaxed prose-headings:mb-1.5 prose-headings:mt-3 prose-headings:text-ui prose-headings:font-semibold prose-p:my-1.5 prose-li:my-0.5 prose-pre:my-3 [&_.ProseMirror>:first-child]:mt-0 [&_.ProseMirror>:last-child]:mb-0 [&_img]:max-h-40 [&_img]:object-contain" />
       </div>
       {hasMore && <Button ref={toggleRef} variant="ghost" size="sm"
         className="mt-3 min-h-11 gap-1.5 text-link sm:min-h-8"

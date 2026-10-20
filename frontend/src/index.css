@@ -132,6 +132,8 @@
   --font-sans: "Pretendard Variable", "Pretendard", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", "Fira Code", ui-monospace, "SF Mono", Menlo, monospace;
   --font-display: "Pretendard Variable", "Pretendard", system-ui, sans-serif;
+  --text-ui: .8125rem;
+  --text-ui--line-height: 1.25rem;
 
   /* Reader spacing is distinct from its optional prose measure. Dialog edges
      follow the viewport; body gutters follow the actual reading container. */
@@ -491,6 +493,33 @@ h1, h2, h3, h4, h5, h6 {
   background: var(--color-primary);
 }
 
+/* Search refinement keeps the query and result copy readable while controls
+   use the workspace's denser rhythm on desktop. Touch and narrow layouts
+   retain the 44px targets declared by the search components. */
+@media (min-width: 640px) and (pointer: fine) {
+  .search-query-entry {
+    min-height: 2.75rem;
+    padding-block: 0;
+  }
+  .search-query-control,
+  .search-compact-control,
+  .search-filter-tags input {
+    min-height: 2.25rem;
+    height: 2.25rem;
+  }
+  .search-compact-icon {
+    width: 2.25rem;
+  }
+  .search-scope-option,
+  .search-compact-menu [role="menuitemradio"] {
+    min-height: 2.25rem;
+  }
+  .search-filter-panel > button {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+}
+
 /* Home knowledge ledger: cards and change rows share one restrained teal
    interaction rail. It appears only on hover/focus and uses transform-only
    motion, so the dense dashboard keeps stable geometry. */
@@ -847,6 +876,17 @@ body::before {
    Keep prose, code blocks and ordinary tables aligned on one scannable measure.
    Long code and wide tables scroll inside their own bounds; only media may use
    the wider workspace independently of the reading measure. */
+/* Compact administration workspaces keep one scale for forms and ledgers.
+   Pointer controls may be smaller; touch controls retain their full targets. */
+.workspace-density-compact :is(button, .workspace-control) { min-height: 2.75rem; }
+.workspace-density-compact .workspace-icon-control { min-width: 2.75rem; }
+.workspace-density-compact input:not([type="radio"]):not([type="checkbox"]) { min-height: 2.75rem; font-size: 1rem; }
+@media (min-width: 40rem) and (pointer: fine) {
+  .workspace-density-compact :is(button, .workspace-control) { height: 2rem; min-height: 2rem; }
+  .workspace-density-compact .workspace-icon-control { width: 2rem; min-width: 2rem; padding-inline: 0; }
+  .workspace-density-compact input:not([type="radio"]):not([type="checkbox"]) { height: 2rem; min-height: 2rem; padding-block: .25rem; font-size: var(--text-ui); line-height: var(--text-ui--line-height); }
+}
+
 /* Reader commands use the available workspace width, not the viewport. Keep
    modes/actions on one metric even when the navigation rails are expanded. */
 .document-command-inner { --reader-control-size: 2.75rem; --reader-icon-size: 1rem; }

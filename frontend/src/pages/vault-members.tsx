@@ -283,7 +283,7 @@ function VaultMembersWorkspace({
 
   return (
     <>
-      <div className="@container/members w-full max-w-none">
+      <div className="workspace-density-compact @container/members w-full max-w-none">
         <h1 id="members-heading" className="sr-only">
           Members
         </h1>
@@ -292,7 +292,7 @@ function VaultMembersWorkspace({
           icon={UsersRound}
           title="Members"
           tone="people"
-          testId="member-roster-header"
+          testId="member-roster-header" compact
           right={
             <>
               {members && !error && (
@@ -339,7 +339,7 @@ function VaultMembersWorkspace({
             <Button
               variant="ghost"
               size="icon"
-              className="ml-auto"
+              className="workspace-icon-control ml-auto"
               onClick={() => setUndoTarget(null)}
               aria-label="Dismiss role change message"
             >
@@ -480,14 +480,14 @@ function VaultMembersWorkspace({
                         key={member.id}
                         className="transition-token hover:bg-surface-hover"
                       >
-                        <td className="min-w-0 px-3 py-3 align-middle @lg/members:px-4">
-                          <div className="flex min-w-0 items-center gap-3">
+                        <td className="min-w-0 px-3 py-2 align-middle @lg/members:px-4">
+                          <div className="flex min-w-0 items-center gap-2.5">
                             <span className="hidden @md/members:block">
                               <MemberAvatar member={member} />
                             </span>
                             <div className="min-w-0">
                               <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-                                <span className="min-w-0 break-words text-sm font-semibold text-foreground [overflow-wrap:anywhere]">
+                                <span className="min-w-0 break-words text-ui font-medium text-foreground [overflow-wrap:anywhere]">
                                   {member.display_name?.trim() ||
                                     member.username}
                                 </span>
@@ -510,7 +510,7 @@ function VaultMembersWorkspace({
                             </div>
                           </div>
                         </td>
-                        <td className="hidden px-4 py-3 align-middle text-xs text-foreground-muted @3xl/members:table-cell">
+                        <td className="hidden px-4 py-2 align-middle text-xs text-foreground-muted @3xl/members:table-cell">
                           {member.since ? (
                             <time
                               dateTime={member.since}
@@ -522,7 +522,7 @@ function VaultMembersWorkspace({
                             "—"
                           )}
                         </td>
-                        <td className="px-2 py-3 text-right align-middle">
+                        <td className="px-2 py-2 text-right align-middle">
                           {canChangeRole ? (
                             <RoleSelect
                               vault={name}
@@ -549,7 +549,7 @@ function VaultMembersWorkspace({
                             </span>
                           )}
                         </td>
-                        <td className="py-3 pr-2 text-right align-middle">
+                        <td className="py-2 pr-2 text-right align-middle">
                           {canManageMember && (
                             <MemberActionsMenu
                               member={member}
@@ -648,7 +648,7 @@ function MemberAvatar({ member }: { member: Member }) {
   return (
     <span
       aria-hidden
-      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-surface-2 text-xs font-semibold text-foreground"
+      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border bg-surface-2 text-xs font-medium text-foreground"
     >
       {initialsFor(label)}
     </span>
@@ -676,6 +676,7 @@ function MemberActionsMenu({
           variant="ghost"
           size="icon"
           aria-label={`More actions for ${member.username}`}
+          className="workspace-icon-control"
         >
           <MoreHorizontal className="h-4 w-4" aria-hidden />
         </Button>
@@ -723,10 +724,10 @@ function MemberListSkeleton() {
       {[0, 1, 2, 3].map((index) => (
         <div
           key={index}
-          className="flex items-center gap-3 px-4 py-3 lg:px-5"
+          className="flex items-center gap-2.5 px-4 py-2 lg:px-5"
           aria-hidden
         >
-          <span className="h-8 w-8 animate-pulse rounded-full bg-surface-2" />
+          <span className="h-7 w-7 animate-pulse rounded-full bg-surface-2" />
           <div className="flex-1 space-y-2">
             <span className="block h-3 w-32 animate-pulse rounded bg-surface-2" />
             <span className="block h-3 w-48 animate-pulse rounded bg-surface-2" />
@@ -747,7 +748,7 @@ function RolePermissions({ currentRole }: { currentRole?: Role }) {
           size="icon"
           aria-label="Role permissions"
           title="Role permissions"
-          className="h-11 w-11 text-foreground-muted @lg/members:h-9 @lg/members:w-9"
+          className="workspace-icon-control h-11 w-11 text-foreground-muted @lg/members:h-9 @lg/members:w-9"
         >
           <CircleHelp className="h-4 w-4" aria-hidden />
         </Button>

@@ -43,7 +43,7 @@ export function SearchVaultPicker({ selected, contextVault, vaults, error, onRet
     return () => cancelAnimationFrame(frame);
   }, [open]);
 
-  const itemClass = "relative flex min-h-11 cursor-pointer select-none items-center gap-2 rounded-[var(--radius-sm)] px-2 py-2 text-sm outline-none transition-token data-[highlighted]:bg-surface-hover data-[state=checked]:text-link sm:min-h-9";
+  const itemClass = "relative flex min-h-11 cursor-pointer select-none items-center gap-2 rounded-[var(--radius-sm)] px-2 py-2 text-sm outline-none transition-token data-[highlighted]:bg-surface-hover data-[state=checked]:text-link search-scope-option";
 
   function toggle(name: string) {
     onChange(selected.includes(name) ? selected.filter(item => item !== name) : [...selected, name]);
@@ -70,7 +70,7 @@ export function SearchVaultPicker({ selected, contextVault, vaults, error, onRet
       title={summary && selected.length === 1 ? selected[0] : selected.length ? `Change search scope (${selected.length} selected)` : "Choose vaults to search"}
       className={cn(
         "flex min-w-9 max-w-full items-center justify-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-xs font-medium text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        summary ? "h-11 min-w-0" : "h-9 shrink-0",
+        summary ? "search-compact-control h-11 min-w-0" : "h-9 shrink-0",
       )}
     >
       {summary ? <>
@@ -92,7 +92,7 @@ export function SearchVaultPicker({ selected, contextVault, vaults, error, onRet
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground-muted" aria-hidden />
             <Input ref={inputRef} type="search" aria-label="Filter vaults" placeholder="Filter vaults…"
-              value={filter} onChange={event => setFilter(event.target.value)} className="h-9 pl-8"
+              value={filter} onChange={event => setFilter(event.target.value)} className="search-compact-control h-11 pl-8"
               onKeyDown={event => {
                 if (event.key === "Escape") return;
                 event.stopPropagation();

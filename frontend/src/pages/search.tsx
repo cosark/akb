@@ -620,7 +620,7 @@ function SearchWorkspace() {
   const queryForm = (
     <form
       data-testid="search-command-header"
-      className="w-full min-w-0 space-y-3"
+      className="w-full min-w-0 space-y-2"
       onSubmit={(event) => {
         event.preventDefault();
         commitQuery(draft);
@@ -634,7 +634,7 @@ function SearchWorkspace() {
           ? "Semantic search matches meaning and keywords."
           : "Literal search matches exact text or a regular expression."}
       </span>
-      <div data-testid="search-query-entry" className="grid min-h-13 min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-1 rounded-[var(--radius-md)] border border-border bg-surface px-2 py-1 shadow-xs transition-token focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background @min-[45rem]/search:grid-cols-[auto_minmax(0,1fr)_auto_auto]">
+      <div data-testid="search-query-entry" className="search-query-entry grid min-h-13 min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-1 rounded-[var(--radius-md)] border border-border bg-surface px-2 py-1 shadow-xs transition-token focus-within:border-primary focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background @min-[45rem]/search:grid-cols-[auto_minmax(0,1fr)_auto_auto]">
         <div className="col-start-1 row-start-1 min-w-0">
           <SearchVaultPicker
             variant="summary"
@@ -646,7 +646,7 @@ function SearchWorkspace() {
             onChange={setScopeVaults}
           />
         </div>
-        <div className="col-span-2 col-start-1 row-start-2 flex min-h-11 min-w-0 items-center gap-2 @min-[45rem]/search:col-span-1 @min-[45rem]/search:col-start-2 @min-[45rem]/search:row-start-1">
+        <div className="search-query-control col-span-2 col-start-1 row-start-2 flex min-h-11 min-w-0 items-center gap-2 @min-[45rem]/search:col-span-1 @min-[45rem]/search:col-start-2 @min-[45rem]/search:row-start-1">
           <SearchIcon className="h-4 w-4 shrink-0 text-foreground-muted" aria-hidden />
           <label htmlFor="vault-search" className="sr-only">Search query</label>
           <Input
@@ -664,14 +664,14 @@ function SearchWorkspace() {
                 commitQuery("");
               }
             }}
-            className="h-11 min-w-0 flex-1 rounded-none border-0 bg-transparent px-0 text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 @min-[45rem]/search:text-sm [&::-webkit-search-cancel-button]:hidden"
+            className="search-compact-control h-11 min-w-0 flex-1 rounded-none border-0 bg-transparent px-0 text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 @min-[45rem]/search:text-sm [&::-webkit-search-cancel-button]:hidden"
           />
           {draft && !loading && (
             <button
               type="button"
               aria-label="Clear search query"
               onClick={() => commitQuery("")}
-              className="inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-[var(--radius-sm)] text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="search-compact-control search-compact-icon inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-[var(--radius-sm)] text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <X className="h-3.5 w-3.5" aria-hidden />
             </button>
@@ -682,10 +682,10 @@ function SearchWorkspace() {
           variant="navigation"
           value={mode}
           onValueChange={(value) => switchMode(value as Mode)}
-          className="col-span-2 col-start-2 row-start-1 h-11 w-fit justify-self-end gap-1.5 px-2 text-xs text-foreground-muted @min-[45rem]/search:col-span-1 @min-[45rem]/search:col-start-3"
+          className="search-compact-control col-span-2 col-start-2 row-start-1 h-11 w-fit justify-self-end gap-1.5 px-2 text-xs text-foreground-muted @min-[45rem]/search:col-span-1 @min-[45rem]/search:col-start-3"
           collisionPadding={8}
           wrapHints
-          contentClassName="w-72 max-w-[calc(100vw-1rem)] [&_[role=menuitemradio]]:min-h-11"
+          contentClassName="search-compact-menu w-72 max-w-[calc(100vw-1rem)] [&_[role=menuitemradio]]:min-h-11"
           options={[
             { value: "dense", label: "By meaning", hint: "Semantic search with meaning and keywords." },
             { value: "literal", label: "Exact text", hint: "Literal search, including regular expressions." },
@@ -696,7 +696,7 @@ function SearchWorkspace() {
           variant="ghost"
           aria-label="Search"
           loading={loading}
-          className="col-start-3 row-start-2 h-11 w-11 shrink-0 gap-1.5 justify-self-end px-0 text-link @min-[45rem]/search:col-start-4 @min-[45rem]/search:row-start-1 @min-[45rem]/search:w-auto @min-[45rem]/search:px-3"
+          className="search-compact-control col-start-3 row-start-2 h-11 w-11 shrink-0 gap-1.5 justify-self-end px-0 text-link @min-[45rem]/search:col-start-4 @min-[45rem]/search:row-start-1 @min-[45rem]/search:w-auto @min-[45rem]/search:px-3"
         >
           <span className="hidden @min-[45rem]/search:inline">Search</span>
           {!loading && <ArrowRight className="h-4 w-4" aria-hidden />}
@@ -708,7 +708,7 @@ function SearchWorkspace() {
   return (
     <div
       data-testid="search-workspace"
-      className="@container/search flex h-full min-h-0 w-full max-w-none flex-col overflow-hidden bg-background p-3 sm:p-4 lg:p-6"
+      className="@container/search flex h-full min-h-0 w-full max-w-none flex-col overflow-hidden bg-background p-3 sm:p-4 lg:p-5"
     >
       <p role="status" aria-live="polite" className="sr-only">
         {loading
@@ -726,7 +726,7 @@ function SearchWorkspace() {
 
       <section
         aria-label="Search workspace"
-        className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-4"
+        className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-3"
       >
         <header
           aria-label="Page search controls"
@@ -747,7 +747,7 @@ function SearchWorkspace() {
         </header>
         <Panel variant="workspace" flush data-testid="search-results-panel" className="flex min-h-0 flex-col rounded-[var(--radius-sm)]">
           <div data-testid="search-tool-row" className="rail-scroll min-h-10 shrink-0 overflow-hidden border-b border-border bg-background">
-            <div className="grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-2 @min-[40rem]/search:grid-cols-[auto_minmax(0,1fr)_auto]">
+            <div className="grid min-h-11 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-1 @min-[40rem]/search:grid-cols-[auto_minmax(0,1fr)_auto]">
               <h2 id="search-results-heading" className="order-1 text-sm font-semibold text-foreground">
                 {mode === "dense" ? "Results" : "Exact matches"}
                 <span className="sr-only">{q ? ` for ${q}` : ""}</span>
@@ -763,9 +763,9 @@ function SearchWorkspace() {
                     variant="navigation"
                     value={activeSource}
                     onValueChange={(value) => setFilter("source", value === "all" ? [] : [value])}
-                    className="h-9 w-fit max-w-full gap-1 px-2 text-xs font-medium"
+                    className="search-compact-control h-11 w-fit max-w-full gap-1 px-2 text-xs font-medium"
                     collisionPadding={8}
-                    contentClassName="min-w-48 [&_[role=menuitemradio]]:min-h-11"
+                    contentClassName="search-compact-menu min-w-48 [&_[role=menuitemradio]]:min-h-11"
                     options={SOURCE_FILTERS.map(({ key, label }) => ({ value: key, label: key === "all" ? "All content" : label }))}
                   />
                 )}
@@ -778,7 +778,7 @@ function SearchWorkspace() {
                   aria-expanded={filtersOpen}
                   aria-controls={filtersOpen ? "search-filter-panel" : undefined}
                   onClick={() => setFiltersOpen(true)}
-                  className="h-9 shrink-0 gap-1.5 px-2 text-xs text-foreground-muted"
+                  className="search-compact-control h-11 shrink-0 gap-1.5 px-2 text-xs text-foreground-muted"
                 >
                   <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
                   Filters
@@ -795,7 +795,7 @@ function SearchWorkspace() {
             data-testid="search-results-pane"
             className={cn("rail-scroll min-h-0 min-w-0 flex-1 overflow-y-auto bg-surface", !searched && "rail-scroll-auto")}
           >
-            <div className={cn("w-full space-y-4", searched && "p-4")}>
+            <div className={cn("w-full space-y-3", searched && "p-4")}>
               {activeFilters.length > 0 && (
                 <div
                   ref={activeFiltersRef}
@@ -812,7 +812,7 @@ function SearchWorkspace() {
                         filter.remove();
                       }}
                       aria-label={`Remove filter ${filter.label}`}
-                      className="inline-flex min-h-11 max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] border border-border bg-surface-2 px-2 text-xs text-foreground-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="search-compact-control inline-flex min-h-11 max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] border border-border bg-surface-2 px-2 text-xs text-foreground-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       <span className="truncate">{filter.label}</span>
                       <X className="h-3 w-3 shrink-0" aria-hidden />
@@ -935,9 +935,9 @@ function SearchWorkspace() {
                 !hasResults && (
                   <section
                     aria-labelledby="no-search-results-heading"
-                    className="mx-auto my-4 max-w-xl py-5 sm:py-8"
+                    className="mx-auto my-3 max-w-xl py-4 sm:py-5"
                   >
-                    <div className="border-b border-border pb-5">
+                    <div className="border-b border-border pb-4">
                       <h2
                         id="no-search-results-heading"
                         className="text-sm font-semibold text-foreground"
@@ -950,11 +950,12 @@ function SearchWorkspace() {
                           : "Check the phrase or switch to meaning-based search."}
                       </p>
                     </div>
-                    <div className="flex flex-wrap gap-2 pt-5">
+                    <div className="flex flex-wrap gap-2 pt-4">
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
+                        className="search-compact-control h-11"
                         onClick={() =>
                           switchMode(mode === "dense" ? "literal" : "dense")
                         }
@@ -965,6 +966,7 @@ function SearchWorkspace() {
                         type="button"
                         variant="ghost"
                         size="sm"
+                        className="search-compact-control h-11"
                         onClick={() => commitQuery("")}
                       >
                         Clear query
@@ -1007,7 +1009,7 @@ function SearchWorkspace() {
         <DialogContent
           id="search-filter-panel"
           ref={filterContentRef}
-          className="flex max-w-lg flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11"
+          className="search-filter-panel flex max-w-lg flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11"
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             filterContentRef.current?.querySelector<HTMLElement>("[data-filter-title]")?.focus();
@@ -1017,11 +1019,11 @@ function SearchWorkspace() {
             filtersButtonRef.current?.focus({ preventScroll: true });
           }}
         >
-          <div className="shrink-0 border-b border-border px-5 py-5 pr-14">
-            <DialogTitle data-filter-title tabIndex={-1} className="text-base focus:outline-none">Search filters</DialogTitle>
+          <div className="shrink-0 border-b border-border p-4 pr-14">
+            <DialogTitle data-filter-title tabIndex={-1} className="text-sm focus:outline-none">Search filters</DialogTitle>
             <DialogDescription className="mt-1 text-xs">Changes apply as you select them. Use Apply for a collection path.</DialogDescription>
           </div>
-          <div className="rail-scroll min-h-0 space-y-6 overflow-y-auto p-5">
+          <div className="rail-scroll min-h-0 space-y-4 overflow-y-auto p-4">
             <form
               onSubmit={(event) => {
                 event.preventDefault();
@@ -1032,13 +1034,13 @@ function SearchWorkspace() {
             >
               <label
                 htmlFor="search-collection"
-                className="mb-2 block text-sm font-semibold"
+                className="mb-1.5 block text-ui font-semibold"
               >
                 Collection path (including children)
               </label>
               <div className="flex gap-2">
                 <Input
-                  className="min-h-11"
+                  className="search-compact-control min-h-11 text-ui"
                   id="search-collection"
                   value={collectionDraft}
                   onChange={(event) =>
@@ -1046,7 +1048,7 @@ function SearchWorkspace() {
                   }
                   placeholder="e.g. guides/api"
                 />
-                <Button type="submit" variant="outline" size="sm" className="min-h-11">
+                <Button type="submit" variant="outline" size="sm" className="search-compact-control min-h-11">
                   Apply
                 </Button>
               </div>
@@ -1055,7 +1057,7 @@ function SearchWorkspace() {
               </p>
             </form>
             <fieldset>
-              <legend className="mb-2 text-sm font-semibold">
+              <legend className="mb-1.5 text-ui font-semibold">
                 Document type
               </legend>
               <div
@@ -1087,10 +1089,10 @@ function SearchWorkspace() {
                 ))}
               </div>
             </fieldset>
-            <div className="[&_input]:min-h-11">
+            <div className="search-filter-tags [&_input]:min-h-11 [&_input]:text-ui">
               <label
                 htmlFor="search-tags"
-                className="mb-2 block text-sm font-semibold"
+                className="mb-1.5 block text-ui font-semibold"
               >
                 Tags (match any)
               </label>
@@ -1121,17 +1123,18 @@ function SearchWorkspace() {
                 </div>
               )}
             </div>
-            <div className="flex flex-col gap-3 text-sm">
+            <div className="flex flex-col gap-2 text-ui">
               <div>
                 <label
                   htmlFor="search-document-state"
-                  className="mb-2 block text-sm font-semibold"
+                  className="mb-1.5 block text-ui font-semibold"
                 >
                   Document state
                 </label>
                 <SelectMenu
                   id="search-document-state"
-                className="min-h-11"
+                  className="search-compact-control min-h-11 text-ui"
+                  contentClassName="search-compact-menu [&_[role=menuitemradio]]:min-h-11"
                   aria-label="Document state"
                   value={archiveScope}
                   onValueChange={(value) =>
@@ -1150,7 +1153,7 @@ function SearchWorkspace() {
               </div>
               {mode === "literal" && (
                 <>
-                  <label className="flex min-h-11 cursor-pointer items-center gap-2">
+                  <label className="search-compact-control flex min-h-11 cursor-pointer items-center gap-2">
                     <input
                       type="checkbox"
                       className="accent-primary focus-visible:outline-ring"
@@ -1164,7 +1167,7 @@ function SearchWorkspace() {
                     />
                     Include text Files
                   </label>
-                  <label className="flex min-h-11 cursor-pointer items-center gap-2">
+                  <label className="search-compact-control flex min-h-11 cursor-pointer items-center gap-2">
                     <input
                       type="checkbox"
                       className="accent-primary focus-visible:outline-ring"
@@ -1178,7 +1181,7 @@ function SearchWorkspace() {
                     />
                     Regular expression
                   </label>
-                  <label className="flex min-h-11 cursor-pointer items-center gap-2">
+                  <label className="search-compact-control flex min-h-11 cursor-pointer items-center gap-2">
                     <input
                       type="checkbox"
                       className="accent-primary focus-visible:outline-ring"
@@ -1201,9 +1204,9 @@ function SearchWorkspace() {
                 : "Document type and tag filters search documents only. Filters apply on the server before the result limit."}
             </p>
           </div>
-          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border px-5 py-3">
-            <Button type="button" variant="ghost" className="min-h-11" onClick={resetFilters}>Reset filters</Button>
-            <DialogClose asChild><Button type="button" className="min-h-11">Done</Button></DialogClose>
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border px-4 py-2">
+            <Button type="button" variant="ghost" className="search-compact-control min-h-11" onClick={resetFilters}>Reset filters</Button>
+            <DialogClose asChild><Button type="button" className="search-compact-control min-h-11">Done</Button></DialogClose>
           </div>
         </DialogContent>
       </Dialog>
@@ -1221,9 +1224,9 @@ function SearchLoadingState() {
       {[0, 1, 2].map((item) => (
         <div
           key={item}
-          className="grid grid-cols-[2rem_minmax(0,1fr)] gap-3 px-4 py-4"
+          className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-2.5 px-4 py-3"
         >
-          <Skeleton className="h-8 w-8 rounded-[var(--radius-md)]" />
+          <Skeleton className="h-7 w-7 rounded-[var(--radius-md)]" />
           <div className="min-w-0 space-y-2">
             <Skeleton className="h-4 w-1/3" />
             <Skeleton className="h-3 w-3/5" />
@@ -1268,7 +1271,7 @@ function SearchStartState({
           >
             {hasSearches && (
               <section aria-labelledby="recent-searches-heading">
-                <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4">
+                <div className="flex min-h-10 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4">
                   <div className="flex min-w-0 items-center gap-2">
                     <Clock3
                       className="h-3.5 w-3.5 shrink-0 text-foreground-muted"
@@ -1284,7 +1287,7 @@ function SearchStartState({
                   <button
                     type="button"
                     onClick={onClearSearches}
-                    className="inline-flex h-11 cursor-pointer items-center rounded-[var(--radius-sm)] px-2 text-xs font-medium text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-9"
+                    className="search-compact-control inline-flex h-11 cursor-pointer items-center rounded-[var(--radius-sm)] px-2 text-xs font-medium text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     Clear
                   </button>
@@ -1298,9 +1301,9 @@ function SearchStartState({
                       key={`${search.surface}:${search.mode}:${search.vaults.join(",")}:${search.query}`}
                       type="button"
                       onClick={() => onRepeatSearch(search)}
-                      className="group flex min-h-14 w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                      className="group flex min-h-12 w-full cursor-pointer items-center gap-2.5 px-4 py-1.5 text-left transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     >
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-border bg-surface-2 text-foreground-muted transition-colors group-hover:text-link">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-border bg-surface-2 text-foreground-muted transition-colors group-hover:text-link">
                         <SearchIcon className="h-4 w-4" aria-hidden />
                       </span>
                       <span className="min-w-0 flex-1">
@@ -1341,7 +1344,7 @@ function SearchStartState({
                     "border-t border-border @min-[40rem]/search:border-l @min-[40rem]/search:border-t-0",
                 )}
               >
-                <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4">
+                <div className="flex min-h-10 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4">
                   <div className="flex min-w-0 items-center gap-2">
                     <FileText
                       className="h-3.5 w-3.5 shrink-0 text-foreground-muted"
@@ -1370,9 +1373,9 @@ function SearchStartState({
                         id={returnFocusId}
                         to={`/vault/${document.vault}/doc/${encodeURIComponent(document.path)}`}
                         state={documentPreviewState(location, returnFocusId)}
-                        className="group flex min-h-14 items-center gap-3 px-4 py-2.5 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                        className="group flex min-h-12 items-center gap-2.5 px-4 py-1.5 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                       >
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-border bg-surface-2 text-foreground-muted transition-colors group-hover:text-link">
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-border bg-surface-2 text-foreground-muted transition-colors group-hover:text-link">
                           <FileText className="h-4 w-4" aria-hidden />
                         </span>
                         <span className="min-w-0 flex-1">
@@ -1397,7 +1400,7 @@ function SearchStartState({
         )}
 
         <section>
-          <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4">
+          <div className="flex min-h-10 items-center justify-between gap-3 border-b border-border bg-surface-2/60 px-4">
             <div>
               <h3
                 id="search-start-heading"
@@ -1423,7 +1426,7 @@ function SearchStartState({
                 type="button"
                 aria-label={suggestion}
                 onClick={() => onSuggestion(suggestion)}
-                className="group flex min-h-14 w-full cursor-pointer items-center gap-3 px-4 text-left transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                className="group flex min-h-12 w-full cursor-pointer items-center gap-2.5 px-4 text-left transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               >
                 <SearchIcon
                   className="h-4 w-4 shrink-0 text-foreground-muted"
@@ -1473,7 +1476,7 @@ function DenseResultList({ items }: { items: DenseResult[] }) {
                     )
                   : undefined
               }
-              className="group grid grid-cols-[1rem_minmax(0,1fr)] gap-x-3 px-4 py-3 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              className="group grid grid-cols-[1rem_minmax(0,1fr)] gap-x-2.5 px-4 py-2.5 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             >
               <SourceIcon
                 className="col-start-1 row-start-1 mt-0.5 h-4 w-4 text-link"
@@ -1490,11 +1493,11 @@ function DenseResultList({ items }: { items: DenseResult[] }) {
                 </span>
               </div>
               {detail && (
-                <p className="col-start-2 mt-1 max-w-[88ch] line-clamp-2 whitespace-pre-line text-sm leading-relaxed text-foreground-muted">
+                <p className="col-start-2 mt-1 max-w-[88ch] line-clamp-2 whitespace-pre-line text-sm leading-5 text-foreground-muted">
                   {detail}
                 </p>
               )}
-              <div className="col-start-2 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-foreground-muted">
+              <div className="col-start-2 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-foreground-muted">
                 <span
                   className="min-w-0 truncate"
                   title={`${result.vault} / ${result.path}`}
@@ -1556,7 +1559,7 @@ function LiteralResultList({ items }: { items: GrepDoc[] }) {
                     `search-literal-result-${index}`,
                   )
             }
-            className="group grid grid-cols-[1rem_minmax(0,1fr)] gap-3 px-4 py-3 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[1rem_minmax(0,1fr)_6.5rem]"
+            className="group grid grid-cols-[1rem_minmax(0,1fr)] gap-2.5 px-4 py-2.5 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[1rem_minmax(0,1fr)_6.5rem]"
           >
             <span className="mt-0.5 text-foreground-muted">
               {result.resource_type === "file" ? (
@@ -1651,7 +1654,7 @@ function LiteralResultList({ items }: { items: GrepDoc[] }) {
 
 function filterButtonClass(active: boolean) {
   return cn(
-    "inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] border px-2.5 text-xs font-medium transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50",
+    "search-compact-control inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] border px-2.5 text-xs font-medium transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50",
     active
       ? "border-border-strong bg-surface-selected text-surface-selected-foreground"
       : "border-border bg-surface text-foreground-muted hover:border-border-strong hover:bg-surface-hover hover:text-foreground",

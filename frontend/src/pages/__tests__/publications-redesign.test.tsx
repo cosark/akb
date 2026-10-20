@@ -93,7 +93,7 @@ describe("Public links page redesign", () => {
     );
     expect(screen.getByTestId("publication-ledger-header")).toHaveClass(
       "border-border",
-      "pb-3",
+      "pb-2",
     );
     expect(screen.getByTestId("publication-ledger-header")).not.toHaveClass(
       "bg-surface-2/55",

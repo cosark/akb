@@ -302,7 +302,7 @@ function PublicationsWorkspace({
 
   return (
     <>
-      <div data-testid="publication-workspace" className="w-full max-w-none">
+      <div data-testid="publication-workspace" className="workspace-density-compact w-full max-w-none">
         <h1 id="publications-heading" className="sr-only">
           Public links
         </h1>
@@ -312,7 +312,7 @@ function PublicationsWorkspace({
           icon={Share2}
           title="Public links"
           tone="publish"
-          testId="publication-ledger-header"
+          testId="publication-ledger-header" compact
           right={
             <>
               {items !== null && (
@@ -331,7 +331,7 @@ function PublicationsWorkspace({
               )}
               {count > 0 && (
                 <Button asChild variant="ghost" size="sm" className="shrink-0">
-                  <Link to={`/vault/${name}`}>
+                  <Link to={`/vault/${name}`} className="workspace-control">
                     Browse vault
                     <ArrowRight className="h-3.5 w-3.5" aria-hidden />
                   </Link>
@@ -487,8 +487,8 @@ function PublicationRow({
     : `${publication.view_count ?? 0} views`;
 
   return (
-    <li className="grid gap-2.5 px-4 py-2.5 transition-token hover:bg-surface-hover sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-5">
-      <div className="flex min-w-0 items-start gap-3">
+    <li className="grid gap-2 px-4 py-2 transition-token hover:bg-surface-hover sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+      <div className="flex min-w-0 items-start gap-2.5">
         <span
           data-testid="publication-index"
           aria-hidden
@@ -496,7 +496,7 @@ function PublicationRow({
         >
           {number}
         </span>
-        <TonalIcon tone={RESOURCE_TONE[publication.resource_type]}>
+        <TonalIcon tone={RESOURCE_TONE[publication.resource_type]} size="sm">
           <Icon className="h-4 w-4" aria-hidden />
         </TonalIcon>
         <div className="min-w-0 flex-1">
@@ -504,7 +504,7 @@ function PublicationRow({
             <TooltipText asChild tip={title}>
               <Link
                 to={resourceHref(vault, publication)}
-                className="line-clamp-2 break-words rounded-[var(--radius-sm)] text-sm font-semibold tracking-tight text-link hover:text-link-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+                className="line-clamp-2 break-words rounded-[var(--radius-sm)] text-ui font-medium text-link hover:text-link-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
               >
                 {title}
               </Link>
@@ -517,7 +517,7 @@ function PublicationRow({
             </Badge>
           </div>
 
-          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-foreground-muted">
+          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-relaxed text-foreground-muted">
             <span>{RESOURCE_LABEL[publication.resource_type]}</span><span aria-hidden>·</span>
             <span>
               Delivery: {publication.mode === "snapshot" ? "Snapshot" : publication.mode === "live" ? "Live" : "Unknown"}
@@ -559,7 +559,7 @@ function PublicationRow({
           aria-label={
             copied ? "Public link copied" : `Copy public link for ${title}`
           }
-          className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 text-xs font-medium text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="workspace-control inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 text-xs font-medium text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {copied ? (
             <CheckCircle2 className="h-3.5 w-3.5 text-success" aria-hidden />
@@ -573,7 +573,7 @@ function PublicationRow({
           target="_blank"
           rel="noopener noreferrer"
           aria-label={`Open public page for ${title}`}
-          className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 text-xs font-medium text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="workspace-control inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-2.5 text-xs font-medium text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ExternalLink className="h-3.5 w-3.5" aria-hidden />
           Open
@@ -631,6 +631,7 @@ function PublicationMenu({
           size="icon"
           disabled={disabled}
           aria-label={`More actions for ${title}`}
+          className="workspace-icon-control"
         >
           {disabled ? (
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
@@ -749,7 +750,7 @@ function PublicationEmptyState({ vault }: { vault: string }) {
         </p>
       </div>
       <Button asChild variant="outline" size="sm" className="shrink-0">
-        <Link to={`/vault/${vault}`}>
+          <Link to={`/vault/${vault}`} className="workspace-control">
           Browse vault content
           <ArrowRight className="h-3.5 w-3.5" aria-hidden />
         </Link>

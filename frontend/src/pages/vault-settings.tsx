@@ -347,11 +347,12 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
     <PageShell
       header={null}
       contentWidth="full"
+      className="workspace-density-compact"
     >
       <h1 className="sr-only">Settings</h1>
       <WorkspaceSectionHeader
         id="vault-settings-heading" icon={Settings} title="Settings"
-        testId="vault-settings-header"
+        testId="vault-settings-header" compact
         right={verified && info?.is_archived ? <Badge variant="default">Archived</Badge> : undefined}
       />
       {info && !verified && (
@@ -393,9 +394,9 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
             <div className="divide-y divide-border">
               <SettingsSection id="general" title="Vault details" layout="form"
                 icon={<FileText aria-hidden />} description="Describe this vault and copy its address.">
-                <div className="grid min-w-0 gap-5 @[44rem]/settings-values:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+                <div className="grid min-w-0 gap-4 @[44rem]/settings-values:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
                   <div className="min-w-0" data-testid="settings-general-editor">
-                    <Label htmlFor="vault-description" className="mb-2 block leading-5">Description</Label>
+                    <Label htmlFor="vault-description" className="mb-1.5 block text-ui">Description</Label>
                     <Textarea
                       id="vault-description"
                       value={description}
@@ -404,7 +405,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                       disabled={busy}
                       placeholder="What belongs in this vault?"
                       rows={3}
-                      className="min-h-24 resize-y text-base leading-relaxed sm:text-sm"
+                      className="min-h-20 resize-y text-base leading-relaxed sm:text-ui"
                     />
                     {saveErrorScope === "general" && (
                       <div ref={generalErrorRef} tabIndex={-1} className="mt-3 outline-none">
@@ -418,10 +419,10 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                     />}
                   </div>
                   <div className="min-w-0">
-                    <p id="vault-address-label" className="mb-2 text-sm font-medium leading-5">Vault address</p>
-                    <div role="group" aria-labelledby="vault-address-label" className="flex min-h-12 min-w-0 items-center gap-2 rounded-[var(--radius-md)] border border-border bg-background pl-3 pr-1">
-                      <code className="min-w-0 flex-1 text-sm text-foreground [overflow-wrap:anywhere]">akb://{name}</code>
-                      <CopyButton className="h-11 w-11 hover:bg-surface-hover" value={`akb://${name}`} label="Copy vault address" />
+                    <p id="vault-address-label" className="mb-1.5 text-ui font-medium">Vault address</p>
+                    <div role="group" aria-labelledby="vault-address-label" className="flex min-h-11 min-w-0 items-center gap-2 rounded-[var(--radius-md)] border border-border bg-background pl-3 pr-1 sm:min-h-9">
+                      <code className="min-w-0 flex-1 text-ui text-foreground [overflow-wrap:anywhere]">akb://{name}</code>
+                      <CopyButton className="workspace-icon-control h-11 w-11 hover:bg-surface-hover" value={`akb://${name}`} label="Copy vault address" />
                     </div>
                     <p className="mt-2 text-xs text-foreground-muted">Permanent</p>
                   </div>
@@ -431,8 +432,8 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
               <SettingsSection id="access" title="Access permissions" layout="form" tone="people"
                 icon={<ShieldCheck aria-hidden />} description="Choose who can open this vault and what they can do.">
                 <div data-testid="settings-access-editor">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                    <p id="vault-access-label" className="text-sm font-medium">Who can access</p>
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <p id="vault-access-label" className="text-ui font-medium">Who can access</p>
                     <span className="inline-flex items-center gap-1.5 text-xs text-foreground-muted">
                       <Lock className="h-3 w-3" aria-hidden />Sign-in required
                     </span>
@@ -443,18 +444,18 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                       const selected = publicAccess === value;
                       const helpId = selected ? "vault-access-help" : `vault-access-${value}-help`;
                       return (
-                        <label key={value} className={`flex min-h-16 items-start gap-3 px-3 py-3 text-sm ${selected ? "bg-surface-selected text-surface-selected-foreground" : "bg-surface text-foreground hover:bg-surface-hover"} ${canEdit && !busy ? "cursor-pointer" : ""}`}>
+                        <label key={value} className={`flex min-h-14 items-start gap-2.5 px-3 py-2.5 text-ui ${selected ? "bg-surface-selected text-surface-selected-foreground" : "bg-surface text-foreground hover:bg-surface-hover"} ${canEdit && !busy ? "cursor-pointer" : ""}`}>
                           <input type="radio" name="vault-default-access" value={value} checked={selected}
                             aria-labelledby={`vault-access-${value}-label`} aria-describedby={helpId}
                             onChange={() => { setPublicAccess(value); setSavedScope(null); }}
-                            className="mt-1 h-4 w-4 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring" />
+                            className="mt-0.5 h-4 w-4 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring" />
                           <span className="min-w-0 flex-1">
                             <span className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                               <span id={`vault-access-${value}-label`} className="font-medium">{PUBLIC_LABELS[value]}</span>
                               {value === savedPublic ? <span className="text-xs font-normal text-foreground-muted">Current</span>
                                 : selected && <span className="text-xs font-normal text-link">Not saved</span>}
                             </span>
-                            <span id={helpId} className={`mt-1 flex items-start gap-1.5 text-xs leading-5 ${selected && value === "writer" ? "text-warning-soft-foreground" : "text-foreground-muted"}`}>
+                            <span id={helpId} className={`mt-1 flex items-start gap-1.5 text-xs leading-relaxed ${selected && value === "writer" ? "text-warning-soft-foreground" : "text-foreground-muted"}`}>
                               {selected && value === "writer" && <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />}
                               {PUBLIC_DESCRIPTIONS[value]}
                             </span>
@@ -488,7 +489,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                 <SettingsSection id="danger" title="Danger zone">
                   <SettingRow label={info.is_archived ? "Vault archived" : "Archive vault"}>
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <p className="text-sm text-foreground-muted">{info.is_archived ? "Read-only. Restore writing at any time." : "Make this vault read-only. You can restore it later."}</p>
+                      <p className="text-ui text-foreground-muted">{info.is_archived ? "Read-only. Restore writing at any time." : "Make this vault read-only. You can restore it later."}</p>
                       <Button variant="outline" size="sm" disabled={busy} onClick={() => info.is_archived ? setPendingUnarchive(true) : setPendingArchive(true)} className="min-h-10 shrink-0 sm:min-h-8">
                         {info.is_archived ? <RotateCcw className="h-3.5 w-3.5" aria-hidden /> : <Archive className="h-3.5 w-3.5" aria-hidden />}
                         {info.is_archived ? "Unarchive" : "Archive"}
@@ -497,7 +498,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                   </SettingRow>
                   <SettingRow label="Delete vault permanently">
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <p className="text-sm text-foreground-muted">All vault data will be removed. This cannot be undone.</p>
+                      <p className="text-ui text-foreground-muted">All vault data will be removed. This cannot be undone.</p>
                       <Button variant="outline" size="sm" className="min-h-10 shrink-0 border-destructive text-destructive hover:bg-destructive-soft sm:min-h-8" disabled={busy} onClick={() => setDeleteOpen(true)}>
                         <Trash2 className="h-3.5 w-3.5" aria-hidden />Delete vault
                       </Button>

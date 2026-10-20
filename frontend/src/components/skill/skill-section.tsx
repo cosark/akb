@@ -275,7 +275,7 @@ export function SkillSection({
 
   return (
     <SettingsSection ref={sectionRef} id="skill" title="Vault guide">
-      <div className="px-4 py-4 sm:px-5">
+      <div className="p-4">
           {error && !isMirror && (
             <Alert variant="destructive" title="Couldn't load the vault guide">
               <p>{error}</p>
@@ -292,7 +292,7 @@ export function SkillSection({
             <>
               <div className="flex min-w-0 flex-col gap-3 @[48rem]/settings-section:flex-row @[48rem]/settings-section:items-start">
                 <div className="flex min-w-0 flex-1 items-start gap-3">
-                  <TonalIcon tone="guide"><BookOpen aria-hidden /></TonalIcon>
+                  <TonalIcon tone="guide" size="sm"><BookOpen aria-hidden /></TonalIcon>
                   <div className="min-w-0 space-y-1">
                     {expanded && <p className="text-sm font-medium text-foreground">
                       {tab === "edit" ? "Editing guide" : "Agent view"}
@@ -306,7 +306,7 @@ export function SkillSection({
                 </div>
               <div className="flex flex-wrap items-center gap-2 pl-11 @[48rem]/settings-section:shrink-0 @[48rem]/settings-section:pl-0">
                 <Button asChild variant="ghost" size="sm" className="min-h-11 text-link sm:min-h-8">
-                  <Link id={previewId} to={previewHref} state={previewState} onClick={event => {
+                  <Link className="workspace-control" id={previewId} to={previewHref} state={previewState} onClick={event => {
                     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                     if (!requestNavigation(previewHref, { state: previewState })) event.preventDefault();
                   }}>Open guide</Link>
@@ -317,7 +317,7 @@ export function SkillSection({
                 )}
                 <DropdownMenu.Root modal={false}>
                   <DropdownMenu.Trigger asChild>
-                    <Button variant="ghost" size="icon" aria-label="Guide options" className="h-11 w-11 sm:h-8 sm:w-8" disabled={busy || saving}>
+                    <Button variant="ghost" size="icon" aria-label="Guide options" className="workspace-icon-control h-11 w-11 sm:h-8 sm:w-8" disabled={busy || saving}>
                       <MoreHorizontal className="h-4 w-4" aria-hidden />
                     </Button>
                   </DropdownMenu.Trigger>
