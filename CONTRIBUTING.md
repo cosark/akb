@@ -47,7 +47,9 @@ Bare Git contract (see `backend/tests/conftest.py` and
 # 1. Configure
 cp config/app.yaml.example   config/app.yaml
 cp config/secret.yaml.example config/secret.yaml
-# Set document_revision_backend: bare_git in config/app.yaml.
+# Pin the revision backend for this Compose development stack.
+sed 's/^document_revision_backend: .*/document_revision_backend: bare_git/' config/app.yaml > config/app.yaml.tmp
+mv config/app.yaml.tmp config/app.yaml
 $EDITOR config/app.yaml
 $EDITOR config/secret.yaml   # at minimum, set embed_api_key
 
