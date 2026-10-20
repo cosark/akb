@@ -1,38 +1,28 @@
-"""Opt-in schema contract checks against real HTTP/PostgreSQL responses.
+"""Schema HTTP contract checks in the mandatory repository runtime gate.
 
-Set AKB_TABLE_SCHEMA_TEST_URL and AKB_E2E_PAT, or AKB_E2E_USERNAME /
-AKB_E2E_PASSWORD. AKB_E2E_CA_FILE supports a private CA without disabling TLS.
-Only randomly named test Vaults are removed. No calls occur in unit runs.
+Reuse the runtime descriptor, reset and PAT lifecycle. Missing runtime setup
+fails preparation instead of silently skipping these PostgreSQL-backed cases.
 """
 
 from __future__ import annotations
 
-import os
-import ssl
 import uuid
 
 import httpx
 import pytest
 from jsonschema import Draft202012Validator
 
+from .runtime import RuntimeContext
 
-@pytest.fixture(scope="module", params=["create", "alter", "migration"])
-def schema_installation(request):
-    origin = os.getenv("AKB_TABLE_SCHEMA_TEST_URL")
-    if not origin:
-        pytest.skip("set AKB_TABLE_SCHEMA_TEST_URL for the real PostgreSQL HTTP lane")
-    ca_file = os.getenv("AKB_E2E_CA_FILE")
-    verify = ssl.create_default_context(cafile=ca_file) if ca_file else True
-    with httpx.Client(base_url=origin, verify=verify, timeout=30) as client:
-        token = os.getenv("AKB_E2E_PAT")
-        if not token:
-            username, password = os.getenv("AKB_E2E_USERNAME"), os.getenv("AKB_E2E_PASSWORD")
-            if not username or not password:
-                pytest.fail("provide a fixture PAT or the runtime's fixture credentials")
-            login = client.post("/api/v1/auth/login", json={"username": username, "password": password})
-            assert login.status_code == 200
-            token = login.json()["token"]
-        client.headers["Authorization"] = "Bearer " + token
+
+@pytest.fixture(params=["create", "alter", "migration"])
+def schema_installation(request, runtime_session: RuntimeContext):
+    with httpx.Client(
+        base_url=runtime_session.descriptor.app_origin,
+        headers={"Authorization": "Bearer " + runtime_session.pat},
+        timeout=30,
+        trust_env=False,
+    ) as client:
         contract = client.get("/openapi.json")
         assert contract.status_code == 200
         assert contract.headers.get("content-type", "").startswith("application/json"), (
@@ -71,12 +61,27 @@ def schema_installation(request):
                 })
                 assert changed.status_code == 200, changed.text
             elif request.param == "migration":
-                changed = client.post(f"{base}/migrations", headers={"Idempotency-Key": str(uuid.uuid4())}, json=[
-                    {"op": "add_column", "table": table, "column": {
-                        "name": "note", "type": "text", "enum": None,
-                    }},
-                ])
+                headers = {"Idempotency-Key": str(uuid.uuid4())}
+                operations = [{"op": "add_column", "table": table, "column": {
+                    "name": "note", "type": "text", "enum": None,
+                }}]
+                changed = client.post(f"{base}/migrations", headers=headers, json=operations)
                 assert changed.status_code == 200, changed.text
+                applied = changed.json()
+                assert applied["applied"] is True
+                schema_before = client.get(f"{base}/{table}/schema")
+                assert schema_before.status_code == 200, schema_before.text
+
+                replay = client.post(f"{base}/migrations", headers=headers, json=operations)
+                assert replay.status_code == 200, replay.text
+                replayed = replay.json()
+                assert replayed["applied"] is False
+                assert replayed["results"] == []
+                for key in ("idempotency_key", "checksum", "applied_at", "operations"):
+                    assert replayed[key] == applied[key]
+                schema_after = client.get(f"{base}/{table}/schema")
+                assert schema_after.status_code == 200, schema_after.text
+                assert schema_after.json() == schema_before.json()
             yield client, vault, table, openapi, values, expected_row, request.param
         finally:
             deleted = client.delete("/api/v1/vaults/" + vault)
@@ -97,6 +102,10 @@ def test_actual_schema_responses_validate_and_preserve_constraints(schema_instal
     if scope == "vault":
         assert payload["total"] == 1
         payload = payload["tables"][0]
+    names = [col["name"] for col in payload["columns"]]
+    expected_names = {"label", "score", "state"} | ({"note"} if phase != "create" else set())
+    assert len(names) == len(set(names))
+    assert set(names) == expected_names
     columns = {col["name"]: col for col in payload["columns"]}
     assert "enum" not in columns["label"]
     assert "enum" not in columns["score"]
