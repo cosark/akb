@@ -39,6 +39,7 @@ import { DocumentWatch } from "@/components/document-watch";
 import { WorkspacePin } from "@/components/workspace-pin";
 import { sameCommitRef } from "@/lib/commit";
 import { VAULT_SKILL_PATH } from "@/lib/skill";
+import { vaultGuideEditHref, vaultGuideHref } from "@/lib/vault-guide-navigation";
 import { DocumentOutline } from "@/components/doc-outline";
 import { DocumentView } from "@/components/document-view";
 import { DocumentCopyButton, DocumentIconButton, DocumentReadModes, DocumentStatistics, DocumentSummary, DocumentTimestamp } from "@/components/document-reading-controls";
@@ -643,10 +644,12 @@ function DocumentPageContent({
   const isHistorical = !!commitHash && !sameCommitRef(commitHash, headCommit);
   const canEdit =
     !vaultReadOnly &&
-    (doc?.path !== VAULT_SKILL_PATH || vaultRole === "owner") &&
+    doc?.path !== VAULT_SKILL_PATH &&
     !isHistorical &&
     !isDiffMode &&
     (vaultRole === "writer" || vaultRole === "admin" || vaultRole === "owner");
+  const canManageGuide = doc?.path === VAULT_SKILL_PATH && !vaultReadOnly &&
+    vaultRole === "owner" && !isHistorical && !isDiffMode;
 
   // Publishing has its own policy: the guide's owner-only editing restriction
   // does not apply to public links, but historical/diff views must not publish HEAD.
@@ -1414,22 +1417,14 @@ function DocumentPageContent({
 
   if (accessChecking) return <><DocumentPageLoading presentation={presentation} />{navigationDialog}</>;
 
-  // The vault guide is system-managed: its only editing surface is the guide
-  // section in vault settings, so the plain full-page viewer bounces there.
-  // Search preview is exempt so every document result keeps the same modal
-  // reading flow. A ?commit= pin is also exempt — that is the URL-addressable
-  // version view (commit-log and activity links, and the settings editor's
-  // history entry point), and it must keep resolving. The gate is the raw
-  // param, not the computed
-  // `isHistorical`: that one reads false until the HEAD query resolves, which
-  // would redirect every version link away before it could settle.
-  if (
-    presentation !== "preview" &&
-    docId === VAULT_SKILL_PATH &&
-    !commitHash &&
-    vaultKind === "normal"
-  ) {
-    return <Navigate to={`/vault/${name}/settings#skill`} replace />;
+  // Guides use the ordinary reader in every presentation, but only Settings
+  // owns their body editor. Old generic-edit URLs must never mount that form,
+  // including references resolved by UUID rather than the reserved path.
+  if (doc?.path === VAULT_SKILL_PATH && view === "edit") {
+    const params = new URLSearchParams(searchParams);
+    params.delete("view");
+    const search = params.toString();
+    return <Navigate to={`${vaultGuideHref(name!)}${search ? `?${search}` : ""}`} state={routeLocation.state} replace />;
   }
 
   if (docQuery.isError && !doc) {
@@ -1572,6 +1567,9 @@ function DocumentPageContent({
               {canEdit && <DocumentIconButton ref={editButtonRef} label="Edit" onClick={() => requestEdit()}>
                 <Pencil className="h-4 w-4" aria-hidden />
               </DocumentIconButton>}
+              {canManageGuide && <Button asChild variant="ghost" size="sm" data-reader-control className="text-link">
+                <Link to={vaultGuideEditHref(name!)}><Pencil className="h-4 w-4" aria-hidden />Edit guide</Link>
+              </Button>}
             </div>
             {presentation === "page" && publication}
             <div role="group" aria-label="More document options" className="document-command-group">

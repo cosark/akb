@@ -35,6 +35,7 @@ import { useVaultRefresh } from "@/contexts/vault-refresh-context";
 import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
 import { useResourceNavigationGuard } from "@/contexts/resource-navigation-context";
 import { useDocumentHistoryGuard } from "@/hooks/use-document-history-guard";
+import { retainsGuideSettings } from "@/lib/vault-guide-navigation";
 
 interface TableMeta {
   name: string;
@@ -242,12 +243,14 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
   const continueNavigation = useResourceNavigationGuard(hasDraft || busy ? (href, options) => {
     // Anchors within this sheet never discard any of its drafts.
     if (new URL(href, window.location.origin).pathname === location.pathname) return true;
+    if (name && retainsGuideSettings(name, location, href, options?.state)) return true;
     requestExit({ kind: "navigation", href, options });
     return false;
   } : null);
   useDocumentHistoryGuard(hasDraft || busy,
     proceed => requestExit({ kind: "history", proceed }),
-    destination => destination.pathname !== location.pathname);
+    destination => destination.pathname !== location.pathname &&
+      !(name && retainsGuideSettings(name, location, destination.href, window.history.state?.usr)));
 
   function confirmExit() {
     if (!pendingExit || busy) return;

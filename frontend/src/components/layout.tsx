@@ -54,7 +54,7 @@ function isExpiredIdentityProof(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401 && error.name !== "DeferredSessionError";
 }
 
-export function Layout({ routeOverlay }: { routeOverlay?: ReactNode }) {
+export function Layout({ routeOverlay, protectBackgroundDrafts = false }: { routeOverlay?: ReactNode; protectBackgroundDrafts?: boolean }) {
   const queryClient = useQueryClient();
   const location = useLocation();
   const wide = appRouteBoundaryForPath(location.pathname) === "vault-shell";
@@ -266,8 +266,8 @@ export function Layout({ routeOverlay }: { routeOverlay?: ReactNode }) {
   return (
     <SearchStatusProvider identity={activeFingerprint!} enabled={!revalidating}>
     <CurrentUserProvider user={session.user} checking={revalidating} revision={accessRevision}>
-    <ResourceLocationProvider identity={activeFingerprint!} checking={revalidating} revision={accessRevision}>
     <ResourceNavigationProvider>
+    <ResourceLocationProvider identity={activeFingerprint!} checking={revalidating} revision={accessRevision}>
     <SettingsDialogProvider identity={session.user.user_id}>
     <div className={`${rootClass} [--workspace-gutter:1rem] sm:[--workspace-gutter:1.5rem] lg:[--workspace-gutter:2rem] xl:[--workspace-gutter:3rem] 2xl:[--workspace-gutter:9rem] ${sidebarCompact ? "lg:pl-14" : "lg:pl-52"}`} style={{ "--vault-navigation-width": `${wide ? vaultNavigationWidth : 0}px` } as CSSProperties} aria-busy={revalidating || undefined}>
       {revalidating && (
@@ -410,12 +410,15 @@ export function Layout({ routeOverlay }: { routeOverlay?: ReactNode }) {
       </div>
     </div>
     </SettingsDialogProvider>
-    </ResourceNavigationProvider>
     </ResourceLocationProvider>
+    {/* Settings previews retain editable drafts. Their mode changes and exits
+        consult that workspace's guard without sharing breadcrumb state. */}
+    {protectBackgroundDrafts && routeOverlay}
+    </ResourceNavigationProvider>
     {/* Route-backed previews share the shell's identity/access proof, but keep
         their own location and navigation scope. The inactive background must
         not intercept a preview's mode changes after an approved departure. */}
-    {routeOverlay}
+    {!protectBackgroundDrafts && routeOverlay}
     </CurrentUserProvider>
     </SearchStatusProvider>
   );

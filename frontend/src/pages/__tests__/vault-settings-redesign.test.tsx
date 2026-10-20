@@ -592,8 +592,10 @@ describe("Vault Settings redesign", () => {
         );
       }
       await user.click(screen.getByRole("button", { name: "Save changes" }));
-      await user.click(screen.getByRole("button", { name: "Preview guide" }));
-      const otherSetting = screen.getByRole("button", { name: "Close guide preview" });
+      await user.click(screen.getByRole("button", { name: "Guide options" }));
+      await user.click(screen.getByRole("menuitem", { name: "Agent view" }));
+      const otherSetting = screen.getByRole("button", { name: "Close agent view" });
+      otherSetting.focus();
       expect(otherSetting).toHaveFocus();
       await act(async () => {
         finishSave({ ok: true });
@@ -718,7 +720,8 @@ describe("Vault Settings redesign", () => {
     const user = userEvent.setup();
     renderSettings();
     await user.type(await screen.findByRole("textbox", { name: "Description" }), " draft");
-    await user.click(screen.getByRole("button", { name: "Preview guide" }));
+    await user.click(screen.getByRole("button", { name: "Guide options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Agent view" }));
     const dirtyEvent = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(dirtyEvent);
     expect(dirtyEvent.defaultPrevented).toBe(true);

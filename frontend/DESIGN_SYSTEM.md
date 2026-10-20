@@ -677,12 +677,25 @@ an `sr-only` summary, never the only signal.
   Description, Access and Guide writes. Saving must not overwrite another scope's
   saved snapshot or pull focus away from another field on completion.
   Guide starts as a two-line excerpt on a quiet inset surface, visually separate
-  from Preview guide, owner-only Edit
-  guide. Expand reading/editing inline without inner tabs. History, Agent view
+  from Preview guide and owner-only Edit guide. Preview guide opens the same
+  route-backed document reader as Overview and preserves this Settings entry,
+  all draft scopes, their revision pins and return focus. Only an exact retained
+  guide preview bypasses departure confirmation; full-page promotion or another
+  resource still protects unsaved work. Edit guide opens the body-only editor
+  inline without inner tabs. History, Agent view
   and Reset to template live in the labelled Guide options menu; resetting still
   requires confirmation. Preserve Guide drafts and their original OCC revision
   across reading modes and failed writes. The danger area has two compact action
   rows with short visible consequences, not a large red-filled banner.
+  **Guide routing:** Open guide always starts in the shared document reader.
+  The canonical document URL and legacy `/vault/:name/skill` URL stay read-first,
+  including fresh tabs; no implicit jump from reading to Settings. Guide readers
+  never expose the generic document editor or property editor. Verified owners
+  of writable Vaults get a labelled Edit guide link to
+  `/vault/:name/settings?edit=guide#skill`, which opens the sole body-only editor
+  and consumes the edit request. Cancel/Save never reopen it automatically.
+  Readers, writers, admins, archived and mirror Vaults retain reading without
+  guide-management controls. Historical versions and diffs remain readable.
   Indexing observations open from Overview's single current-Vault status trigger,
   with a short hover/focus explanation and click/tap details. Verified idle status
   is absent; queue, paused, failed and unavailable states remain distinct. No
