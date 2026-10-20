@@ -1050,6 +1050,14 @@ an `sr-only` summary, never the only signal.
   unsaved Cancel retains its confirmation. Same-account access verification must
   preserve the live editor draft even if a permission-scoped query remounts it;
   switching accounts resets local editor state.
+  Active editors check the lightweight document head only while visible. A
+  newer revision is a polite status near Save changes; it never replaces the
+  draft or steals focus. Compare changes opens a bounded, scrollable dialog
+  showing the original, draft and immutable server snapshot. Independent
+  fields combine; overlapping body changes require explicit composition.
+  Apply combined changes updates the editor, not the server. The next save
+  still checks the reviewed revision. Cancelling preserves the original draft;
+  access loss disables saving without navigating away from recovery text.
   Full-viewer Vault links ask before leaving unsaved edits and keep the existing
   local-draft recovery behavior. Keep editing is always available; navigation
   cannot abandon an active save or image upload. Modified/new-tab link gestures

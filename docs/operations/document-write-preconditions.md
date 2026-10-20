@@ -17,7 +17,12 @@ akb_update(uri=uri, content=draft, expected_commit=original.current_commit)
 The token must come from the read used to compose the draft. Fetching the
 latest token immediately before submitting an old-derived draft defeats the
 protection. On conflict, preserve the draft, read the latest document and
-review/merge changes deliberately before submitting a newly based draft.
+retain the original base. Compare those three versions, reapply the original
+intent to the latest version while preserving concurrent changes, and save the
+reviewed composed draft with that latest read's token. Reading latest and
+resending the unchanged old draft with a new token is not a merge. Callers must
+not automatically retry conflicts or use a global URI-to-revision cache to
+substitute a newer condition.
 
 ## Contract
 
@@ -45,8 +50,29 @@ changed field unless the caller supplies an exact revision condition.
 
 Exact-text editing is not semantic merging. Without `base_commit`, a matching
 string may be changed in a context that evolved since the caller read it.
-Web draft recovery does not automatically merge either: review the three
-versions before applying a draft to a newer base.
+On a revision conflict, retain the intended replacement, read latest, and
+review its surrounding context before deriving a new exact-text edit pinned
+to that read.
+
+## Web editor recovery
+
+While a document editor is active and the page is visible, it polls the
+document head every 15 seconds. A changed revision shows a banner without
+replacing the edit-start base, local draft, or its save condition. The check
+uses reader-gated `GET /api/v1/document-head/{vault}/{doc_id:path}`. Its
+`document_head` response contains only `kind`, `uri`, `vault`, `path`,
+`current_commit`, and `updated_at`; it does not fetch the document body or
+metadata fields for merging. This endpoint provides polling rather than an
+event stream or CRDT collaboration.
+
+Recovery reads the complete latest document and keeps that review snapshot
+fixed. Review compares the original base, local draft, and latest snapshot.
+Editable fields are resolved individually so independent changes can be
+preserved; overlapping body changes require a manually composed resolution.
+There is no automatic textual merge. Later head checks do not silently replace
+the version under review or its token. Save the reviewed draft using the
+reviewed snapshot's revision; a further conflict requires another latest read
+and review while keeping the draft.
 
 ## Existing integrations
 
@@ -58,4 +84,5 @@ conditions unchanged when reading a local file and never fetches one itself.
 
 No database migration, new configuration or proxy-runtime upgrade is required.
 Existing clients can send the new required condition through their existing
-transport. See the SDK README for the typed update pattern.
+transport. See the [SDK README](../../packages/akb-client/README.md#recovering-a-conflict)
+for the typed update and reviewed recovery pattern.

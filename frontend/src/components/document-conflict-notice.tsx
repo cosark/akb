@@ -2,37 +2,40 @@ import { useState } from "react";
 import { Check, Copy, GitCompareArrows } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import type { DocumentDetailsValues } from "@/lib/document-details";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { planDocumentConflict, type DocumentConflictField, type DocumentConflictResult, type DocumentConflictSnapshot } from "@/lib/document-conflict";
 
-export interface DocumentConflictSnapshot {
-  label: string;
-  commit: string | null;
-  title: string;
-  body: string;
-  details?: DocumentDetailsValues;
-}
+export type { DocumentConflictSnapshot } from "@/lib/document-conflict";
 
 interface DocumentConflictNoticeProps {
   base: DocumentConflictSnapshot;
   local: DocumentConflictSnapshot;
   latest: DocumentConflictSnapshot | null;
   latestError?: string;
-  rebasing: boolean;
-  onRebase: () => void;
+  loading: boolean;
+  newerRevision?: string | null;
+  onApply: (result: DocumentConflictResult) => void;
   onRetryLatest: () => void;
+  onCancel: () => void;
 }
 
 function Snapshot({ snapshot }: { snapshot: DocumentConflictSnapshot }) {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
 
   async function copySnapshot() {
     try {
-      await navigator.clipboard?.writeText(snapshot.body);
+      if (!navigator.clipboard) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(snapshot.body);
       setCopied(true);
+      setCopyError(false);
       window.setTimeout(() => setCopied(false), 2_000);
     } catch {
-      // The visible pre remains selectable when clipboard access is blocked.
+      setCopyError(true);
     }
   }
 
@@ -73,6 +76,7 @@ function Snapshot({ snapshot }: { snapshot: DocumentConflictSnapshot }) {
       <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-sm)] bg-surface-2 p-2 font-mono text-xs leading-relaxed text-foreground">
         {snapshot.body || "(empty)"}
       </pre>
+      {copyError && <p role="status" className="mt-1 text-xs text-foreground-muted">Clipboard unavailable. Select the preserved text to copy it.</p>}
       {snapshot.details && <details className="mt-2 text-xs">
         <summary className="cursor-pointer font-medium text-link focus-ring-instant">Document details</summary>
         <dl className="mt-2 space-y-1.5 break-words text-foreground-muted">
@@ -91,15 +95,42 @@ export function DocumentConflictNotice({
   local,
   latest,
   latestError,
-  rebasing,
-  onRebase,
+  loading,
+  newerRevision,
+  onApply,
   onRetryLatest,
+  onCancel,
 }: DocumentConflictNoticeProps) {
+  const plan = planDocumentConflict(base, local, latest ?? local);
+  // The parent keys this view by its reviewed snapshot. Background observations
+  // never replace the candidate or the revision used by Apply.
+  const [result, setResult] = useState(plan.result);
+  const [reviewed, setReviewed] = useState<DocumentConflictField[]>([]);
+  const [confirmRefresh, setConfirmRefresh] = useState(false);
+  const unresolved = plan.conflicts.filter((field) => !reviewed.includes(field));
+  const candidateChanged = JSON.stringify(result) !== JSON.stringify(plan.result) || reviewed.length > 0;
+  const markReviewed = (field: DocumentConflictField) => setReviewed((values) => values.includes(field) ? values : [...values, field]);
+  const refresh = () => {
+    if (candidateChanged) setConfirmRefresh(true);
+    else onRetryLatest();
+  };
+  const detailConflicts = plan.conflicts.filter((field) => field !== "title" && field !== "body");
+
   return (
-    <Alert variant="warning" title="This document changed on the server" className="mt-4">
-      <p>
-        Your draft is still protected. Review the original base, your local draft, and the latest server version before choosing a new base.
-      </p>
+    <>
+    <Dialog open onOpenChange={(open) => { if (!open) onCancel(); }}>
+    <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-5xl flex-col overflow-hidden p-0">
+      <DialogHeader className="shrink-0 border-b border-border p-4 pr-12 sm:p-6">
+        <DialogTitle>Review document changes</DialogTitle>
+        <DialogDescription>Your original draft is preserved. Combine changes against the displayed server version; applying the result does not save it.</DialogDescription>
+      </DialogHeader>
+      <div className="min-h-0 overflow-y-auto p-4 sm:p-6">
+      <Alert variant="warning" title="This document changed on the server" role="status" aria-live="polite">
+        Review the original, your draft, and the server version before applying a combined result. No automatic text merge is performed.
+      </Alert>
+      {newerRevision && newerRevision !== latest?.commit && <Alert variant="info" className="mt-3">
+        The server changed again. This comparison stays pinned to the version shown below. Reload the comparison, or finish it and let the save check reject any newer change.
+      </Alert>}
       <div className="mt-3 @container">
         <div className="grid gap-3 @lg:grid-cols-2 @2xl:grid-cols-3">
           <Snapshot snapshot={base} />
@@ -125,34 +156,47 @@ export function DocumentConflictNotice({
           )}
         </div>
       </div>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          variant="default"
-          size="sm"
-          className="shrink-0 focus-ring-instant"
-          onClick={onRebase}
-          disabled={!latest?.commit || rebasing}
-          loading={rebasing}
-        >
-          Apply draft to latest
-        </Button>
-        {!latest && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="shrink-0 focus-ring-instant"
-            onClick={onRetryLatest}
-            disabled={rebasing}
-          >
-            Try loading latest
-          </Button>
-        )}
+      {latest?.commit && <div className="mt-5 space-y-4 border-t border-border pt-4">
+        <h3 className="text-sm font-semibold">Combined result</h3>
+        <p className="text-sm text-foreground-muted">Independent fields are combined. Fields changed differently on both sides start with the server value and require an explicit choice or edit.</p>
+        <div className="space-y-2">
+          <Label htmlFor="conflict-result-title">Combined title</Label>
+          <Input id="conflict-result-title" value={result.title} onChange={(event) => { setResult({ ...result, title: event.target.value }); markReviewed("title"); }} />
+          {plan.conflicts.includes("title") && <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => { setResult({ ...result, title: latest.title }); markReviewed("title"); }}>Use latest title</Button>
+            <Button size="sm" variant="outline" onClick={() => { setResult({ ...result, title: local.title }); markReviewed("title"); }}>Use my title</Button>
+          </div>}
+        </div>
+        {detailConflicts.map((field) => {
+          const key = field as keyof DocumentConflictResult["details"];
+          return <fieldset key={field} className="space-y-2 rounded-[var(--radius-sm)] border border-border p-3">
+            <legend className="px-1 text-sm font-medium">Choose {field}</legend>
+            <p className="break-words text-xs text-foreground-muted">Latest: {String(latest.details?.[key] ?? "Not set")} · Mine: {String(local.details?.[key] ?? "Not set")}</p>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" onClick={() => { setResult({ ...result, details: { ...result.details, [key]: latest.details?.[key] ?? result.details[key] } }); markReviewed(field); }}>Use latest {field}</Button>
+              <Button size="sm" variant="outline" onClick={() => { setResult({ ...result, details: { ...result.details, [key]: local.details?.[key] ?? result.details[key] } }); markReviewed(field); }}>Use my {field}</Button>
+            </div>
+          </fieldset>;
+        })}
+        <div className="space-y-2">
+          <Label htmlFor="conflict-result-body">Combined document body</Label>
+          {plan.conflicts.includes("body") && <p className="text-sm text-foreground-muted">Both versions changed the body. Edit this result to include the changes you want to keep, or explicitly keep the latest body and discard your body changes.</p>}
+          <Textarea id="conflict-result-body" rows={10} value={result.body} className="font-mono text-sm" onChange={(event) => { setResult({ ...result, body: event.target.value }); markReviewed("body"); }} />
+          {plan.conflicts.includes("body") && <Button size="sm" variant="outline" onClick={() => { setResult({ ...result, body: latest.body }); markReviewed("body"); }}>Keep latest body</Button>}
+        </div>
+        {unresolved.length > 0 && <p role="status" className="text-sm text-warning">Review before applying: {unresolved.join(", ")}.</p>}
+      </div>}
       </div>
-      <p className={cn("mt-2 text-xs text-warning-soft-foreground", !latest && "font-medium")}>
-        Applying the draft to latest is explicit; saving will still be rejected if the server changes again.
-      </p>
-    </Alert>
+      <DialogFooter data-slot="document-conflict-actions" className="shrink-0 border-t border-border p-4 sm:p-6">
+        <Button type="button" variant="outline" className="focus-ring-instant" onClick={onCancel}>Keep editing</Button>
+        <Button type="button" variant="outline" className="focus-ring-instant" onClick={refresh} disabled={loading} loading={loading}>{latest ? "Reload comparison" : "Try loading latest"}</Button>
+        <Button type="button" className="focus-ring-instant" onClick={() => onApply(result)} disabled={!latest?.commit || loading || unresolved.length > 0 || !result.title.trim()}>Apply combined changes</Button>
+      </DialogFooter>
+    </DialogContent>
+    </Dialog>
+    <ConfirmDialog open={confirmRefresh} onOpenChange={setConfirmRefresh} title="Reload this comparison?"
+      description="This replaces the in-progress combined result with a fresh comparison. Your original editor draft remains unchanged."
+      confirmLabel="Reload comparison" onConfirm={() => { setConfirmRefresh(false); onRetryLatest(); }} />
+    </>
   );
 }
