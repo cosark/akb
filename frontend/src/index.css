@@ -853,9 +853,9 @@ body::before {
 [data-reader-control][hidden] { display: none; }
 .document-command-inner [data-reader-control] { height: var(--reader-control-size); min-height: var(--reader-control-size); border-radius: var(--radius-sm); font-size: .875rem; line-height: 1.25rem; font-weight: 500; gap: .375rem; }
 .document-command-inner [data-reader-icon], .document-command-inner [data-reader-navigation] { width: var(--reader-control-size); min-width: var(--reader-control-size); padding-inline: 0; }
-.document-unified-toolbar .document-command-inner { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .5rem; padding-block: .25rem; }
+.document-unified-toolbar .document-command-inner { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; padding-block: .25rem; }
 .document-unified-toolbar [data-slot="resource-command-meta"] { display: contents; }
-.document-unified-toolbar [data-slot="resource-command-actions"] { flex-wrap: nowrap; gap: .25rem; grid-column: 3; }
+.document-unified-toolbar [data-slot="resource-command-actions"] { flex-wrap: nowrap; gap: .25rem; grid-column: 2; }
 .document-reader-controls { display: flex; align-items: center; gap: .375rem; }
 .document-reader-status { display: flex; min-width: 0; align-items: center; gap: .5rem; }
 .document-reader-status time { font-size: .75rem; line-height: 1rem; }
@@ -893,7 +893,7 @@ body::before {
 @container resource-commands (min-width: 48rem) { .document-command-inner { --reader-control-size: 1.75rem; --reader-icon-size: .875rem; } .document-command-inner [data-reader-navigation] { width: auto; padding-inline: .625rem; } }
 @container resource-commands (max-width: 39.999rem) {
   .document-unified-toolbar:not(.document-edit-toolbar) .document-command-inner { grid-template-columns: minmax(0, 1fr) auto; gap: .25rem .5rem; }
-  .document-unified-toolbar:not(.document-edit-toolbar) [data-slot="resource-command-actions"] { grid-column: 2; grid-row: 1; }
+  .document-unified-toolbar:not(.document-edit-toolbar) [data-slot="resource-command-actions"] { grid-column: 1 / -1; grid-row: 1; }
   .document-reader-status { grid-column: 1 / -1; grid-row: 2; min-height: 1.5rem; }
   .document-reader-status:empty { display: none; }
 }

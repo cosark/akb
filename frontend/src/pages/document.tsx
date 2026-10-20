@@ -1558,17 +1558,12 @@ function DocumentPageContent({
               {accessChecking || vaultInfoQuery.isPending ? "Checking access…" : !canEdit ? "Read-only · Draft preserved" : uploadingImage ? "Uploading image…" : isDirty ? "Unsaved changes" : draftStatus === "saving" ? "Saving draft locally…" : draftStatus === "saved" ? "Draft saved locally" : "No changes"}
             </span>
           ) : (
-            <>
-              <div role="group" aria-label="Reading controls" className="document-reader-controls">
-                {!isDiffMode && <DocumentReadModes view={view === "raw" ? "raw" : "rendered"} onChange={setView} idPrefix={viewId} contentId="document-reading-canvas" />}
-              </div>
-              <div className="document-reader-status">
-                {doc.status === "draft" && !isHistorical && !isDiffMode && <Badge variant="draft">Draft</Badge>}
-                {savedAt && <span role="status" className="inline-flex shrink-0 items-center gap-1 text-xs text-success"><CheckCircle2 className="h-3.5 w-3.5" aria-hidden />Saved</span>}
-                <DocumentTimestamp value={isHistorical || isDiffMode ? selectedHistoryEntry?.date : lastEditedAt}
-                  label={isHistorical || isDiffMode ? "Version saved" : "Last edited"} compact />
-              </div>
-            </>
+            <div className="document-reader-status">
+              {doc.status === "draft" && !isHistorical && !isDiffMode && <Badge variant="draft">Draft</Badge>}
+              {savedAt && <span role="status" className="inline-flex shrink-0 items-center gap-1 text-xs text-success"><CheckCircle2 className="h-3.5 w-3.5" aria-hidden />Saved</span>}
+              <DocumentTimestamp value={isHistorical || isDiffMode ? selectedHistoryEntry?.date : lastEditedAt}
+                label={isHistorical || isDiffMode ? "Version saved" : "Last edited"} compact />
+            </div>
           )}
         >
           {inEditMode ? <>
@@ -1578,6 +1573,9 @@ function DocumentPageContent({
               {savingBody ? "Saving…" : "Save changes"}
             </Button>
           </> : <>
+            {!isDiffMode && <div role="group" aria-label="Reading controls" className="document-reader-controls">
+              <DocumentReadModes view={view === "raw" ? "raw" : "rendered"} onChange={setView} idPrefix={viewId} contentId="document-reading-canvas" />
+            </div>}
             <DocumentCopyButton key={resourceScope} content={doc.content || ""} actionRef={copyActionRef} returnFocusRef={actionsTriggerRef} onCopied={label => setCopyNotice({ label })} />
             {canEdit && <DocumentIconButton ref={editButtonRef} label="Edit" className="document-reader-edit text-link" onClick={() => requestEdit()}>
               <Pencil className="h-4 w-4" aria-hidden />
@@ -2324,13 +2322,11 @@ function DocumentPageLoading({ presentation }: { presentation: "page" | "preview
     <LoadingState label="Loading document" className="@container/reader flex h-full min-h-0 flex-col overflow-hidden bg-surface [&>div]:contents">
       {presentation === "preview" && <div className="flex h-14 items-center gap-3 border-b border-border px-4"><Skeleton className="h-4 w-2/3" /></div>}
       <div data-slot="document-viewer-frame" className="flex min-h-0 flex-1 flex-col overflow-hidden bg-surface">
-        <ResourceCommandRow appearance="reader" className="document-unified-toolbar" meta={<>
-          <div className="document-reader-controls"><Skeleton className="h-10 w-20 rounded-[var(--radius-md)]" /><Skeleton className="h-8 w-8" /></div>
+        <ResourceCommandRow appearance="reader" className="document-unified-toolbar" meta={
           <div className="document-reader-status"><Skeleton className="h-3 w-32" /></div>
-        </>}>
-          <Skeleton data-reader-control className="w-14" />
-          <Skeleton data-reader-control className="w-8" />
-          <Skeleton data-reader-control className="w-8" />
+        }>
+          <div className="document-reader-controls"><Skeleton data-reader-control className="w-16 rounded-[var(--radius-md)]" /></div>
+          {Array.from({ length: 4 }, (_, index) => <Skeleton key={index} data-reader-control data-reader-icon />)}
         </ResourceCommandRow>
           <div className="flex min-h-0 flex-1 overflow-hidden">
             <div className="mx-auto min-w-0 flex-1 max-w-5xl space-y-4 px-4 py-5 sm:px-6">

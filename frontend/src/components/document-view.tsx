@@ -104,12 +104,12 @@ export function DocumentView({
           "overflow-hidden rounded-[var(--radius-lg)] border border-border bg-surface shadow-sm",
       )}
     >
-      {!bodyOnly && <ResourceCommandRow appearance="reader" meta={
-        <div role="group" aria-label="Document reading tools" className="flex shrink-0 items-center gap-2">
+      {!bodyOnly && <ResourceCommandRow appearance="reader" className="document-unified-toolbar" meta={
+        <div className="document-reader-status">{!version && <DocumentTimestamp value={doc.updated_at} compact />}</div>
+      }>
+        <div role="group" aria-label="Document reading tools" className="document-reader-controls">
           <DocumentReadModes view={view} onChange={setView} idPrefix={idPrefix} contentId={`${idPrefix}-content`} />
         </div>
-      }>
-        {!version && <DocumentTimestamp value={doc.updated_at} compact />}
         <DocumentCopyButton key={`${vault}:${docId}:${version ?? "latest"}`} content={doc.content || ""} />
       </ResourceCommandRow>}
 

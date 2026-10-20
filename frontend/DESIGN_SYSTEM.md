@@ -1013,9 +1013,9 @@ an `sr-only` summary, never the only signal.
   Preserve the parent and resource title before secondary ancestry.
 - **Document workspace**: the location trail is the sole visible document
   identity. Keep one semantic `h1#doc-title` and preserve authored headings.
-  One flat command row groups icon-only Preview / Raw selection on the left,
-  quiet Last edited metadata in the middle, and Copy markdown, Edit, Document
-  details and overflow icons on the right. Edit and guide editing have named
+  One flat command row keeps quiet Last edited metadata on the left, with
+  icon-only Preview / Raw selection, Copy markdown, Edit, Document details
+  and overflow grouped on the right in that order. Edit and guide editing have named
   tooltips and no visible text label. Read modes use a white/slate surface,
   neutral outer stroke and sliding teal selection outline, without a gray inset
   or shadow. Keep radiogroup semantics, arrow/Home/End selection and one tab stop.
