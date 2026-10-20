@@ -265,8 +265,10 @@ an `sr-only` summary, never the only signal.
   page label on ordinary routes. Named Vault routes instead show the Vault /
   current-page breadcrumb; resources use the resolved Vault / Collection /
   human-title trail. Breadcrumbs remain location-only: the Vault crumb opens
-  Overview and the current page or human title is passive text. They contain no
-  page-menu chevron, Navigate button or destination dropdown. Overview owns four
+  Overview and the current page or human title is passive text. On the Vault root,
+  show only its name as the current-page link, without an Overview label or slash.
+  Breadcrumbs contain no page-menu chevron, Navigate button or destination
+  dropdown. Overview owns four
   scoped page links in its summary: Graph, Public links, Members and Settings.
   No Overview self-link or duplicate Search is added. A user returns to Overview
   through the Vault crumb or Vault list before selecting another destination. An
@@ -514,12 +516,12 @@ an `sr-only` summary, never the only signal.
   reach bounds and double-click restores default. Pointer cancel/lost capture,
   blur and unmount restore cursor/selection. Mobile drawers remain fixed-width. The
   resource command row remains below it; desktop reading controls remain `h-8`.
-  Overview, Search, Activity, File and Table readers share the same header-level
-  Vault menu as documents and focused tasks. No second navigation row consumes
-  working height. The menu order is Overview / Graph / Public links, then a
-  neutral divider before Members / Settings.
+  Overview, Search, Activity, File and Table readers share the same location-only
+  breadcrumb as documents and focused tasks. Overview shows only the Vault name;
+  other routes append their current page or resolved resource trail. No second
+  navigation row consumes working height; page links live in the Overview summary.
   The global header owns the only quick-search entry point; do not duplicate
-  it as a field, button, or Search destination in the Vault menu. Named Vault
+  it as a field, button, or Search destination in the Overview links. Named Vault
   routes default to that Vault each time the dialog opens; Home, account Settings,
   the Vault index and the creation route default to all accessible Vaults.
   A shared scope control sits inside the modal and full-page query fields.

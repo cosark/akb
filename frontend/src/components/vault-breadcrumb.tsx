@@ -10,7 +10,7 @@ export function VaultBreadcrumb({
   vault, title, kind, icon: KindIcon, children, className, ariaLabel = "Current page",
 }: {
   vault: string;
-  title: string;
+  title?: string;
   kind?: string;
   icon?: LucideIcon;
   /** Optional Collection list items between the Vault and current location. */
@@ -19,6 +19,7 @@ export function VaultBreadcrumb({
   ariaLabel?: string;
 }) {
   const { requestNavigation } = useResourceNavigation();
+  const isVaultRoot = title === undefined && !children;
   return (
     <nav aria-label={ariaLabel} className={cn("@container/resource-location min-w-0 text-sm", className)}
       onClickCapture={(event) => {
@@ -31,12 +32,14 @@ export function VaultBreadcrumb({
         }
       }}>
       <ol className="flex min-w-0 items-center gap-1.5">
-        <li className={cn("flex min-w-0 max-w-[30%] items-center", kind && "@max-xs/resource-location:max-w-none @max-xs/resource-location:shrink-0")}>
+        <li className={cn("flex min-w-0 items-center", isVaultRoot ? "max-w-full" : "max-w-[30%]", kind && "@max-xs/resource-location:max-w-none @max-xs/resource-location:shrink-0")}>
           <Link
             to={`/vault/${encodeURIComponent(vault)}`}
             title={vault}
+            aria-current={isVaultRoot ? "page" : undefined}
             className={cn("inline-flex min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] text-foreground-muted transition-token hover:text-link focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
               kind && "@max-xs/resource-location:h-11 @max-xs/resource-location:w-9 @max-xs/resource-location:justify-center",
+              isVaultRoot && "font-semibold text-foreground",
             )}
           >
             <Box className="h-4 w-4 shrink-0" aria-hidden />
@@ -44,7 +47,7 @@ export function VaultBreadcrumb({
           </Link>
         </li>
         {children}
-        <li className="flex min-w-0 flex-1 items-center gap-1.5">
+        {title !== undefined && <li className="flex min-w-0 flex-1 items-center gap-1.5">
           <span aria-hidden className="shrink-0 text-subtle">/</span>
           <TooltipText
             aria-current="page"
@@ -56,7 +59,7 @@ export function VaultBreadcrumb({
             <KindIcon className="h-4 w-4" aria-hidden />
           </span>}
           {kind && <span className="sr-only">({kind})</span>}
-        </li>
+        </li>}
       </ol>
     </nav>
   );

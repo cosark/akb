@@ -41,7 +41,7 @@ export function AppPageLocation({ isAdmin = false, mobile = false }: { isAdmin?:
   if (vault) {
     const isResource = ["DocumentPage", "FilePage", "TablePage"].includes(match?.route.component ?? "");
     return <div data-slot="app-page-location" className={className}>
-      <VaultBreadcrumb vault={vault} title={label} className="flex-1"
+      <VaultBreadcrumb vault={vault} title={match?.route.component === "VaultPage" ? undefined : label} className="flex-1"
         icon={isResource ? Icon : undefined} kind={isResource ? label : undefined} />
     </div>;
   }

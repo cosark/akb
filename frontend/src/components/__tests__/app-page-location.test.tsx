@@ -34,8 +34,9 @@ describe("App page location", () => {
     const vault = within(location).getByRole("link", { name: "팀 Vault" });
     expect(vault).toHaveAttribute("href", "/vault/%ED%8C%80%20Vault");
     expect(vault.querySelector(".lucide-box")).toHaveAttribute("aria-hidden", "true");
-    const current = within(location).getByText(label);
+    const current = tail ? within(location).getByText(label) : vault;
     expect(current).toHaveAttribute("aria-current", "page");
+    if (!tail) expect(location).toHaveTextContent(/^팀 Vault$/);
     const resourceGlyph = ({ Document: ".lucide-file-text", File: ".lucide-file", Table: ".lucide-table-2" } as Record<string, string>)[label];
     expect(location.querySelectorAll("svg")).toHaveLength(resourceGlyph ? 2 : 1);
     expect(within(location).queryByRole("button", { name: /Pages in/ })).not.toBeInTheDocument();
@@ -58,7 +59,8 @@ describe("App page location", () => {
     await user.click(screen.getByRole("link", { name: "team" }));
     expect(guard).toHaveBeenNthCalledWith(1, "/vault/team");
     expect(guard).toHaveBeenCalledTimes(allowed ? 2 : 1);
-    expect(within(screen.getByRole("navigation", { name: "Current page" })).getByText(allowed ? "Overview" : "Settings")).toHaveAttribute("aria-current", "page");
+    const location = within(screen.getByRole("navigation", { name: "Current page" }));
+    expect(allowed ? location.getByRole("link", { name: "team" }) : location.getByText("Settings")).toHaveAttribute("aria-current", "page");
     expect(screen.queryByRole("button", { name: /Pages in/ })).not.toBeInTheDocument();
   });
 
