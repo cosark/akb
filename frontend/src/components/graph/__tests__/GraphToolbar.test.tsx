@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CurrentUserProvider } from "@/contexts/current-user-context";
 import { searchDocs, type SearchResponse } from "@/lib/api";
 import { GraphToolbar } from "../GraphToolbar";
-import { DEFAULT_VIEW, type NodeKind, type RelationKind } from "../graph-types";
+import { DEFAULT_VIEW, type GraphView, type NodeKind, type RelationKind } from "../graph-types";
 
 vi.mock("@/lib/api", () => ({ searchDocs: vi.fn() }));
 const search = vi.mocked(searchDocs);
@@ -309,7 +309,7 @@ describe("GraphToolbar commands", () => {
     const toggle = screen.getByRole("button", { name: "Strong links only" });
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(toggle);
-    const update = props.onChange.mock.calls.at(-1)![0];
+    const update = vi.mocked(props.onChange).mock.calls.at(-1)![0] as GraphView | ((view: GraphView) => GraphView);
     expect((typeof update === "function" ? update({ ...DEFAULT_VIEW, entry: documentNode.uri }) : update).links).toBe("all");
   });
 
