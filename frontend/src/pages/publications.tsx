@@ -487,7 +487,7 @@ function PublicationRow({
     : `${publication.view_count ?? 0} views`;
 
   return (
-    <li className="grid gap-2 px-4 py-2 transition-token hover:bg-surface-hover sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+    <li className="grid gap-3 px-4 py-3 transition-token hover:bg-surface-hover sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-5">
       <div className="flex min-w-0 items-start gap-2.5">
         <span
           data-testid="publication-index"
@@ -552,7 +552,7 @@ function PublicationRow({
         </div>
       </div>
 
-      <div className="flex shrink-0 items-center justify-end gap-1">
+      <div className="flex shrink-0 items-center justify-end gap-2">
         <button
           type="button"
           onClick={onCopy}
@@ -699,7 +699,7 @@ function PublicationControls({
       <div
         role="group"
         aria-label="Filter public links by type"
-        className="flex flex-wrap items-center gap-1"
+        className="flex flex-wrap items-center gap-2"
       >
         {PUBLICATION_FILTERS.map((filter) => (
           <button

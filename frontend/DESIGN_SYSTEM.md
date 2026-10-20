@@ -237,6 +237,9 @@ an `sr-only` summary, never the only signal.
   Compact administration controls are 32px on wide, fine-pointer screens and
   at least 44px on narrow or coarse-pointer screens. Icon controls opt into
   their square size explicitly; a text button must retain its natural width.
+  Compact controls do not imply compressed page margins: Settings, Members and
+  Public links keep 16px mobile / 24px desktop route gutters, 16px between
+  their title divider and panel, 20px desktop form insets and 12px row padding.
 - **Numbers in tables/lists/stats: `tabular-nums`** (prevents async jitter), in
   Pretendard — not monospace, and **not zero-padded** (`1`, not `01`).
 - **Mono is for technical refs, not display names.** Code/secrets, `akb://`
@@ -657,8 +660,9 @@ an `sr-only` summary, never the only signal.
   below that width the intent sits above the controls. Sections share neutral
   hairline separators, with no nested card shells or category tabs. Preserve
   one mounted form per scope, all deep-link IDs and one route scroll surface.
-  Use the same route-owned gutters as Members/Public links, with 16px section
-  padding and gaps, and 16px above the page header. Description uses a compact
+  Use the same route-owned gutters as Members/Public links, with 16px mobile /
+  20px desktop section padding and 20px group gaps. Keep 24px above the page
+  header on desktop and 16px between its divider and the panel. Description uses a compact
   80px minimum field on desktop and keeps 16px input text on narrow screens.
   Vault details places the labelled description field and permanent copyable
   Vault address side by side at 44rem of actual controls width, otherwise
@@ -983,7 +987,7 @@ an `sr-only` summary, never the only signal.
   decorative avatars. Role selectors keep a 32px desktop / 44px touch target with neutral
   surfaces and foreground text in both themes, not competing role-colored fills.
   The compact header uses a 14px title and 28px icon; names use 13px medium,
-  contact metadata stays 12px, and ledger cells use 8px vertical padding.
+  contact metadata stays 12px, and ledger cells use 12px vertical padding.
   Filtering appears for more than eight members and remains visible while active.
   Keep invite, role changes with Undo, revoke and ownership-transfer confirmations.
   Reader and unknown-role views do not expose management controls; row actions

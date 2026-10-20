@@ -29,7 +29,7 @@ export function WorkspaceSectionHeader({
     <div
       data-slot="workspace-section-header"
       data-testid={testId}
-      className={cn("border-b border-border px-0.5", compact ? "mb-2 pb-2" : "mb-2.5 pb-3", className)}
+      className={cn("border-b border-border px-0.5 pb-3", compact ? "mb-4" : "mb-2.5", className)}
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div

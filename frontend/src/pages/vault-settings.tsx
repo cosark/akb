@@ -394,9 +394,9 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
             <div className="divide-y divide-border">
               <SettingsSection id="general" title="Vault details" layout="form"
                 icon={<FileText aria-hidden />} description="Describe this vault and copy its address.">
-                <div className="grid min-w-0 gap-4 @[44rem]/settings-values:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+                <div className="grid min-w-0 gap-5 @[44rem]/settings-values:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
                   <div className="min-w-0" data-testid="settings-general-editor">
-                    <Label htmlFor="vault-description" className="mb-1.5 block text-ui">Description</Label>
+                    <Label htmlFor="vault-description" className="mb-2 block text-ui">Description</Label>
                     <Textarea
                       id="vault-description"
                       value={description}
@@ -419,7 +419,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                     />}
                   </div>
                   <div className="min-w-0">
-                    <p id="vault-address-label" className="mb-1.5 text-ui font-medium">Vault address</p>
+                    <p id="vault-address-label" className="mb-2 text-ui font-medium">Vault address</p>
                     <div role="group" aria-labelledby="vault-address-label" className="flex min-h-11 min-w-0 items-center gap-2 rounded-[var(--radius-md)] border border-border bg-background pl-3 pr-1 sm:min-h-9">
                       <code className="min-w-0 flex-1 text-ui text-foreground [overflow-wrap:anywhere]">akb://{name}</code>
                       <CopyButton className="workspace-icon-control h-11 w-11 hover:bg-surface-hover" value={`akb://${name}`} label="Copy vault address" />
@@ -432,7 +432,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
               <SettingsSection id="access" title="Access permissions" layout="form" tone="people"
                 icon={<ShieldCheck aria-hidden />} description="Choose who can open this vault and what they can do.">
                 <div data-testid="settings-access-editor">
-                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <p id="vault-access-label" className="text-ui font-medium">Who can access</p>
                     <span className="inline-flex items-center gap-1.5 text-xs text-foreground-muted">
                       <Lock className="h-3 w-3" aria-hidden />Sign-in required
@@ -444,7 +444,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                       const selected = publicAccess === value;
                       const helpId = selected ? "vault-access-help" : `vault-access-${value}-help`;
                       return (
-                        <label key={value} className={`flex min-h-14 items-start gap-2.5 px-3 py-2.5 text-ui ${selected ? "bg-surface-selected text-surface-selected-foreground" : "bg-surface text-foreground hover:bg-surface-hover"} ${canEdit && !busy ? "cursor-pointer" : ""}`}>
+                        <label key={value} className={`flex min-h-14 items-start gap-2.5 px-3 py-3 text-ui ${selected ? "bg-surface-selected text-surface-selected-foreground" : "bg-surface text-foreground hover:bg-surface-hover"} ${canEdit && !busy ? "cursor-pointer" : ""}`}>
                           <input type="radio" name="vault-default-access" value={value} checked={selected}
                             aria-labelledby={`vault-access-${value}-label`} aria-describedby={helpId}
                             onChange={() => { setPublicAccess(value); setSavedScope(null); }}

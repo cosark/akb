@@ -275,7 +275,7 @@ export function SkillSection({
 
   return (
     <SettingsSection ref={sectionRef} id="skill" title="Vault guide">
-      <div className="p-4">
+      <div className="p-4 sm:p-5">
           {error && !isMirror && (
             <Alert variant="destructive" title="Couldn't load the vault guide">
               <p>{error}</p>

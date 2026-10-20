@@ -15,7 +15,7 @@ export const SettingsSection = forwardRef<HTMLElement, {
 }>(({ id, title, children, className, layout = "ledger", description, icon, tone = "neutral" }, ref) => (
   <section ref={ref} id={id} role="region" aria-labelledby={`settings-${id}-heading`} className={cn(
     "@container/settings-section min-w-0 scroll-mt-4",
-    layout === "form" && "grid gap-4 p-4 @[64rem]/vault-settings:grid-cols-[13rem_minmax(0,1fr)] @[64rem]/vault-settings:gap-6",
+    layout === "form" && "grid gap-5 p-4 sm:p-5 @[64rem]/vault-settings:grid-cols-[13rem_minmax(0,1fr)] @[64rem]/vault-settings:gap-6",
     className,
   )}>
     {layout === "form" ? <>
@@ -29,7 +29,7 @@ export const SettingsSection = forwardRef<HTMLElement, {
       <div data-slot="settings-group" className="@container/settings-values min-w-0">{children}</div>
     </> : <>
     <h3 id={`settings-${id}-heading`} className={cn(
-      "border-b border-border bg-background/60 px-4 py-2 text-ui font-semibold",
+      "border-b border-border bg-background/60 px-4 py-2.5 text-ui font-semibold sm:px-5",
       id === "danger" ? "text-destructive" : "text-foreground",
     )}>{title}</h3>
     <div data-slot="settings-group" className="divide-y divide-border">{children}</div>
@@ -41,7 +41,7 @@ SettingsSection.displayName = "SettingsSection";
 /** A plain label/control row; no nested card, label fill or vertical borders. */
 export function SettingRow({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
-    <div data-slot="settings-row" className="grid min-w-0 gap-2 px-4 py-3 @[48rem]/settings-section:grid-cols-[11rem_minmax(0,1fr)] @[48rem]/settings-section:gap-x-6">
+    <div data-slot="settings-row" className="grid min-w-0 gap-3 px-4 py-4 sm:px-5 @[48rem]/settings-section:grid-cols-[11rem_minmax(0,1fr)] @[48rem]/settings-section:gap-x-6">
       <div data-slot="settings-label" className="min-w-0 text-ui font-medium text-foreground">
         {label}
       </div>

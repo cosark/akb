@@ -70,7 +70,7 @@ export default function GuidePreview({ vault, content, onNavigate }: {
   }
 
   return (
-    <div className="mt-3 border-t border-border pt-3" onClick={followLink}>
+    <div className="mt-4 border-t border-border pt-4" onClick={followLink}>
       <div ref={previewRef} id={id} role="region" aria-label="Vault guide preview"
         className={cn("max-w-prose", !showAll && "[&_.ProseMirror>:nth-child(n+5)]:hidden")}>
         <MarkdownRender markdown={markdown}

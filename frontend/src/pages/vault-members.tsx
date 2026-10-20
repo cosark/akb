@@ -364,7 +364,7 @@ function VaultMembersWorkspace({
           {(total > FILTER_THRESHOLD || filter) && (
             <div
               data-testid="member-roster-controls"
-              className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-surface px-3 py-2.5 @lg/members:px-4"
+              className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-surface px-4 py-3 @lg/members:px-5"
             >
               <div className="relative w-full @md/members:w-72">
                 <Search
@@ -442,7 +442,7 @@ function VaultMembersWorkspace({
                   <tr>
                     <th
                       scope="col"
-                      className="px-3 py-2.5 font-medium @lg/members:px-4"
+                      className="px-4 py-3 font-medium @lg/members:px-5"
                     >
                       Member
                     </th>
@@ -480,7 +480,7 @@ function VaultMembersWorkspace({
                         key={member.id}
                         className="transition-token hover:bg-surface-hover"
                       >
-                        <td className="min-w-0 px-3 py-2 align-middle @lg/members:px-4">
+                        <td className="min-w-0 px-4 py-3 align-middle @lg/members:px-5">
                           <div className="flex min-w-0 items-center gap-2.5">
                             <span className="hidden @md/members:block">
                               <MemberAvatar member={member} />
@@ -510,7 +510,7 @@ function VaultMembersWorkspace({
                             </div>
                           </div>
                         </td>
-                        <td className="hidden px-4 py-2 align-middle text-xs text-foreground-muted @3xl/members:table-cell">
+                        <td className="hidden px-4 py-3 align-middle text-xs text-foreground-muted @3xl/members:table-cell">
                           {member.since ? (
                             <time
                               dateTime={member.since}
@@ -522,7 +522,7 @@ function VaultMembersWorkspace({
                             "—"
                           )}
                         </td>
-                        <td className="px-2 py-2 text-right align-middle">
+                        <td className="px-2 py-3 text-right align-middle">
                           {canChangeRole ? (
                             <RoleSelect
                               vault={name}
@@ -549,7 +549,7 @@ function VaultMembersWorkspace({
                             </span>
                           )}
                         </td>
-                        <td className="py-2 pr-2 text-right align-middle">
+                        <td className="py-3 pr-3 text-right align-middle">
                           {canManageMember && (
                             <MemberActionsMenu
                               member={member}
@@ -724,7 +724,7 @@ function MemberListSkeleton() {
       {[0, 1, 2, 3].map((index) => (
         <div
           key={index}
-          className="flex items-center gap-2.5 px-4 py-2 lg:px-5"
+          className="flex items-center gap-2.5 px-4 py-3 lg:px-5"
           aria-hidden
         >
           <span className="h-7 w-7 animate-pulse rounded-full bg-surface-2" />
