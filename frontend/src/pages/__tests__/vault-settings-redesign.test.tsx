@@ -357,6 +357,7 @@ describe("Vault Settings redesign", () => {
     renderSettings();
     await screen.findByRole("textbox", { name: "Description" });
     const general = screen.getByRole("region", { name: "General" });
+    expect(within(screen.getByTestId("vault-settings-header")).getByRole("heading", { level: 2, name: "Settings" })).toBeVisible();
     expect(within(general).getByText("akb://platform-docs")).toBeVisible();
     expect(within(general).getByRole("button", { name: "Copy vault address" })).toBeVisible();
     expect(screen.queryByLabelText("Vault ownership and dates")).not.toBeInTheDocument();

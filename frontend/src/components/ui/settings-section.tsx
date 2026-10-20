@@ -1,35 +1,31 @@
 import { forwardRef, type ReactNode } from "react";
-import { Panel } from "@/components/ui/panel";
 import { cn } from "@/lib/utils";
 
-/** Quiet group boundaries without repeating a title inside a card header. */
+/** Section dividers inside the Vault settings ledger. The parent owns its panel. */
 export const SettingsSection = forwardRef<HTMLElement, {
   id: string;
   title: string;
   children: ReactNode;
 }>(({ id, title, children }, ref) => (
   <section ref={ref} id={id} role="region" aria-labelledby={`settings-${id}-heading`} className="scroll-mt-4">
-    <h2 id={`settings-${id}-heading`} className={cn(
-      "mb-3 text-base font-semibold",
+    <h3 id={`settings-${id}-heading`} className={cn(
+      "border-b border-border bg-background/60 px-4 py-2.5 text-sm font-semibold sm:px-5",
       id === "danger" ? "text-destructive" : "text-foreground",
-    )}>{title}</h2>
-    <Panel variant="workspace" flush data-slot="settings-group" className={cn(
-      "divide-y divide-border",
-      id === "danger" ? "border-destructive" : "border-border-strong",
-    )}>{children}</Panel>
+    )}>{title}</h3>
+    <div data-slot="settings-group" className="divide-y divide-border">{children}</div>
   </section>
 ));
 SettingsSection.displayName = "SettingsSection";
 
-/** Shared label/value surface for all settings, including the inline Guide. */
+/** A plain label/control row; no nested card, label fill or vertical borders. */
 export function SettingRow({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
-    <div data-slot="settings-row" className="grid min-w-0 @[48rem]/vault-settings:grid-cols-[11rem_minmax(0,1fr)]">
-      <div data-slot="settings-label" className="min-w-0 border-b border-border bg-background px-4 py-3 text-sm font-medium text-foreground @[48rem]/vault-settings:border-b-0 @[48rem]/vault-settings:border-r @[48rem]/vault-settings:py-4">
+    <div data-slot="settings-row" className="grid min-w-0 gap-2 px-4 py-4 sm:px-5 @[48rem]/vault-settings:grid-cols-[11rem_minmax(0,1fr)] @[48rem]/vault-settings:gap-x-8">
+      <div data-slot="settings-label" className="min-w-0 text-sm font-medium leading-6 text-foreground">
         {label}
       </div>
-      <div data-slot="settings-value" className="min-w-0 bg-surface p-4">
-        <div className="w-full min-w-0 max-w-4xl">{children}</div>
+      <div data-slot="settings-value" className="min-w-0">
+        <div className="w-full min-w-0 max-w-3xl">{children}</div>
       </div>
     </div>
   );

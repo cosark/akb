@@ -186,9 +186,9 @@ describe("SkillSection", () => {
     // Anchor for the canonical guide-management section.
     expect(document.getElementById("skill")).toBeTruthy();
     const sectionHeader = screen.getByRole("heading", { name: "Vault guide" });
-    expect(sectionHeader).toHaveClass("text-base", "font-semibold");
+    expect(sectionHeader).toHaveClass("text-sm", "font-semibold");
     expect(sectionHeader.nextElementSibling).toHaveAttribute("data-slot", "settings-group");
-    expect(sectionHeader.nextElementSibling).toHaveClass("border-border-strong");
+    expect(sectionHeader.nextElementSibling).not.toHaveClass("border-border-strong");
     expect(sectionHeader).not.toHaveClass("bg-surface-2/55");
     expect(screen.getByText(/Stored body/)).toBeTruthy();
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();

@@ -298,7 +298,7 @@ export function SkillSection({
           ) : (
             <>
               {!expanded && (
-                <div className="mb-3 rounded-[var(--radius-sm)] border border-border bg-background px-3 py-2.5">
+                <div className="mb-3">
                   <p className="line-clamp-2 text-sm leading-relaxed text-foreground-muted">
                     {guideExcerpt(doc.content) || "No instructions yet."}
                   </p>
@@ -317,7 +317,7 @@ export function SkillSection({
                 )}
                 <DropdownMenu.Root modal={false}>
                   <DropdownMenu.Trigger asChild>
-                    <Button variant="outline" size="icon" aria-label="Guide options" className="h-10 w-10 sm:h-8 sm:w-8" disabled={busy || saving}>
+                    <Button variant="ghost" size="icon" aria-label="Guide options" className="h-10 w-10 sm:h-8 sm:w-8" disabled={busy || saving}>
                       <MoreHorizontal className="h-4 w-4" aria-hidden />
                     </Button>
                   </DropdownMenu.Trigger>

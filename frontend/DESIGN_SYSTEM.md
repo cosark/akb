@@ -638,20 +638,24 @@ an `sr-only` summary, never the only signal.
   and section changes guard unsaved edits or newly generated secrets; pending
   writes block those actions. Nested confirmations close before their parent.
   Restore focus to the invoking control and never persist token secrets.
-  Vault Settings is one compact settings sheet: General, Access, Vault guide,
+  Vault Settings uses the Members/Public links workspace family: the same
+  `WorkspaceSectionHeader`, route-owned gutters and one bounded workspace Panel.
+  The visible Settings heading is 16px with its quiet tonal icon; an archived
+  badge appears only when applicable. Inside the ledger: General, Access, Vault guide,
   then owner-only Danger zone. Do not add category tabs, another navigation
   sidebar, a permanent context column, repeated title/description blocks or
   explanatory filler cards. Existing `#general`, `#access`, `#skill`, and
   `#danger` links scroll only the active content scroll surface to their section;
-  they never hide or remount other forms. Use 12/20/24px responsive side padding,
-  16px semibold section headings outside one quiet outlined group per section.
-  Use the shared SettingsSection/SettingRow primitives: a shadow-free workspace
-  Panel, neutral strong border and subtle background label cells beside white
-  surface value cells. Separate rows with hairlines; on narrow screens labels
-  stack above values with a horizontal divider. Danger uses a restrained red
-  outline/title, never a red-filled content slab. At 48rem of actual
+  they never hide or remount other forms. Use the same 12/16/20px responsive
+  side padding and 20/24px top padding as the roster and publication ledger.
+  One route viewport scrolls the whole page; Settings owns no nested scroller.
+  The shared SettingsSection/SettingRow primitives provide small semibold
+  subsection strips, hairline row dividers and plain label/control columns.
+  Label cells have no separate background fill or vertical border, and sections
+  add no nested cards. Danger uses a restrained red title and explicit action,
+  with the same neutral group boundaries. At 48rem of actual
   sheet width, align each setting's label in an 11rem column and its value in a
-  shrinkable column; keep the value/editor at no more than 56rem, with related
+  shrinkable column; keep the value/editor at no more than 48rem, with related
   actions nearby. Stack labels above controls on narrow screens.
   General has a labelled three-line description input and a copyable permanent
   address row. Ownership, dates and inventory belong to Overview. Access uses
@@ -659,8 +663,8 @@ an `sr-only` summary, never the only signal.
   Everyone can view / Everyone can edit, not oversized choice cards. The selected
   option's help names the actual audience: people signed in to this AKB, not
   anonymous visitors. Avoid technical labels such as world-writable in the
-  confirmation; explicitly retain the ability to delete content. Each compact choice has a small
-  radius and visible border; selection adds teal emphasis without removing the
+  confirmation; explicitly retain the ability to delete content. The three
+  choices share one bordered, divided list; selection adds teal emphasis without removing the
   native radio indicator. A footer divider separates member/sharing shortcuts
   from policy controls. Keep the selected policy's effect
   visible, explicitly warn that public writing includes deletion, and preserve
@@ -670,7 +674,7 @@ an `sr-only` summary, never the only signal.
   by a polite saved status; do not reserve disabled action footers. Serialize
   Description, Access and Guide writes. Saving must not overwrite another scope's
   saved snapshot or pull focus away from another field on completion.
-  Guide starts as a two-line excerpt on a quiet inset surface, visually separate
+  Guide starts as a two-line excerpt within its plain row, visually separate
   from Preview guide and owner-only Edit guide. Preview guide opens the same
   route-backed document reader as Overview and preserves this Settings entry,
   all draft scopes, their revision pins and return focus. Only an exact retained

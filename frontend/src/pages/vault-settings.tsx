@@ -8,6 +8,7 @@ import {
   Lock,
   RotateCcw,
   Save,
+  Settings,
   Trash2,
   Users,
 } from "lucide-react";
@@ -28,8 +29,10 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CopyButton } from "@/components/ui/copy-button";
 import { Label } from "@/components/ui/label";
 import { PageShell } from "@/components/ui/page-shell";
+import { Panel } from "@/components/ui/panel";
 import { SettingRow, SettingsSection } from "@/components/ui/settings-section";
 import { Textarea } from "@/components/ui/textarea";
+import { WorkspaceSectionHeader } from "@/components/ui/workspace-section-header";
 import { DeleteVaultDialog } from "@/components/delete-vault-dialog";
 import { useVaultRefresh } from "@/contexts/vault-refresh-context";
 import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
@@ -344,10 +347,13 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
     <PageShell
       header={null}
       contentWidth="full"
-      className="min-h-full bg-surface xl:h-full xl:min-h-0"
-      contentClassName="min-h-full xl:flex xl:h-full xl:min-h-0 xl:flex-col"
     >
       <h1 className="sr-only">Settings</h1>
+      <WorkspaceSectionHeader
+        id="vault-settings-heading" icon={Settings} title="Settings"
+        testId="vault-settings-header"
+        right={verified && info?.is_archived ? <Badge variant="default">Archived</Badge> : undefined}
+      />
       {info && !verified && (
         loadError ? (
           <Alert variant="destructive">
@@ -359,11 +365,12 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
       <div
         hidden={!!info && !verified}
         inert={!!info && !verified}
-        className="flex min-h-full min-w-0 flex-col xl:min-h-0 xl:flex-1"
+        className="min-w-0"
         data-testid="settings-workspace-shell"
       >
+        <Panel variant="workspace">
         {info && !canEdit && (
-          <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-3 text-sm text-foreground-muted sm:px-5 lg:px-6">
+          <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3 text-sm text-foreground-muted sm:px-5">
             <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden />
             <span>Read only — only the vault owner can change settings.</span>
             {info.role_source === "public" && <Badge variant="info-outline">Access via public policy</Badge>}
@@ -372,18 +379,18 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
         <div
           ref={settingsMainRef}
           data-testid="settings-workspace-frame"
-          className="@container/vault-settings rail-scroll min-w-0 flex-1 px-3 py-4 sm:px-5 lg:px-6 xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain"
+          className="@container/vault-settings min-w-0"
         >
-          {verified && busy && <p role="status" className="mb-4 text-sm text-foreground-muted">Saving changes…</p>}
+          {verified && busy && <p role="status" className="px-4 py-3 text-sm text-foreground-muted sm:px-5">Saving changes…</p>}
           {loadError && (
-            <Alert variant="destructive">
+            <Alert variant="destructive" className="m-4 sm:m-5">
               {loadError}
               <div className="mt-3"><Button variant="outline" size="sm" onClick={() => loadInfo(name)}>Try again</Button></div>
             </Alert>
           )}
-          {loading && <SettingsLoadingState />}
+          {loading && <div className="p-4 sm:p-5"><SettingsLoadingState /></div>}
           {info && (
-            <div className="space-y-8 pb-6">
+            <div className="divide-y divide-border">
               <SettingsSection id="general" title="General">
                 <SettingRow label={<Label htmlFor="vault-description">Description</Label>}>
                   <div data-testid="settings-general-editor">
@@ -421,10 +428,10 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
               <SettingsSection id="access" title="Access">
                 <SettingRow label={<>Who can access<p className="mt-1 text-xs font-normal text-foreground-muted">Sign-in required</p></>}>
                   <div data-testid="settings-access-editor">
-                    <fieldset role="radiogroup" aria-label="Who can access" aria-describedby="vault-access-help" disabled={!canEdit || busy} className="grid max-w-2xl gap-2">
+                    <fieldset role="radiogroup" aria-label="Who can access" aria-describedby="vault-access-help" disabled={!canEdit || busy} className="grid max-w-2xl divide-y divide-border overflow-hidden rounded-[var(--radius-md)] border border-border">
                       {PUBLIC_ORDER.map(value => {
                         return (
-                          <label key={value} className={`flex min-h-11 items-center gap-3 rounded-[var(--radius-sm)] border px-3 py-2 text-sm ${publicAccess === value ? "border-primary bg-surface-selected text-surface-selected-foreground" : "border-border bg-surface text-foreground hover:border-border-strong hover:bg-surface-hover"} ${canEdit && !busy ? "cursor-pointer" : ""}`}>
+                          <label key={value} className={`flex min-h-11 items-center gap-3 px-3 py-2 text-sm ${publicAccess === value ? "bg-surface-selected text-surface-selected-foreground" : "bg-surface text-foreground hover:bg-surface-hover"} ${canEdit && !busy ? "cursor-pointer" : ""}`}>
                             <input
                               type="radio" name="vault-default-access" value={value} checked={publicAccess === value}
                               onChange={() => { setPublicAccess(value); setSavedScope(null); }}
@@ -494,6 +501,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
             </div>
           )}
         </div>
+        </Panel>
       </div>
 
       <span className="sr-only" role="status" aria-live="polite">
