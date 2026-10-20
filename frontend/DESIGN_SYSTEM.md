@@ -736,9 +736,11 @@ an `sr-only` summary, never the only signal.
   without silently clearing the query. Collection rows and their overflow
   triggers have a 36px desktop baseline, and both lists use the same rail scrollbar.
   Each collection/resource row owns one continuous hover, focus and selected
-  surface. Its title control fills the row; the small rounded overflow trigger
+  surface. Its title control fills the row; the icon-only overflow trigger
   floats at the right edge instead of consuming a separate flex column. Reserve
   text padding so long names never run under it or shift when it appears.
+  The trigger stays transparent, including on hover and while its menu is open;
+  icon color and a keyboard focus ring provide its individual feedback.
   Fine-pointer desktop rows reveal tools on row hover or focus-within; the
   active row and open menu keep theirs visible. Touch/coarse-pointer and narrow
   layouts keep tools visible with 44px targets and rows. Menu focus and closure

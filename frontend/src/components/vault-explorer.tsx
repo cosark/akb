@@ -932,9 +932,9 @@ interface RowProps {
 /** Row tools overlay the full-width title surface without taking a flex slot. */
 function explorerRowActions(active: boolean) {
   return cn(
-    "absolute right-1 top-1/2 z-10 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-[var(--radius-sm)] bg-transparent text-foreground-muted opacity-100 pointer-events-auto transition-[opacity,color,background-color] hover:bg-surface-hover hover:text-link focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring max-sm:right-0 max-sm:h-11 max-sm:w-11 pointer-coarse:right-0 pointer-coarse:h-11 pointer-coarse:w-11",
+    "absolute right-1 top-1/2 z-10 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-[var(--radius-sm)] bg-transparent text-foreground-muted opacity-100 pointer-events-auto transition-[opacity,color] hover:bg-transparent hover:text-link focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring max-sm:right-0 max-sm:h-11 max-sm:w-11 pointer-coarse:right-0 pointer-coarse:h-11 pointer-coarse:w-11",
     !active && "sm:pointer-fine:pointer-events-none sm:pointer-fine:opacity-0",
-    "group-hover/explorer-row:pointer-events-auto group-hover/explorer-row:opacity-100 group-focus-within/explorer-row:pointer-events-auto group-focus-within/explorer-row:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100 data-[state=open]:bg-surface-active pointer-coarse:pointer-events-auto pointer-coarse:opacity-100",
+    "group-hover/explorer-row:pointer-events-auto group-hover/explorer-row:opacity-100 group-focus-within/explorer-row:pointer-events-auto group-focus-within/explorer-row:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100 data-[state=open]:bg-transparent data-[state=open]:text-link pointer-coarse:pointer-events-auto pointer-coarse:opacity-100",
   );
 }
 
