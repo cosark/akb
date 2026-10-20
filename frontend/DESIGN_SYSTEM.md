@@ -955,7 +955,7 @@ an `sr-only` summary, never the only signal.
   identity. Keep one semantic `h1#doc-title` without a second title card, and
   preserve authored body headings and their anchors. One full-width white/slate
   command row owns Draft, Last edited, line/byte statistics and an optional
-  labelled `Summary: …` on the left; Preview / Raw, Copy / Edit,
+  labelled `Summary ⌄` with an optional one-line excerpt on the left; Preview / Raw, Copy / Edit,
   Publish / Public link and overflow follow on the right in that order.
   The full-page reader has no second Vault section row. Preview dialogs place
   Publish / Public link in their own breadcrumb header,
@@ -972,8 +972,10 @@ an `sr-only` summary, never the only signal.
   title, commit band, or context menu. Publish keeps a
   visible text label and opens options before any public write. All commands share 14px medium type, small token
   radius and the same height: 32px above 48rem of available command space, 44px
-  below. At less than 32rem, statistics yield their space; the optional summary
-  appears only above 48rem of reader width. Above 48rem, context and tools share
+  below. At less than 32rem, statistics yield their space. Summary uses the
+  remaining metadata width: below 16rem it keeps only its label, and below
+  5.5rem it yields entirely (the full summary remains in Info).
+  Above 48rem, context and tools share
   one line; below it metadata and action groups wrap within the same surface.
   Groups remain intact, labels and touch targets are never squeezed to force
   one line. Open overflow uses selected-state tokens.
@@ -984,8 +986,11 @@ an `sr-only` summary, never the only signal.
   or invalid dates remain absent in the toolbar and say Not available in Info.
   Historical/diff views instead show Version saved from the matching history
   entry; the live metadata timestamp must never be presented as the version date.
-  The summary opens a full-text
-  dialog, and failed clipboard access offers manual copying rather than silence.
+  The summary excerpt fades at its right edge when it overflows. Intentional
+  hover or keyboard focus scans it once after 650ms, at 32px/s with a 10s minimum;
+  reduced motion keeps it static. Clicking opens a full-text anchored popover
+  without moving the article. Escape/outside click dismiss it; Escape returns
+  focus to Summary. Failed clipboard access offers manual copying rather than silence.
   Watch, Pin and Standard / Wide reading-width choices share a named
   group in overflow above the existing location/lifecycle actions. Keep exact
   permission reasons and archived/historical/diff notices visible.

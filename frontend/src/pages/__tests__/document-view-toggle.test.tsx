@@ -1309,7 +1309,7 @@ describe("DocumentPage view toggle", () => {
     );
     const statistics = screen.getByLabelText("Document statistics: 3 lines, 20 Bytes");
     const copyMarkdown = screen.getByRole("button", { name: "Copy markdown" });
-    expect(summary).toHaveTextContent("Summary:");
+    expect(summary).toHaveTextContent("Summary");
     const readingTools = screen.getByRole("group", { name: "Document reading tools" });
     expect(readingTools).toContainElement(statistics);
     expect(readingTools).toContainElement(copyMarkdown);

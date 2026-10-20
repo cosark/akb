@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn, timeAgo } from "@/lib/utils";
 import { formatByteSize, formatLineCount, getDocumentStats } from "@/lib/document-statistics";
+
+export { DocumentSummary } from "@/components/document-summary";
 
 export function DocumentTimestamp({ value, label = "Last edited", compact = false }: {
   value?: string | null; label?: string; compact?: boolean;
@@ -31,23 +33,6 @@ export function DocumentStatistics({ content, labelled = true }: { content: stri
   return <span aria-label={labelled ? `Document statistics: ${label}` : undefined} className="shrink-0 whitespace-nowrap text-xs tabular-nums text-foreground-muted">
     {formatLineCount(lineCount)} <span aria-hidden>·</span> {formatByteSize(byteCount)}
   </span>;
-}
-
-export function DocumentSummary({ summary }: { summary?: string | null }) {
-  const [open, setOpen] = useState(false);
-  if (!summary) return null;
-  return <Dialog open={open} onOpenChange={setOpen}>
-    <DialogTrigger asChild>
-      <button type="button" aria-label="Read document summary"
-        className="block max-w-full truncate rounded-[var(--radius-sm)] text-left text-xs text-foreground-muted hover:text-link focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        <span className="font-medium">Summary:</span> {summary}
-      </button>
-    </DialogTrigger>
-    <DialogContent>
-      <DialogTitle>Document summary</DialogTitle>
-      <DialogDescription className="whitespace-pre-wrap break-words leading-relaxed">{summary}</DialogDescription>
-    </DialogContent>
-  </Dialog>;
 }
 
 export function DocumentIconButton({ label, children, ...props }: Omit<ComponentProps<typeof Button>, "variant" | "size" | "aria-label"> & { label: string }) {

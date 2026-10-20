@@ -84,6 +84,23 @@ export const DocumentRegularNote: Story = {
   },
 };
 
+export const DocumentLongSummary: Story = {
+  name: "Document read / long summary preview",
+  parameters: {
+    router: { initialEntries: ["/vault/akb/doc/notes%2Frelease.md"] },
+    msw: {
+      handlers: [
+        ...documentPageHandlers,
+        http.get(`${API}/documents/akb/notes%2Frelease.md`, () => HttpResponse.json({
+          ...regularDoc,
+          summary: "This release improves workspace sign-in, document permissions and file upload recovery. Profile photos can be added, replaced and removed. The rollout preserves existing accounts and documents, and verifies reading, editing, revision history and search. This note records the deployment sequence, verification results and remaining follow-up checks.",
+        })),
+      ],
+    },
+  },
+  render: () => <AkbRouteTree />,
+};
+
 export const DocumentLoadError: Story = {
   name: "Document read / load error",
   parameters: {

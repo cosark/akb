@@ -179,6 +179,9 @@
   --duration-fast: 120ms;
   --duration-base: 220ms;
   --duration-slow: 420ms;
+  --duration-summary-delay: 650ms;
+  --duration-summary-min: 10s;
+  --duration-summary-per-pixel: 31.25ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
@@ -850,6 +853,31 @@ body::before {
 /* Reader commands use the available workspace width, not the viewport. Keep
    modes/actions on one metric even when the navigation rails are expanded. */
 .document-command-inner { --reader-control-size: 2.75rem; }
+.document-summary-space { container: document-summary / inline-size; flex: 1; min-width: 0; }
+.document-summary { display: none; min-width: 0; max-width: 26.25rem; padding-left: .75rem; border-left: 1px solid var(--color-border); }
+.document-summary-trigger { height: var(--reader-control-size, 2rem); }
+.document-summary-excerpt { display: none; flex: 1; min-width: 0; overflow: hidden; text-align: start; }
+.document-summary-excerpt[data-overflow] { mask-image: linear-gradient(to right, black calc(100% - 2rem), transparent); }
+.document-summary-track { display: block; width: max-content; white-space: nowrap; }
+.document-summary-chevron { transition: transform var(--duration-fast) var(--ease-out); }
+.document-summary-trigger[data-state="open"] .document-summary-chevron { transform: rotate(180deg); }
+@container document-summary (min-width: 5.5rem) {
+  .document-summary { display: flex; }
+}
+@container document-summary (min-width: 16rem) {
+  .document-summary-excerpt { display: block; }
+}
+/* A deliberate hover/focus scans once; opening or leaving resets it. CSS owns
+   motion so reduced-motion never starts a long-running transform. */
+@media (prefers-reduced-motion: no-preference) {
+  .document-summary-trigger[data-state="closed"]:is(:hover, :focus-visible) .document-summary-excerpt[data-overflow] .document-summary-track {
+    animation: document-summary-pan max(var(--duration-summary-min), calc(var(--summary-overflow) * var(--duration-summary-per-pixel))) linear var(--duration-summary-delay) 1 forwards;
+  }
+}
+@keyframes document-summary-pan {
+  from { transform: translateX(0); }
+  to { transform: translateX(var(--summary-pan-distance)); }
+}
 .document-unified-toolbar .document-command-inner { padding-block: .5rem; }
 .document-unified-toolbar [data-slot="resource-command-meta"] { flex-wrap: nowrap; }
 .document-unified-toolbar [data-slot="resource-command-actions"] { flex-shrink: 0; }

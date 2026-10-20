@@ -1555,7 +1555,7 @@ function DocumentPageContent({
               <DocumentTimestamp value={isHistorical || isDiffMode ? selectedHistoryEntry?.date : lastEditedAt}
                 label={isHistorical || isDiffMode ? "Version saved" : "Last edited"} compact />
               <span className="hidden @min-[32rem]/resource-commands:inline-flex"><DocumentStatistics content={doc.content || ""} /></span>
-              <span className="hidden min-w-0 flex-1 @[48rem]/reader:block"><DocumentSummary summary={doc.summary} /></span>
+              {doc.summary?.trim() && <div className="document-summary-space"><DocumentSummary summary={doc.summary} /></div>}
             </div>
           )}
         >
