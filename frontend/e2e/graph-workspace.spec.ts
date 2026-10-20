@@ -982,3 +982,30 @@ test.describe("flat map (the default view)", () => {
     await expect.poll(() => pixelsFor("--color-cat-1"), { message: "Its neighbour is drawn in the 1-hop colour" }).toBeGreaterThan(15);
   });
 });
+
+test("strong links only keeps a focus's own context and fades its body links", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const scene = fixtureScene(30, 24);
+  const [incident, cluster, service, owner, sibling, runbook] = scene.nodes;
+  const around = {
+    nodes: [incident, cluster, service, owner, sibling, runbook],
+    edges: [
+      { source: incident.uri, target: cluster.uri, relation: "related_to", kind: "explicit" },
+      { source: incident.uri, target: service.uri, relation: "related_to", kind: "explicit" },
+      { source: incident.uri, target: owner.uri, relation: "related_to", kind: "explicit" },
+      { source: sibling.uri, target: cluster.uri, relation: "related_to", kind: "explicit" },
+      { source: incident.uri, target: runbook.uri, relation: "links_to", kind: "implicit" },
+    ],
+  };
+  await fixture(page, scene, { dimension: 2, onGraph: async route => { await route.fulfill({ json: around }); return true; } });
+  await page.goto("/vault/fixture/graph?hops=2&entry=" + encodeURIComponent(incident.uri));
+  await graphReady(page, 5);
+  const toggle = page.getByRole("button", { name: "Strong links only", exact: true });
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("graph-canvas")).toHaveAccessibleName(/: 5 resources, 4 relationships/);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(page).toHaveURL(/links=all/);
+  await expect(page.getByTestId("graph-canvas")).toHaveAccessibleName(/: 6 resources, 5 relationships/);
+});
+

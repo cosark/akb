@@ -9,6 +9,7 @@ import {
   degreeMap,
   hopDistances,
   impactCones,
+  strongNeighborhood,
 } from "../use-graph-data";
 import { docUri } from "@/lib/uri";
 import { ALL_RELATIONS, DEFAULT_VIEW, type GraphNode, type GraphEdge } from "../graph-types";
@@ -435,5 +436,41 @@ describe("hopDistances", () => {
   it("is empty without a start and leaves unreachable resources out", () => {
     expect(hopDistances([edge("a", "b")], undefined).size).toBe(0);
     expect(hopDistances([edge("a", "b"), edge("x", "y")], "a").has("x")).toBe(false);
+  });
+});
+
+describe("strongNeighborhood", () => {
+  const node = (uri: string): GraphNode => ({ uri, name: uri, kind: "document" });
+  const strong = (source: string, target: string, relation: GraphEdge["relation"] = "related_to"): GraphEdge => ({ source, target, relation, kind: "explicit" });
+  const weak = (source: string, target: string): GraphEdge => ({ source, target, relation: "links_to", kind: "implicit" });
+  // An incident with its context, its postmortem, a sibling incident sharing the cluster, and body links.
+  const payload = {
+    nodes: ["inc", "inc2", "cluster", "node", "service", "owner", "pm", "runbook", "secondary", "inc-old"].map(node),
+    edges: [
+      strong("inc", "cluster"), strong("inc", "node"), strong("inc", "service"), strong("inc", "owner"),
+      strong("pm", "inc", "derived_from"), strong("pm", "service"),
+      strong("inc2", "cluster"), strong("inc2", "service"),
+      weak("inc", "runbook"), weak("inc", "secondary"), weak("inc", "inc-old"), weak("runbook", "inc2"),
+    ],
+  };
+
+  it("keeps an incident's own context and its postmortem, not the other incidents of the same cluster", () => {
+    const scene = strongNeighborhood(payload, "inc", 3);
+    expect(scene.strong).toBe(true);
+    expect(new Set(scene.nodes.map(n => n.uri))).toEqual(new Set(["inc", "cluster", "node", "service", "owner", "pm", "runbook", "secondary", "inc-old"]));
+    expect([...scene.weak].sort()).toEqual(["inc-old", "runbook", "secondary"]);
+    expect(scene.edges.some(e => e.source === "runbook" && e.target === "inc2")).toBe(false);
+  });
+
+  it("walks a postmortem to its incidents and their context, within the hop limit", () => {
+    expect(new Set(strongNeighborhood(payload, "pm", 1).nodes.map(n => n.uri))).toEqual(new Set(["pm", "inc", "service"]));
+    expect(new Set(strongNeighborhood(payload, "pm", 2).nodes.map(n => n.uri))).toEqual(new Set(["pm", "inc", "service", "cluster", "node", "owner"]));
+  });
+
+  it("leaves a map without explicit relations unchanged", () => {
+    const plain = { nodes: payload.nodes, edges: payload.edges.filter(e => e.kind !== "explicit") };
+    const scene = strongNeighborhood(plain, "inc", 2);
+    expect(scene.strong).toBe(false);
+    expect(scene.nodes).toHaveLength(plain.nodes.length);
   });
 });

@@ -322,6 +322,15 @@ describe("GraphToolbar commands", () => {
     expect(props.onChange).toHaveBeenCalledWith(expect.objectContaining({ entry: documentNode.uri, hops: 2, selected: documentNode.uri }));
   });
 
+  it("toggles strong links around a focus", () => {
+    const { props } = setup({ view: { ...DEFAULT_VIEW, entry: documentNode.uri } });
+    const toggle = screen.getByRole("button", { name: "Strong links only" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(toggle);
+    const update = props.onChange.mock.calls.at(-1)![0];
+    expect((typeof update === "function" ? update({ ...DEFAULT_VIEW, entry: documentNode.uri }) : update).links).toBe("all");
+  });
+
   it("names the colour of each hop up to the chosen depth around a focus", () => {
     const { rerender } = setup({ view: { ...DEFAULT_VIEW, entry: documentNode.uri, hops: 2 } });
     const legend = screen.getByLabelText("Hop colours");

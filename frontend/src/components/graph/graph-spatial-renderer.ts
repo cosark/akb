@@ -49,6 +49,7 @@ export class SpatialGraphRenderer {
   private drag?: { uri: string; pointerId: number; plane: Plane; grab: Vector3; moved: boolean };
   private dragFrame = 0;
   private hops?: Map<string, number>;
+  private weak = new Set<string>();
   private colors: Record<string, string> = {};
 
   constructor(private host: HTMLDivElement, private callbacks: Callbacks, private dimension: GraphDimension = 2) {
@@ -179,7 +180,7 @@ export class SpatialGraphRenderer {
   }
 
   /** Distance from the focused resource; while set, a resource's colour is its distance and its shape its kind. */
-  setHops(hops: Map<string, number> | undefined) { this.hops = hops; this.rebuild(); }
+  setHops(hops: Map<string, number> | undefined, weak: Set<string> = new Set()) { this.hops = hops; this.weak = weak; this.rebuild(); }
 
   theme() {
     const css = getComputedStyle(document.documentElement);
@@ -223,6 +224,7 @@ export class SpatialGraphRenderer {
         const color = new Color(this.colors[this.hops
           ? HOP_TOKENS[Math.min(hop ?? HOP_TOKENS.length - 1, HOP_TOKENS.length - 1)]
           : kind === "document" ? "cat-1" : kind === "table" ? "cat-3" : "cat-4"]);
+        if (this.weak.has(node.uri) && !active) color.lerp(background, 0.55);
         if (this.selected && !active && !nearby) color.lerp(background, 0.65);
         mesh.setColorAt(i, color);
       });
