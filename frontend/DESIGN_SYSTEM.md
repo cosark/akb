@@ -1022,9 +1022,11 @@ an `sr-only` summary, never the only signal.
   Mode tooltips require a deliberate 600ms pointer hover. Focus and keyboard
   selection never open a popup; selecting either mode dismisses its tooltip.
   Accessible radio names and checked state always identify the active mode.
-  Controls use 32px targets above 48rem of command space and 44px below. Below
+  Controls use 28px targets and 14px glyphs above 48rem of command space, with
+  44px targets and 16px glyphs below. The command row uses 4px vertical padding
+  and quiet 12px timestamps. Below
   40rem, timestamp/status form a quiet second line so the full toolbar fits 320px.
-  Summary is ordinary muted 14px text directly after the first authored heading,
+  Summary is ordinary muted 13px / 1.6 text directly after the first authored heading,
   or before a headingless body, with the same centered reading measure. Do not
   add a Summary label, card, icon disclosure or duplicate title. Use the shared
   viewer's presentation-only `afterLeadingHeading` slot: never split/rewrite
@@ -1048,7 +1050,12 @@ an `sr-only` summary, never the only signal.
   failed clipboard access retains its manual-copy dialog and return focus.
   Reading width has no user-facing control. Preview, Raw and loading use one
   automatic centered 52rem measure with container-responsive 16–32px side insets
-  and 20px block padding. The first authored block has no extra top margin.
+  and 16px block padding. The first authored block has no extra top margin.
+  Reading headings use the same Pretendard family as the app, weight 550,
+  with a 22 / 18 / 16px scale (20px primary headings on mobile) and 24px / 8px
+  block margins. Mode controls keep an inset focus ring so keyboard focus does
+  not inflate the compact outline control. The summary row
+  is 28px on wide readers, with 20px separation before the authored body.
   Body text uses 16px / 1.65. Prose, headings, tables, images and code share the
   same measure; wide code/tables scroll in their own keyboard-accessible regions.
   Target the actual `.ProseMirror` / `.tableWrapper` DOM. Images retain aspect
