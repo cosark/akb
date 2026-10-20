@@ -1,13 +1,14 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { Box, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Box, type LucideIcon } from "lucide-react";
 import { TooltipText } from "@/components/ui/tooltip-text";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useResourceNavigation } from "@/contexts/resource-navigation-context";
 
 /** Shared location grammar for Vault pages and their resource readers. */
 export function VaultBreadcrumb({
-  vault, title, kind, icon: KindIcon, children, className, ariaLabel = "Current page",
+  vault, title, kind, icon: KindIcon, children, className, ariaLabel = "Current page", backToVault = false,
 }: {
   vault: string;
   title?: string;
@@ -17,6 +18,8 @@ export function VaultBreadcrumb({
   children?: ReactNode;
   className?: string;
   ariaLabel?: string;
+  /** Give focused Vault tasks an explicit return affordance on their parent link. */
+  backToVault?: boolean;
 }) {
   const { requestNavigation } = useResourceNavigation();
   const isVaultRoot = title === undefined && !children;
@@ -33,18 +36,22 @@ export function VaultBreadcrumb({
       }}>
       <ol className="flex min-w-0 items-center gap-1.5">
         <li className={cn("flex min-w-0 items-center", isVaultRoot ? "max-w-full" : "max-w-[30%]", kind && "@max-xs/resource-location:max-w-none @max-xs/resource-location:shrink-0")}>
-          <Link
+          <TooltipProvider delayDuration={300}><Tooltip><TooltipTrigger asChild><Link
             to={`/vault/${encodeURIComponent(vault)}`}
-            title={vault}
+            title={backToVault ? undefined : vault}
+            aria-label={backToVault ? `Back to ${vault}` : undefined}
             aria-current={isVaultRoot ? "page" : undefined}
             className={cn("inline-flex min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] text-foreground-muted transition-token hover:text-link focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
               kind && "@max-xs/resource-location:h-11 @max-xs/resource-location:w-9 @max-xs/resource-location:justify-center",
               isVaultRoot && "font-semibold text-foreground",
+              backToVault && "-ml-2 min-h-11 min-w-11 gap-2 px-2 text-link hover:bg-surface-hover hover:text-link-hover",
             )}
           >
-            <Box className="h-4 w-4 shrink-0" aria-hidden />
+            {backToVault ? <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden /> : <Box className="h-4 w-4 shrink-0" aria-hidden />}
             <span className={cn("truncate", kind && "@max-xs/resource-location:sr-only")}>{vault}</span>
-          </Link>
+          </Link></TooltipTrigger>
+            {backToVault && <TooltipContent side="bottom" className="max-w-[min(90vw,28rem)] break-words">Back to {vault}</TooltipContent>}
+          </Tooltip></TooltipProvider>
         </li>
         {children}
         {title !== undefined && <li className="flex min-w-0 flex-1 items-center gap-1.5">

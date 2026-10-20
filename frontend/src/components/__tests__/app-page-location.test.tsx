@@ -31,9 +31,10 @@ describe("App page location", () => {
   ])("keeps named Vault section %s in the top location trail", (tail, label) => {
     render(<MemoryRouter initialEntries={[`/vault/%ED%8C%80%20Vault${tail}`]}><AppPageLocation /></MemoryRouter>);
     const location = screen.getByRole("navigation", { name: "Current page" });
-    const vault = within(location).getByRole("link", { name: "팀 Vault" });
+    const backToVault = ["/graph", "/publications", "/members", "/settings"].includes(tail);
+    const vault = within(location).getByRole("link", { name: backToVault ? "Back to 팀 Vault" : "팀 Vault" });
     expect(vault).toHaveAttribute("href", "/vault/%ED%8C%80%20Vault");
-    expect(vault.querySelector(".lucide-box")).toHaveAttribute("aria-hidden", "true");
+    expect(vault.querySelector(backToVault ? ".lucide-arrow-left" : ".lucide-box")).toHaveAttribute("aria-hidden", "true");
     const current = tail ? within(location).getByText(label) : vault;
     expect(current).toHaveAttribute("aria-current", "page");
     if (!tail) expect(location).toHaveTextContent(/^팀 Vault$/);
@@ -56,7 +57,7 @@ describe("App page location", () => {
       return <AppPageLocation />;
     }
     render(<MemoryRouter initialEntries={["/vault/team/settings"]}><ResourceNavigationProvider><GuardedLocation /></ResourceNavigationProvider></MemoryRouter>);
-    await user.click(screen.getByRole("link", { name: "team" }));
+    await user.click(screen.getByRole("link", { name: "Back to team" }));
     expect(guard).toHaveBeenNthCalledWith(1, "/vault/team");
     expect(guard).toHaveBeenCalledTimes(allowed ? 2 : 1);
     const location = within(screen.getByRole("navigation", { name: "Current page" }));
@@ -71,7 +72,7 @@ describe("App page location", () => {
       return <AppPageLocation />;
     }
     render(<MemoryRouter initialEntries={["/vault/team/settings"]}><ResourceNavigationProvider><GuardedLocation /></ResourceNavigationProvider></MemoryRouter>);
-    const vault = screen.getByRole("link", { name: "team" });
+    const vault = screen.getByRole("link", { name: "Back to team" });
     expect(vault).toHaveAttribute("href", "/vault/team");
     fireEvent.click(vault, { ctrlKey: true });
     expect(guard).not.toHaveBeenCalled();

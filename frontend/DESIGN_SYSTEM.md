@@ -270,6 +270,13 @@ an `sr-only` summary, never the only signal.
   Breadcrumbs contain no page-menu chevron, Navigate button or destination
   dropdown. Overview owns four
   scoped page links in its summary: Graph, Public links, Members and Settings.
+  On those four task pages, the parent Vault link becomes a quiet teal
+  `ArrowLeft / Vault name` return affordance, followed by the passive current
+  page label. Its entire 44px-high target returns to that Vault's canonical root,
+  including on direct visits; it does not replay arbitrary browser history.
+  Hover/focus reveals `Back to {Vault name}`. Keep native modified clicks,
+  keyboard focus and the workspace's unsaved-change guards. This replaces the
+  parent link's Box glyph rather than adding another button or navigation row.
   No Overview self-link or duplicate Search is added. A user returns to Overview
   through the Vault crumb or Vault list before selecting another destination. An
   ordinary page label is preceded by a quiet 16px Lucide page icon, matching its sidebar entry;
@@ -278,7 +285,8 @@ an `sr-only` summary, never the only signal.
   displacing account actions. Resource readers and focused Vault tasks add no
   section-navigation row. Content exploration still keeps Collections; focused
   tasks omit that explorer independently of page navigation. All named
-  Vault pages share `VaultBreadcrumb` with resource readers: one leading Box,
+  Vault pages share `VaultBreadcrumb` with resource readers: one leading Box
+  (the four focused tasks use the return arrow described above),
   text-only path and current label, matching separators, spacing and emphasis.
   Ordinary Vault sections do not repeat their tab icon in the trail; only
   Document / File / Table titles have a trailing kind marker, including loading
