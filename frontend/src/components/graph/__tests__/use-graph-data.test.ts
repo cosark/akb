@@ -10,9 +10,10 @@ import {
   hopDistances,
   impactCones,
   strongNeighborhood,
+  strongerOnly,
 } from "../use-graph-data";
 import { docUri } from "@/lib/uri";
-import { ALL_RELATIONS, DEFAULT_VIEW, type GraphNode, type GraphEdge } from "../graph-types";
+import { ALL_RELATIONS, DEFAULT_VIEW, edgeStrength, type GraphNode, type GraphEdge } from "../graph-types";
 
 describe("apiToPayload", () => {
   it("preserves server degree, traversal depth, and relation source without guessing missing values", () => {
@@ -478,5 +479,40 @@ describe("strongNeighborhood", () => {
     const scene = strongNeighborhood(plain, "inc", 2);
     expect(scene.strong).toBe(false);
     expect(scene.nodes).toHaveLength(plain.nodes.length);
+  });
+});
+
+describe("edge strength", () => {
+  it("reads the server's edge_type and falls back to provenance", () => {
+    expect(edgeStrength({ kind: "explicit" })).toBe("strong");
+    expect(edgeStrength({ kind: "implicit" })).toBe("weak");
+    expect(edgeStrength({})).toBe("weak");
+    expect(edgeStrength({ kind: "explicit", edge_type: "weak" })).toBe("weak");
+    expect(edgeStrength({ kind: "implicit", edge_type: "strong" })).toBe("strong");
+  });
+
+  it("keeps one line per pair when a strong connection repeats a body link, in either direction", () => {
+    const edges: GraphEdge[] = [
+      { source: "pm", target: "cluster", relation: "related_to", kind: "explicit" },
+      { source: "pm", target: "cluster", relation: "links_to", kind: "implicit" },
+      { source: "inc", target: "pm", relation: "links_to", kind: "implicit" },
+      { source: "pm", target: "inc", relation: "derived_from", kind: "explicit" },
+      { source: "pm", target: "runbook", relation: "links_to", kind: "implicit" },
+    ];
+    expect(strongerOnly(edges).map(e => `${e.source}>${e.target}:${e.relation}`)).toEqual([
+      "pm>cluster:related_to", "pm>inc:derived_from", "pm>runbook:links_to",
+    ]);
+  });
+
+  it("applies to every visible scene and keeps the server's edge_type", () => {
+    const payload = apiToPayload({
+      nodes: [{ uri: "a", name: "A", resource_type: "document" }, { uri: "b", name: "B", resource_type: "document" }],
+      edges: [
+        { source: "a", target: "b", relation: "related_to", kind: "explicit", edge_type: "strong" },
+        { source: "b", target: "a", relation: "links_to", kind: "implicit", edge_type: "weak" },
+      ],
+    } as never);
+    expect(payload.edges.map(e => e.edge_type)).toEqual(["strong", "weak"]);
+    expect(visibleGraph(payload, DEFAULT_VIEW, new Set(), false).edges).toHaveLength(1);
   });
 });

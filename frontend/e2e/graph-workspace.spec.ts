@@ -710,7 +710,7 @@ test("following a relationship restores its hidden target to the scene", async (
 });
 
 for (const direction of ["outgoing", "incoming"] as const) {
-  test(`following ${direction} relations preserves provenance without duplicating loaded connections`, async ({ page }) => {
+  test(`following ${direction} relations shows one connection per pair without duplicating loaded connections`, async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1000 });
     const scene = fixtureScene(2, 2);
     scene.edges = scene.edges.filter(edge => edge.relation === "references");
@@ -731,20 +731,19 @@ for (const direction of ["outgoing", "incoming"] as const) {
     const canvas = page.getByTestId("graph-canvas");
     await selectFromSearch(page, start.name);
     const inspector = page.getByRole("complementary", { name: `Inspector for ${start.name}`, exact: true });
-    const labels = direction === "outgoing" ? ["Explicit relation", "Body link"] : ["Body link", "Explicit relation"];
-    await inspector.getByRole("button", { name: target.name, exact: true }).filter({ hasText: labels[0] }).click();
+    // A body link that repeats a strong (explicit) relation with the same resource is listed and drawn once, as the relation.
+    const rows = inspector.getByRole("button", { name: target.name, exact: true });
+    await expect(rows).toHaveCount(1);
+    await expect(rows).toHaveText(/Explicit relation/);
+    await rows.click();
     await expect(canvas).toHaveAccessibleName(/2 resources, 1 relationships/);
-
-    // An explicit relation and a body link with the same endpoints are distinct.
     await page.getByRole("complementary", { name: `Inspector for ${target.name}`, exact: true })
-      .getByRole("button", { name: start.name, exact: true }).filter({ hasText: labels[0] }).click();
-    await inspector.getByRole("button", { name: target.name, exact: true }).filter({ hasText: labels[1] }).click();
-    await expect.soft(canvas).toHaveAccessibleName(/2 resources, 2 relationships/);
-    // Loading the server versions (including a repeated load) must not add copies.
+      .getByRole("button", { name: start.name, exact: true }).filter({ hasText: "Explicit relation" }).click();
+    // Loading the server versions (including a repeated load) must not add copies or the repeated body link.
     for (let attempt = 0; attempt < 2; attempt++) {
       await page.getByRole("button", { name: "Load connections", exact: true }).click();
       await expect(page.getByRole("button", { name: "Load connections", exact: true })).toBeEnabled();
-      await expect(canvas).toHaveAccessibleName(/2 resources, 2 relationships/);
+      await expect(canvas).toHaveAccessibleName(/2 resources, 1 relationships/);
     }
     expect(errors).toEqual([]);
   });

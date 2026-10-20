@@ -795,7 +795,7 @@ an `sr-only` summary, never the only signal.
   tooltips and the inspector retain explicit kind text. A separate teal ring
   marks selection without erasing the resource's kind color or shape. Neutral
   curved lines preserve parallel relationships;
-  dashed lines mean body links, not a different relation type. Selection accents
+  dashed lines mean weak connections (body links, or a relation made weak via `edge_type`), not a different relation type; strength comes from the server's `edge_type` (explicit relations strong by default) and is never inferred from the relation label. Where a strong connection joins two resources, a weak one between the same two is not drawn and the inspector lists the pair once. Selection accents
   only the resource and its immediate connections. All initial scenes use
   off-thread force layout in the chosen dimension (two for the flat map, three
   for 3D), never row/column packing or a tilted plane; switching dimension
