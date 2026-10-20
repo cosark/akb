@@ -86,7 +86,7 @@ describe("one read-first Vault guide flow", () => {
     fireEvent.change(editor, { target: { value: "Unsaved instructions" } });
     fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Unsaved description" } });
     await user.click(screen.getByRole("radio", { name: "Everyone can view" }));
-    const previewLink = screen.getByRole("link", { name: "Preview guide" });
+    const previewLink = screen.getByRole("link", { name: "Open guide" });
     await user.click(previewLink);
     const preview = await screen.findByRole("dialog", { name: "Document preview" });
     expect(within(preview).getByRole("link", { name: "Edit guide" })).toBeVisible();
@@ -112,7 +112,7 @@ describe("one read-first Vault guide flow", () => {
     const user = userEvent.setup();
     renderAt(vaultGuideEditHref("v"));
     fireEvent.change(await screen.findByLabelText("Vault guide body"), { target: { value: "Unsaved instructions" } });
-    await user.click(screen.getByRole("link", { name: "Preview guide" }));
+    await user.click(screen.getByRole("link", { name: "Open guide" }));
     const preview = await screen.findByRole("dialog", { name: "Document preview" });
     await user.click(within(preview).getByRole("button", { name: "Open document in vault" }));
     const confirmation = await screen.findByRole("dialog", { name: "Discard unsaved settings changes?" });
@@ -126,7 +126,7 @@ describe("one read-first Vault guide flow", () => {
     const user = userEvent.setup();
     renderAt(vaultGuideEditHref("v"));
     fireEvent.change(await screen.findByLabelText("Vault guide body"), { target: { value: "Unsaved instructions" } });
-    await user.click(screen.getByRole("link", { name: "Preview guide" }));
+    await user.click(screen.getByRole("link", { name: "Open guide" }));
     const preview = await screen.findByRole("dialog", { name: "Document preview" });
     await user.click(within(preview).getByRole("link", { name: "Edit guide" }));
     const editor = await screen.findByLabelText("Vault guide body");

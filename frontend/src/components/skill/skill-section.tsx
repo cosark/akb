@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, type NavigateOptions } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { BookOpen, History, MoreHorizontal, RotateCcw, Save } from "lucide-react";
@@ -13,7 +13,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { TonalIcon } from "@/components/ui/tonal-icon";
 import { SettingsSection } from "@/components/ui/settings-section";
 import { authSessionSnapshot, getSkillTemplate, isCurrentAuthSession, updateDocument } from "@/lib/api";
-import { stripFrontmatter } from "@/lib/markdown";
 import { VAULT_SKILL_PATH } from "@/lib/skill";
 import { documentPreviewState } from "@/lib/document-preview-navigation";
 import { retainsGuideSettings, vaultGuideHref } from "@/lib/vault-guide-navigation";
@@ -28,46 +27,7 @@ interface SkillDoc {
   current_commit?: string | null;
 }
 
-/** A short introductory paragraph, not a flattened copy of the whole guide. */
-function guideExcerpt(content = "") {
-  const lines = stripFrontmatter(content).slice(0, 4000).split(/\r?\n/);
-  const paragraph: string[] = [];
-  let fence: string | null = null;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-    if (fence) {
-      if (marker?.[0] === fence[0] && marker.length >= fence.length &&
-          line.trim() === marker) fence = null;
-      continue;
-    }
-    if (marker) {
-      if (paragraph.length) break;
-      fence = marker;
-      continue;
-    }
-    const text = line.trim();
-    const setext = text && /^ {0,3}(?:=+|-+)\s*$/.test(lines[i + 1] ?? "");
-    if (setext) {
-      // A Setext heading may occupy several lines before its underline.
-      paragraph.length = 0;
-      i++;
-      continue;
-    }
-    if (!text || /^(?:#{1,6}\s|>|[-*_]{3,}$|\|)/.test(text) || /^(?: {4}|\t)/.test(line)) {
-      if (paragraph.length) break;
-      continue;
-    }
-    const plain = text
-      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-      .replace(/^([-*+] |\d+[.)] )/, "")
-      .replace(/[`*_~]/g, "")
-      .trim();
-    if (plain) paragraph.push(plain);
-  }
-  return paragraph.join(" ").replace(/\s+/g, " ").slice(0, 240);
-}
+const GuidePreview = lazy(() => import("./guide-preview"));
 
 interface Props {
   vault: string;
@@ -334,12 +294,10 @@ export function SkillSection({
                 <div className="flex min-w-0 flex-1 items-start gap-3">
                   <TonalIcon tone="guide"><BookOpen aria-hidden /></TonalIcon>
                   <div className="min-w-0 space-y-1">
-                    <p className="line-clamp-2 text-sm leading-relaxed text-foreground">
-                      {expanded
-                        ? tab === "edit" ? "Editing guide" : "Agent view"
-                        : guideExcerpt(doc.content) || (doc.content?.trim() ? "Instructions for people and agents using this vault." : "No instructions yet.")}
-                    </p>
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-foreground-muted">
+                    {expanded && <p className="text-sm font-medium text-foreground">
+                      {tab === "edit" ? "Editing guide" : "Agent view"}
+                    </p>}
+                    <div className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-foreground-muted">
                       {doc.updated_at && <time dateTime={doc.updated_at}>Updated {timeAgo(doc.updated_at)}</time>}
                       {dirty && <span role="status">Unsaved guide changes</span>}
                       {saved && !dirty && <span role="status" className="text-success">Guide saved</span>}
@@ -351,7 +309,7 @@ export function SkillSection({
                   <Link id={previewId} to={previewHref} state={previewState} onClick={event => {
                     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                     if (!requestNavigation(previewHref, { state: previewState })) event.preventDefault();
-                  }}>Preview guide</Link>
+                  }}>Open guide</Link>
                 </Button>
                 {canManage && (
                   <Button ref={editButtonRef} variant="outline" size="sm" className="min-h-11 sm:min-h-8"
@@ -389,6 +347,18 @@ export function SkillSection({
                 </DropdownMenu.Root>
               </div>
               </div>
+
+              {!expanded && (doc.content?.trim() ? (
+                <Suspense fallback={<LoadingState label="Loading guide preview"><Skeleton className="mt-4 h-32 w-full" /></LoadingState>}>
+                  <GuidePreview vault={vault} content={doc.content} onNavigate={(event, url) => {
+                    if (url.origin !== window.location.origin || url.pathname.startsWith("/api/")) return;
+                    event.preventDefault();
+                    const href = `${url.pathname}${url.search}${url.hash}`;
+                    const options = url.pathname === previewHref ? { state: previewState } : undefined;
+                    if (requestNavigation(href, options)) navigate(href, options);
+                  }} />
+                </Suspense>
+              ) : <p className="mt-4 text-sm text-foreground-muted">No instructions yet.</p>)}
 
               {expanded && tab === "agent" && (
                 <div role="region" aria-label="Agent view" className="mt-3 space-y-3 rounded-[var(--radius-sm)] border border-border bg-background p-3">

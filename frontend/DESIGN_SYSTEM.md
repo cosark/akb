@@ -661,31 +661,42 @@ an `sr-only` summary, never the only signal.
   Controls fill their allocated column without a shared fixed-width cap. Danger
   action buttons align to its far edge. Keep related save/discard actions nearby.
   General has a labelled three-line description input and a copyable permanent
-  address row. Ownership, dates and inventory belong to Overview. Access uses
-  native radio rows under Who can access, labelled Invited members only /
-  Everyone can view / Everyone can edit, not oversized choice cards. The selected
-  option's help names the actual audience: people signed in to this AKB, not
-  anonymous visitors. Avoid technical labels such as world-writable in the
-  confirmation; explicitly retain the ability to delete content. The three
-  choices share one bordered, divided list; selection adds teal emphasis without removing the
-  native radio indicator. A footer divider separates member/sharing shortcuts
-  from policy controls. Keep the selected policy's effect
-  visible, explicitly warn that public writing includes deletion, and preserve
-  owner-only writes plus public-write confirmation. Members/Public links are
-  compact guarded links with one short anonymous-sharing distinction.
+  address row. Ownership, dates and inventory belong to Overview. Access fills
+  its section width, without the general setting-label column. Who can access
+  and a quiet Sign-in required cue share its first line. The three native radio
+  rows use Invited members only / Everyone can view / Everyone can edit, with
+  the actual audience and permissions inside each row. Keep accessible radio
+  names separate from those descriptions. Current marks the saved policy;
+  Not saved marks a different selected draft, so a selection never claims to
+  have changed live access. The choices share one bordered, divided list;
+  selection adds teal emphasis without removing the native radio indicator.
+  Public writing explicitly includes deletion and uses a warning glyph/text
+  when selected. Preserve owner-only writes and public-write confirmation.
+  The divided footer gives Members and Public links their own short purpose;
+  only Public links share selected content without sign-in. Shortcuts remain
+  guarded links, with two columns when the section has room and stacked rows
+  on mobile. Do not describe workspace-wide access as anonymous access.
   Each editable scope shows Save/Discard only while changed or saving, followed
   by a polite saved status; do not reserve disabled action footers. Serialize
   Description, Access and Guide writes. Saving must not overwrite another scope's
   saved snapshot or pull focus away from another field on completion.
-  Guide uses a document row with a small guide TonalIcon, a two-line introductory
-  paragraph and an Updated time beneath it, without another Instructions label
-  or the general setting-label column. The excerpt omits frontmatter, headings
-  and code fences; it never flattens the whole document into one sentence.
-  At 48rem of section width the document information stays left and Preview guide /
-  owner-only Edit guide / options align right; narrower sections stack the tools
-  under the text. Draft/saved status belongs beside the update time, not among
-  actions. This single toolbar remains mounted across reading/editing modes.
-  Expanded editor and Agent view remain full-width below this document row. Preview guide opens the same
+  Guide shows a real read-only Markdown preview immediately below its compact
+  update-time / actions row. Render headings, paragraphs, lists and code with
+  the shared MarkdownRender and authenticated Vault/document adapters, omitting
+  frontmatter. Initially show four complete top-level blocks; Show more expands
+  in place and Show less collapses. Hide whole later blocks, including their
+  focus targets, instead of clipping a live link with an ellipsis or fade.
+  Keep one route scroll surface. Use a readable prose measure, small document
+  headings below the section's H3, and unique preview anchor IDs so opening
+  the full reader cannot collide with background headings. Guide fragments
+  expand and focus their own preview heading; modified clicks open the canonical
+  document. Revision-query links retain their query and open the reader. Other
+  internal links use the containing Settings departure guard. The toolbar uses
+  Open guide / owner-only Edit guide / options and stays mounted across modes.
+  At 48rem of section width tools align right; narrower sections stack them
+  below the update metadata. Draft/saved status belongs beside the update time.
+  Expanded editor and Agent view occupy the same full-width content area.
+  Open guide opens the same
   route-backed document reader as Overview and preserves this Settings entry,
   all draft scopes, their revision pins and return focus. Only an exact retained
   guide preview bypasses departure confirmation; full-page promotion or another

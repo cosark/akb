@@ -246,7 +246,7 @@ export const VaultSettingsOwner: Story = {
     await expect(await canvas.findByRole("heading", { name: "Settings", level: 2 })).toBeInTheDocument();
     await expect(await canvas.findByLabelText("Description")).toHaveValue(ownerInfo.description);
     await expect(await canvas.findByRole("heading", { name: "Danger zone" })).toBeVisible();
-    await expect(await canvas.findByRole("link", { name: "Preview guide" })).toBeInTheDocument();
+    await expect(await canvas.findByRole("link", { name: "Open guide" })).toBeInTheDocument();
     await expect(await canvas.findByRole("button", { name: "Edit guide" })).toBeInTheDocument();
     await expect(canvas.queryByRole("tablist")).not.toBeInTheDocument();
     await expectVaultShell(canvasElement);
@@ -293,7 +293,7 @@ export const VaultSettingsArchived: Story = {
     await expect(await canvas.findByRole("button", { name: "Unarchive" })).toBeInTheDocument();
     await expect(await canvas.findByText("Read-only. Restore writing at any time.")).toBeVisible();
     await expect(canvas.queryByRole("complementary", { name: "Vault details" })).not.toBeInTheDocument();
-    await expect(await canvas.findByRole("link", { name: "Preview guide" })).toBeInTheDocument();
+    await expect(await canvas.findByRole("link", { name: "Open guide" })).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: "Edit guide" })).not.toBeInTheDocument();
     await expectVaultShell(canvasElement);
   },

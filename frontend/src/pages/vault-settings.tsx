@@ -85,11 +85,11 @@ const PUBLIC_LABELS: Record<PublicAccess, string> = {
   writer: "Everyone can edit",
 };
 const PUBLIC_DESCRIPTIONS: Record<PublicAccess, string> = {
-  none: "Only people you add as members can open this vault.",
+  none: "Only people invited to this vault.",
   reader:
-    "Anyone signed in to this AKB can view content without an invitation. Editing still requires permission.",
+    "Signed-in AKB users can read without an invitation.",
   writer:
-    "Anyone signed in to this AKB can add, edit, and delete content, even without an invitation.",
+    "Signed-in AKB users can add, edit and delete content.",
 };
 const PUBLIC_ORDER: PublicAccess[] = ["none", "reader", "writer"];
 
@@ -427,47 +427,64 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
               </SettingsSection>
 
               <SettingsSection id="access" title="Access" className="@[64rem]/vault-settings:border-l @[64rem]/vault-settings:border-border">
-                <SettingRow label={<>Who can access<p className="mt-1 text-xs font-normal text-foreground-muted">Sign-in required</p></>}>
-                  <div data-testid="settings-access-editor">
-                    <fieldset role="radiogroup" aria-label="Who can access" aria-describedby="vault-access-help" disabled={!canEdit || busy} className="grid divide-y divide-border overflow-hidden rounded-[var(--radius-md)] border border-border">
-                      {PUBLIC_ORDER.map(value => {
-                        return (
-                          <label key={value} className={`flex min-h-11 items-center gap-3 px-3 py-2 text-sm ${publicAccess === value ? "bg-surface-selected text-surface-selected-foreground" : "bg-surface text-foreground hover:bg-surface-hover"} ${canEdit && !busy ? "cursor-pointer" : ""}`}>
-                            <input
-                              type="radio" name="vault-default-access" value={value} checked={publicAccess === value}
-                              onChange={() => { setPublicAccess(value); setSavedScope(null); }}
-                              className="h-4 w-4 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
-                            />
-                            <span className="flex-1">{PUBLIC_LABELS[value]}</span>
-                          </label>
-                        );
-                      })}
-                    </fieldset>
-                    <p id="vault-access-help" className={`mt-3 flex items-start gap-2 text-sm leading-relaxed ${publicAccess === "writer" ? "text-warning-soft-foreground" : "text-foreground-muted"}`}>
-                      {publicAccess === "writer" && <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />}
-                      {PUBLIC_DESCRIPTIONS[publicAccess]}
-                    </p>
-                    {saveErrorScope === "access" && (
-                      <div ref={accessErrorRef} tabIndex={-1} className="mt-3 outline-none">
-                        <Alert variant="destructive">{saveError}</Alert>
-                      </div>
-                    )}
-                    {canEdit && <SettingsActionBar
-                      dirty={accessDirty} saving={savingScope === "access"} disabled={busy}
-                      saved={savedScope === "access" && !accessDirty} statusRef={accessStatusRef}
-                      onSave={() => requestSave("access")} onDiscard={() => handleDiscard("access")}
-                    />}
-                    <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border pt-3 text-sm">
-                      <Link className="inline-flex min-h-10 items-center gap-1.5 rounded-[var(--radius-sm)] text-link hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" to={`/vault/${encodeURIComponent(name)}/members`}>
+                <div className="px-4 py-4 sm:px-5" data-testid="settings-access-editor">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <p id="vault-access-label" className="text-sm font-medium">Who can access</p>
+                    <span className="inline-flex items-center gap-1.5 text-xs text-foreground-muted">
+                      <Lock className="h-3 w-3" aria-hidden />Sign-in required
+                    </span>
+                  </div>
+                  <fieldset role="radiogroup" aria-labelledby="vault-access-label" aria-describedby="vault-access-help"
+                    disabled={!canEdit || busy} className="grid divide-y divide-border overflow-hidden rounded-[var(--radius-md)] border border-border">
+                    {PUBLIC_ORDER.map(value => {
+                      const selected = publicAccess === value;
+                      const helpId = selected ? "vault-access-help" : `vault-access-${value}-help`;
+                      return (
+                        <label key={value} className={`flex min-h-16 items-start gap-3 px-3 py-3 text-sm ${selected ? "bg-surface-selected text-surface-selected-foreground" : "bg-surface text-foreground hover:bg-surface-hover"} ${canEdit && !busy ? "cursor-pointer" : ""}`}>
+                          <input type="radio" name="vault-default-access" value={value} checked={selected}
+                            aria-labelledby={`vault-access-${value}-label`} aria-describedby={helpId}
+                            onChange={() => { setPublicAccess(value); setSavedScope(null); }}
+                            className="mt-1 h-4 w-4 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring" />
+                          <span className="min-w-0 flex-1">
+                            <span className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                              <span id={`vault-access-${value}-label`} className="font-medium">{PUBLIC_LABELS[value]}</span>
+                              {value === savedPublic ? <span className="text-xs font-normal text-foreground-muted">Current</span>
+                                : selected && <span className="text-xs font-normal text-link">Not saved</span>}
+                            </span>
+                            <span id={helpId} className={`mt-1 flex items-start gap-1.5 text-xs leading-5 ${selected && value === "writer" ? "text-warning-soft-foreground" : "text-foreground-muted"}`}>
+                              {selected && value === "writer" && <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />}
+                              {PUBLIC_DESCRIPTIONS[value]}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </fieldset>
+                  {saveErrorScope === "access" && (
+                    <div ref={accessErrorRef} tabIndex={-1} className="mt-3 outline-none">
+                      <Alert variant="destructive">{saveError}</Alert>
+                    </div>
+                  )}
+                  {canEdit && <SettingsActionBar
+                    dirty={accessDirty} saving={savingScope === "access"} disabled={busy}
+                    saved={savedScope === "access" && !accessDirty} statusRef={accessStatusRef}
+                    onSave={() => requestSave("access")} onDiscard={() => handleDiscard("access")}
+                  />}
+                  <div className="mt-4 grid gap-x-6 gap-y-2 border-t border-border pt-2 @[24rem]/settings-section:grid-cols-2">
+                    <div>
+                      <Link className="inline-flex min-h-11 items-center gap-1.5 rounded-[var(--radius-sm)] text-sm text-link hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" to={`/vault/${encodeURIComponent(name)}/members`}>
                         <Users className="h-3.5 w-3.5" aria-hidden />Manage members
                       </Link>
-                      <Link className="inline-flex min-h-10 items-center gap-1.5 rounded-[var(--radius-sm)] text-link hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" to={`/vault/${encodeURIComponent(name)}/publications`}>
+                      <p className="text-xs leading-5 text-foreground-muted">People and roles in this vault.</p>
+                    </div>
+                    <div>
+                      <Link className="inline-flex min-h-11 items-center gap-1.5 rounded-[var(--radius-sm)] text-sm text-link hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" to={`/vault/${encodeURIComponent(name)}/publications`}>
                         <Globe className="h-3.5 w-3.5" aria-hidden />Public links
                       </Link>
-                      <span className="text-xs text-foreground-muted">Share without sign-in using Public links.</span>
+                      <p className="text-xs leading-5 text-foreground-muted">Share selected content without sign-in.</p>
                     </div>
                   </div>
-                </SettingRow>
+                </div>
               </SettingsSection>
               </div>
 

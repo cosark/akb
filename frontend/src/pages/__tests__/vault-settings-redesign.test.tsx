@@ -17,6 +17,12 @@ import { ResourceNavigationProvider } from "@/contexts/resource-navigation-conte
 import { AppPageLocation } from "@/components/app-page-location";
 import { installDocumentHistoryGuard } from "@/hooks/use-document-history-guard";
 
+// These tests exercise Settings state, identity and writes. Markdown rendering
+// has real-renderer coverage in guide-preview.test.tsx and vault-guide-flow.test.tsx.
+vi.mock("@/components/skill/guide-preview", () => ({
+  default: ({ content }: { content: string }) => <div role="region" aria-label="Vault guide preview">{content}</div>,
+}));
+
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/api")>(),
   archiveVault: vi.fn(),
@@ -491,6 +497,26 @@ describe("Vault Settings redesign", () => {
     );
   });
 
+  it("keeps Current on the applied policy until the selected draft is saved", async () => {
+    const user = userEvent.setup();
+    let finish!: () => void;
+    updateVaultMock.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
+    renderSettings("#access");
+    const members = (await screen.findByRole("radio", { name: "Invited members only" })).closest("label")!;
+    const reader = screen.getByRole("radio", { name: "Everyone can view" }).closest("label")!;
+    expect(within(members).getByText("Current")).toBeVisible();
+    await user.click(within(reader).getByRole("radio"));
+    expect(within(reader).getByText("Not saved")).toBeVisible();
+    expect(within(members).getByText("Current")).toBeVisible();
+    await user.click(scope("Access").getByRole("button", { name: "Save changes" }));
+    expect(within(members).getByText("Current")).toBeVisible();
+    await act(async () => { finish(); });
+    await waitFor(() => expect(within(reader).getByText("Current")).toBeVisible());
+    expect(within(members).queryByText("Current")).not.toBeInTheDocument();
+    expect(within(reader).queryByText("Not saved")).not.toBeInTheDocument();
+    expect(updateVaultMock).toHaveBeenCalledWith("platform-docs", { public_access: "reader" });
+  });
+
   it("explains the signed-in audience and deletion risk before allowing everyone to edit", async () => {
     const user = userEvent.setup();
     renderSettings("#access");
@@ -499,7 +525,7 @@ describe("Vault Settings redesign", () => {
     );
     expect(screen.getByText("Sign-in required")).toBeVisible();
     expect(screen.getByRole("radiogroup", { name: "Who can access" })).toHaveAccessibleDescription(
-      "Anyone signed in to this AKB can add, edit, and delete content, even without an invitation.",
+      "Signed-in AKB users can add, edit and delete content.",
     );
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(updateVault).not.toHaveBeenCalled();

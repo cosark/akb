@@ -33,12 +33,17 @@ export interface MarkdownRenderProps {
   markdown: string;
   className?: string;
   assetContext?: AssetContext;
+  /** Embedded readers need unique anchors and headings below their section. */
+  headingIdPrefix?: string;
+  headingLevelOffset?: number;
 }
 
 export function MarkdownRender({
   markdown,
   className,
   assetContext,
+  headingIdPrefix = "",
+  headingLevelOffset = 1,
 }: MarkdownRenderProps) {
   const body = useMemo(() => stripFrontmatter(markdown || ""), [markdown]);
   const authenticated =
@@ -69,10 +74,10 @@ export function MarkdownRender({
   const resolver = publicationResolver ?? adapters?.targetResolver;
   const headingOptions = useMemo(
     () => ({
-      levelOffset: 1,
-      ids: parseHeadings(body).map((heading) => heading.slug),
+      levelOffset: headingLevelOffset,
+      ids: parseHeadings(body).map((heading) => `${headingIdPrefix}${heading.slug}`),
     }),
-    [body],
+    [body, headingIdPrefix, headingLevelOffset],
   );
 
   return (
