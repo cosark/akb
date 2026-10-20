@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { DocumentCopyButton, DocumentReadModes, type DocumentCopyHandle } from "../document-reading-controls";
@@ -69,6 +69,50 @@ describe("DocumentReadModes", () => {
     expect(raw).toHaveAttribute("aria-checked", "true");
     expect(screen.getAllByRole("radio", { checked: true })).toHaveLength(1);
     expect(raw).toHaveTextContent("");
+  });
+
+  it("does not open a tooltip while entering or switching modes with the keyboard", async () => {
+    const user = userEvent.setup();
+    render(<Modes />);
+    await user.tab();
+    expect(screen.getByRole("radio", { name: "Preview" })).toHaveFocus();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    await user.keyboard("{ArrowRight}{ArrowLeft}{End}{Home}");
+    expect(screen.getByRole("radio", { name: "Preview" })).toHaveFocus();
+    expect(screen.getByRole("radio", { name: "Preview" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps deliberate hover help but dismisses it when the mode is selected", async () => {
+    const user = userEvent.setup();
+    render(<Modes />);
+    const raw = screen.getByRole("radio", { name: "Raw markdown" });
+    await user.hover(raw);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(await screen.findByRole("tooltip", {}, { timeout: 2000 })).toHaveTextContent("Raw markdown");
+    await user.click(raw);
+    expect(raw).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    await user.keyboard("{ArrowLeft}");
+    expect(screen.getByRole("radio", { name: "Preview" })).toHaveFocus();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("ignores a pending hover timer after keyboard selection until a fresh hover", async () => {
+    const user = userEvent.setup();
+    render(<Modes />);
+    const raw = screen.getByRole("radio", { name: "Raw markdown" });
+    await user.hover(raw);
+    await user.tab();
+    await user.keyboard("{ArrowRight}");
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 700)); });
+    expect(raw).toHaveFocus();
+    expect(raw).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    await user.unhover(raw);
+    await user.hover(raw);
+    expect(await screen.findByRole("tooltip", {}, { timeout: 2000 })).toHaveTextContent("Raw markdown");
   });
 
   it("offers the complete markdown for manual copying when clipboard access fails", async () => {

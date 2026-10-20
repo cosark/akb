@@ -115,11 +115,13 @@ export function DocumentReadModes({ view, onChange, idPrefix, contentId }: {
   view: "rendered" | "raw"; onChange: (view: "rendered" | "raw") => void; idPrefix: string; contentId?: string;
 }) {
   const buttons = useRef<Array<HTMLButtonElement | null>>([]);
+  const suppressTooltip = useRef(false);
+  const [tooltipMode, setTooltipMode] = useState<"rendered" | "raw" | null>(null);
   const modes = [
     { value: "rendered" as const, label: "Preview", Icon: Eye },
     { value: "raw" as const, label: "Raw markdown", Icon: Code2 },
   ];
-  return <TooltipProvider delayDuration={250}>
+  return <TooltipProvider delayDuration={600} skipDelayDuration={0}>
     <div role="radiogroup" aria-label="Document view mode" className="document-read-modes shrink-0" data-mode={view}
       onKeyDown={event => {
         const direction = ["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : ["ArrowLeft", "ArrowUp"].includes(event.key) ? -1 : 0;
@@ -127,14 +129,22 @@ export function DocumentReadModes({ view, onChange, idPrefix, contentId }: {
           : direction ? (modes.findIndex(mode => mode.value === view) + direction + modes.length) % modes.length : null;
         if (next === null) return;
         event.preventDefault();
+        suppressTooltip.current = true;
+        setTooltipMode(null);
         onChange(modes[next].value);
         buttons.current[next]?.focus();
       }}>
-      {modes.map((mode, index) => <Tooltip key={mode.value}>
-        <TooltipTrigger asChild>
+      {modes.map((mode, index) => <Tooltip key={mode.value} open={tooltipMode === mode.value}
+        onOpenChange={open => {
+          if (open && suppressTooltip.current) return;
+          setTooltipMode(current => open ? mode.value : current === mode.value ? null : current);
+        }}>
+        <TooltipTrigger asChild onFocus={event => event.preventDefault()}
+          onPointerEnter={() => { suppressTooltip.current = false; }}
+          onPointerDown={() => { suppressTooltip.current = true; setTooltipMode(null); }}>
           <Button ref={element => { buttons.current[index] = element; }} type="button" variant="ghost" size="icon" role="radio"
             id={`${idPrefix}-mode-${mode.value}`} aria-label={mode.label} aria-checked={view === mode.value} aria-controls={contentId}
-            tabIndex={view === mode.value ? 0 : -1} onClick={() => onChange(mode.value)} data-reader-control data-reader-icon>
+            tabIndex={view === mode.value ? 0 : -1} onClick={() => { suppressTooltip.current = true; setTooltipMode(null); onChange(mode.value); }} data-reader-control data-reader-icon>
             <mode.Icon className="h-4 w-4" aria-hidden />
           </Button>
         </TooltipTrigger>

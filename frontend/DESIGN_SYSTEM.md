@@ -1019,6 +1019,9 @@ an `sr-only` summary, never the only signal.
   tooltips and no visible text label. Read modes use a white/slate surface,
   neutral outer stroke and sliding teal selection outline, without a gray inset
   or shadow. Keep radiogroup semantics, arrow/Home/End selection and one tab stop.
+  Mode tooltips require a deliberate 600ms pointer hover. Focus and keyboard
+  selection never open a popup; selecting either mode dismisses its tooltip.
+  Accessible radio names and checked state always identify the active mode.
   Controls use 32px targets above 48rem of command space and 44px below. Below
   40rem, timestamp/status form a quiet second line so the full toolbar fits 320px.
   Summary is ordinary muted 14px text directly after the first authored heading,
