@@ -11,7 +11,8 @@ import { GraphToolbar, type GraphDisplayMode } from "@/components/graph/GraphToo
 import { queryToView, viewToQuery } from "@/components/graph/graph-state";
 import { graphCoverage } from "@/components/graph/graph-scene";
 import { ALL_NODE_KINDS, ALL_RELATIONS, RELATION_LABEL, kindToSegment, type GraphEdge, type GraphNode, type GraphView, type RelatedRef } from "@/components/graph/graph-types";
-import { degreeMap, docIdFromUri, fetchNeighbors, mergeGraph, useFullGraph, useNeighborhood, visibleGraph, type GraphPayload } from "@/components/graph/use-graph-data";
+import { degreeMap, docIdFromUri, fetchNeighbors, hopDistances, mergeGraph, useFullGraph, useNeighborhood, visibleGraph, type GraphPayload } from "@/components/graph/use-graph-data";
+import type { GraphDimension } from "@/components/graph/graph-spatial-layout";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -19,6 +20,15 @@ import { documentPreviewState } from "@/lib/document-preview-navigation";
 import { cn } from "@/lib/utils";
 
 const EMPTY: GraphPayload = { nodes: [], edges: [] };
+const DIMENSION_KEY = "akb.graph.dimension";
+
+/** The reader's last choice of flat map or 3D; a flat map unless they chose 3D. */
+function storedDimension(): GraphDimension {
+  try { return window.localStorage.getItem(DIMENSION_KEY) === "3" ? 3 : 2; } catch { return 2; }
+}
+function storeDimension(value: GraphDimension) {
+  try { window.localStorage.setItem(DIMENSION_KEY, String(value)); } catch { /* the choice still applies to this visit */ }
+}
 const SCENE_LIMIT = 2000;
 // Keep WebGL/Three.js out of the initial bundle and non-graph workspaces.
 const GraphCanvas = lazy(() => import("@/components/graph/GraphCanvas").then(module => ({ default: module.GraphCanvas })));
@@ -36,10 +46,15 @@ function GraphPresentation({ vault }: { vault: string }) {
   const [mode, setMode] = useState<GraphDisplayMode>(() => window.matchMedia?.("(max-width: 767px)").matches ? "list" : "graph");
   // Traversals still isolate pending expansions, but do not reset the chosen
   // presentation (including the accessible fallback when WebGL is unavailable).
-  return <GraphWorkspace key={JSON.stringify([view.entry, view.hops])} vault={vault} mode={mode} setMode={setMode} />;
+  const [dimension, setDimensionState] = useState<GraphDimension>(storedDimension);
+  const setDimension = useCallback((value: GraphDimension) => { storeDimension(value); setDimensionState(value); }, []);
+  return <GraphWorkspace key={JSON.stringify([view.entry, view.hops])} vault={vault} mode={mode} setMode={setMode} dimension={dimension} setDimension={setDimension} />;
 }
 
-function GraphWorkspace({ vault, mode, setMode }: { vault: string; mode: GraphDisplayMode; setMode: (mode: GraphDisplayMode) => void }) {
+function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
+  vault: string; mode: GraphDisplayMode; setMode: (mode: GraphDisplayMode) => void;
+  dimension: GraphDimension; setDimension: (value: GraphDimension) => void;
+}) {
   const [search, setSearch] = useSearchParams();
   const navigate = useNavigate(), location = useLocation();
   const view = useMemo(() => queryToView(search), [search]);
@@ -95,7 +110,11 @@ function GraphWorkspace({ vault, mode, setMode }: { vault: string; mode: GraphDi
   const orphanCount = merged.nodes.filter(n => n.degree === 0).length;
   const degree = useMemo(() => degreeMap(displayed.edges), [displayed.edges]);
   const hubs = useMemo(() => [...displayed.nodes].sort((a, b) => (degree.get(b.uri) ?? 0) - (degree.get(a.uri) ?? 0)).slice(0, 8), [displayed.nodes, degree]);
-  const focusTitle = merged.nodes.find(n => n.uri === view.entry || docIdFromUri(n.uri) === view.entry)?.name;
+  const entryNode = merged.nodes.find(n => n.uri === view.entry || docIdFromUri(n.uri) === view.entry);
+  const focusTitle = entryNode?.name;
+  // Colour by distance only around a focused resource; the whole Vault keeps kind colours.
+  const hops = useMemo(() => view.entry && entryNode ? hopDistances(displayed.edges, entryNode.uri) : undefined,
+    [view.entry, entryNode, displayed.edges]);
 
   function select(uri: string | undefined) {
     const node = merged.nodes.find(item => item.uri === uri);
@@ -176,8 +195,9 @@ function GraphWorkspace({ vault, mode, setMode }: { vault: string; mode: GraphDi
     </div>
     <section aria-label="Graph exploration workspace" aria-busy={query.isFetching} className="@container/graph relative min-h-0 flex-1 overflow-hidden">
       <div className={cn("absolute inset-0", mode === "list" && "invisible pointer-events-none")} aria-hidden={mode === "list" || undefined}>
-        <Suspense fallback={<div role="status" className="p-4 text-sm text-foreground-muted">Loading 3D viewer…</div>}>
+        <Suspense fallback={<div role="status" className="p-4 text-sm text-foreground-muted">Loading graph viewer…</div>}>
         <GraphCanvas ref={canvas} nodes={displayed.nodes} edges={displayed.edges} selected={selected?.uri} inspectedEdge={edge ?? undefined} pinned={pinned} topInset={toolsBottom}
+          dimension={dimension} hops={hops}
           onUseList={() => setMode("list")}
           onSelect={select} onExpand={expand} onContextMenu={(node, x, y) => setMenu({ node, x, y })}
           onSelectEdge={value => { setView({ ...view, selected: undefined }); setEdge(value); }} />
@@ -205,7 +225,7 @@ function GraphWorkspace({ vault, mode, setMode }: { vault: string; mode: GraphDi
         <p className="mt-3 text-xs text-foreground-muted">{edge.kind === "implicit" ? "Body link" : edge.kind === "explicit" ? "Explicit relationship" : "Relationship source not provided"}</p>
       </aside>}
 
-      {mode === "graph" && <CanvasControls canvas={canvas} />}
+      {mode === "graph" && <CanvasControls canvas={canvas} dimension={dimension} onDimension={setDimension} />}
       <div className="pointer-events-none absolute bottom-3 left-3 right-16 flex flex-wrap items-end gap-2 text-xs text-foreground-muted @min-[48rem]/graph:right-40">
         <details className="pointer-events-auto relative rounded-[var(--radius-sm)] border border-border bg-surface shadow-xs">
           <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 px-3 focus-visible:outline-2 focus-visible:outline-ring">
@@ -222,11 +242,20 @@ function GraphWorkspace({ vault, mode, setMode }: { vault: string; mode: GraphDi
   </div>;
 }
 
-function CanvasControls({ canvas }: { canvas: React.RefObject<GraphCanvasHandle | null> }) {
+function CanvasControls({ canvas, dimension, onDimension }: {
+  canvas: React.RefObject<GraphCanvasHandle | null>; dimension: GraphDimension; onDimension: (value: GraphDimension) => void;
+}) {
   return <div className="absolute bottom-3 right-3 z-[var(--z-raised)] flex flex-col items-end gap-2">
-    <div role="group" aria-label="Rotate 3D view" className="grid grid-cols-2 overflow-hidden rounded-[var(--radius-sm)] border border-border bg-surface shadow-xs @min-[40rem]/graph:flex">
-      {[{ label: "Rotate left", Icon: RotateCcw, x: -0.2, y: 0 }, { label: "Rotate right", Icon: RotateCw, x: 0.2, y: 0 }, { label: "Rotate up", Icon: ArrowUp, x: 0, y: -0.2 }, { label: "Rotate down", Icon: ArrowDown, x: 0, y: 0.2 }].map(({ label, Icon, x, y }) => <Button key={label} size="icon" variant="ghost" className="h-10 w-10 rounded-none" aria-label={label} title={label} onClick={() => canvas.current?.orbit(x, y)}><Icon className="h-4 w-4" aria-hidden /></Button>)}
+    <div role="group" aria-label="Map view" className="flex overflow-hidden rounded-[var(--radius-sm)] border border-border bg-surface text-xs shadow-xs">
+      {([[2, "2D"], [3, "3D"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={dimension === value}
+        title={value === 2 ? "Flat map: drag the background to pan, drag a resource to move it" : "3D: drag to rotate, right-drag to pan, drag a resource to move it"}
+        onClick={() => onDimension(value)}
+        className={cn("h-9 min-w-11 px-2 font-medium tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          dimension === value ? "bg-surface-selected text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>{label}</button>)}
     </div>
+    {dimension === 3 && <div role="group" aria-label="Rotate 3D view" className="grid grid-cols-2 overflow-hidden rounded-[var(--radius-sm)] border border-border bg-surface shadow-xs @min-[40rem]/graph:flex">
+      {[{ label: "Rotate left", Icon: RotateCcw, x: -0.2, y: 0 }, { label: "Rotate right", Icon: RotateCw, x: 0.2, y: 0 }, { label: "Rotate up", Icon: ArrowUp, x: 0, y: -0.2 }, { label: "Rotate down", Icon: ArrowDown, x: 0, y: 0.2 }].map(({ label, Icon, x, y }) => <Button key={label} size="icon" variant="ghost" className="h-10 w-10 rounded-none" aria-label={label} title={label} onClick={() => canvas.current?.orbit(x, y)}><Icon className="h-4 w-4" aria-hidden /></Button>)}
+    </div>}
     <div className="flex items-end gap-2">
     <details className="relative">
       <summary aria-label="Pan map" className="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-[var(--radius-sm)] border border-border bg-surface text-foreground-muted shadow-xs focus-visible:outline-2 focus-visible:outline-ring"><Move className="h-4 w-4" /></summary>

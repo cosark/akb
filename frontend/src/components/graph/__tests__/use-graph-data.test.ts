@@ -7,6 +7,7 @@ import {
   docIdFromUri,
   endpointUri,
   degreeMap,
+  hopDistances,
   impactCones,
 } from "../use-graph-data";
 import { docUri } from "@/lib/uri";
@@ -422,5 +423,17 @@ describe("impactCones", () => {
     const { out } = impactCones(cyclic, "x");
     expect(out.has("x")).toBe(false); // root excluded
     expect(out).toEqual(new Set(["y"])); // and it returns (no infinite loop)
+  });
+});
+
+describe("hopDistances", () => {
+  const edge = (source: string, target: string): GraphEdge => ({ source, target, relation: "links_to" as GraphEdge["relation"], kind: "implicit" });
+  it("walks relationships in either direction and keeps the shortest distance", () => {
+    const hops = hopDistances([edge("a", "b"), edge("c", "b"), edge("c", "d"), edge("a", "d"), edge("e", "e")], "a");
+    expect(Object.fromEntries(hops)).toEqual({ a: 0, b: 1, d: 1, c: 2 });
+  });
+  it("is empty without a start and leaves unreachable resources out", () => {
+    expect(hopDistances([edge("a", "b")], undefined).size).toBe(0);
+    expect(hopDistances([edge("a", "b"), edge("x", "y")], "a").has("x")).toBe(false);
   });
 });

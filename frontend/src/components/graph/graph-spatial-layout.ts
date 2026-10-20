@@ -2,10 +2,15 @@ import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation } 
 
 export interface SpatialPoint { x: number; y: number; z: number }
 
+/** A flat map (z = 0, read from straight above) or a perspective volume. */
+export type GraphDimension = 2 | 3;
+
 export interface SpatialLayoutInput {
   nodes: Array<{ id: string; position: SpatialPoint }>;
   edges: Array<{ source: string; target: string }>;
   pinned: string[];
+  /** Absent means 3, the layout's original volume. */
+  dimensions?: GraphDimension;
 }
 
 function hashId(id: string): number {
@@ -31,15 +36,19 @@ export function seedSpatialPositions(
   ids: string[],
   existing: Map<string, SpatialPoint>,
   edges: SpatialLayoutInput["edges"] = [],
+  dimensions: GraphDimension = 3,
 ): Map<string, SpatialPoint> {
+  // A flat map places every resource on z = 0: the same seeded angle and
+  // radius, drawn on a disc instead of inside a ball.
+  const flat = dimensions === 2;
   const positions = new Map([...existing].map(([id, point]) => [id, { ...point }]));
   const extent = 70 * Math.cbrt(Math.max(1, ids.length));
   for (const id of ids) {
     if (positions.has(id)) continue;
     const random = seededRandom(hashId(id));
-    const depth = random() * 2 - 1;
+    const depth = flat ? 0 : random() * 2 - 1;
     const angle = random() * Math.PI * 2;
-    const radius = extent * Math.cbrt(random());
+    const radius = extent * (flat ? Math.sqrt(random()) : Math.cbrt(random()));
     const planar = Math.sqrt(1 - depth * depth);
     positions.set(id, {
       x: radius * planar * Math.cos(angle),
@@ -68,7 +77,7 @@ export function seedSpatialPositions(
     for (const id of [...(neighbors.get(anchorId) ?? [])].sort()) {
       if (anchored.has(id)) continue;
       const random = seededRandom(hashId(id));
-      const depth = random() * 2 - 1;
+      const depth = flat ? 0 : random() * 2 - 1;
       const angle = random() * Math.PI * 2;
       const radius = 70 + random() * 20;
       const planar = Math.sqrt(1 - depth * depth);
@@ -91,8 +100,9 @@ interface SimulationNode extends SpatialPoint {
   fz?: number;
 }
 
-/** Bounded, synchronous computation for the worker. All three coordinates take
- *  part in the force simulation; only real input links supply spring forces.
+/** Bounded, synchronous computation for the worker. Every coordinate of the
+ *  requested dimension takes part in the force simulation (a flat map keeps
+ *  z = 0); only real input links supply spring forces.
  *  D3 may mutate nodes and endpoints, so it receives private working copies. */
 export function layoutSpatialGraph(input: SpatialLayoutInput): Record<string, SpatialPoint> {
   if (input.nodes.length === 0) return {};
@@ -107,7 +117,9 @@ export function layoutSpatialGraph(input: SpatialLayoutInput): Record<string, Sp
   const links = input.edges
     .filter(edge => edge.source !== edge.target && ids.has(edge.source) && ids.has(edge.target))
     .map(edge => ({ source: edge.source, target: edge.target }));
-  const simulation = forceSimulation(nodes, 3).stop();
+  const dimensions = input.dimensions ?? 3;
+  if (dimensions === 2) for (const node of nodes) { node.z = 0; if (node.fz !== undefined) node.fz = 0; }
+  const simulation = forceSimulation(nodes, dimensions).stop();
   try {
     simulation
       .randomSource(seededRandom(0x51a7))
@@ -121,8 +133,9 @@ export function layoutSpatialGraph(input: SpatialLayoutInput): Record<string, Sp
     if (pinned.size === 0) simulation.force("center", forceCenter<SimulationNode>(0, 0, 0));
     simulation.tick(200);
     return Object.fromEntries(nodes.map(({ id, x, y, z }) => {
-      if (![x, y, z].every(Number.isFinite)) throw new Error("Spatial layout produced an invalid position");
-      return [id, { x, y, z }];
+      const depth = dimensions === 2 ? 0 : z;
+      if (![x, y, depth].every(Number.isFinite)) throw new Error("Spatial layout produced an invalid position");
+      return [id, { x, y, z: depth }];
     }));
   } finally {
     simulation.stop();

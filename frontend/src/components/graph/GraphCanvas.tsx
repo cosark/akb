@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useTheme } from "@/hooks/use-theme";
 import { cn } from "@/lib/utils";
 import type { GraphEdge, GraphNode } from "./graph-types";
-import { seedSpatialPositions, type SpatialPoint } from "./graph-spatial-layout";
+import { seedSpatialPositions, type GraphDimension, type SpatialPoint } from "./graph-spatial-layout";
 import { SpatialGraphRenderer } from "./graph-spatial-renderer";
 import type { ProjectedLabel } from "./graph-spatial-view";
 
@@ -26,6 +26,10 @@ interface Props {
   onUseList?(): void;
   /** Keep focusable labels clear of the floating toolbar without shrinking the scene. */
   topInset?: number;
+  /** A flat map (default) or the 3D perspective volume. */
+  dimension?: GraphDimension;
+  /** Hops from the focused resource; present only for a focused neighborhood. */
+  hops?: Map<string, number>;
 }
 
 export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCanvas(props, ref) {
@@ -35,6 +39,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
   const worker = useRef<Worker | null>(null);
   const timeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const cameraRevision = useRef(0), firstLayout = useRef(true);
+  // Resources the reader dragged keep their place until Rearrange.
+  const moved = useRef(new Set<string>());
+  const dimension = props.dimension ?? 2;
   const [labels, setLabels] = useState<ProjectedLabel[]>([]);
   const [busy, setBusy] = useState(false), [layoutError, setLayoutError] = useState("");
   const [renderError, setRenderError] = useState("");
@@ -54,7 +61,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
       if (worker.current !== current || !renderer.current) return;
       if (!event.data.positions || event.data.error) { fail(); return; }
       for (const [id, point] of Object.entries(event.data.positions)) {
-        if (!latest.current.pinned.has(id) && [point.x, point.y, point.z].every(Number.isFinite)) positions.current.set(id, { ...point });
+        if (!latest.current.pinned.has(id) && !moved.current.has(id) && [point.x, point.y, point.z].every(Number.isFinite)) positions.current.set(id, { ...point });
       }
       renderer.current.update(latest.current.nodes, latest.current.edges, positions.current);
       if (startingCamera === cameraRevision.current) {
@@ -66,12 +73,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
     current.onerror = () => { if (worker.current === current) fail(); };
     timeout.current = setTimeout(() => { if (worker.current === current) fail(); }, 30000);
     current.postMessage({ nodes: latest.current.nodes.map(n => ({ id: n.uri, position: positions.current.get(n.uri)! })),
-      edges: latest.current.edges.map(e => ({ source: e.source, target: e.target })), pinned: [...new Set([...fixed, ...latest.current.pinned])] });
+      edges: latest.current.edges.map(e => ({ source: e.source, target: e.target })),
+      pinned: [...new Set([...fixed, ...latest.current.pinned, ...moved.current])], dimensions: latest.current.dimension ?? 2 });
   }
 
   useImperativeHandle(ref, () => ({
     fit: () => { cameraRevision.current++; renderer.current?.fit(); },
-    rearrange: () => arrange(), centerOnNode: uri => renderer.current?.focus(uri),
+    rearrange: () => { moved.current.clear(); arrange(); }, centerOnNode: uri => renderer.current?.focus(uri),
     zoomIn: () => renderer.current?.zoom(1 / 1.25), zoomOut: () => renderer.current?.zoom(1.25),
     pan: (x, y) => renderer.current?.pan(x, y), orbit: (x, y) => renderer.current?.orbit(x, y),
   }));
@@ -84,10 +92,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
         onSelect: uri => latest.current.onSelect(uri), onEdge: edge => latest.current.onSelectEdge?.(edge),
         onContext: (node, x, y) => latest.current.onContextMenu(node, x, y),
         onLabels: setLabels, onCameraChange: () => { cameraRevision.current++; },
-        onContextLost: () => { setRenderError("The 3D graphics context was lost. Use List, or reload this page to restore it."); setLabels([]); },
-      });
+        onMove: uri => { moved.current.add(uri); stopWorker(); setBusy(false); },
+        onContextLost: () => { setRenderError("The graphics context was lost. Use List, or reload this page to restore it."); setLabels([]); },
+      }, latest.current.dimension ?? 2);
     } catch {
-      setRenderError("3D requires WebGL 2, which is unavailable in this browser. You can still explore every loaded resource in List.");
+      setRenderError("The graph requires WebGL 2, which is unavailable in this browser. You can still explore every loaded resource in List.");
       return;
     }
     renderer.current = engine;
@@ -100,7 +109,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
     const existing = [...positions.current.keys()];
     const added = props.nodes.some(node => !positions.current.has(node.uri));
     stopWorker(); setBusy(false);
-    positions.current = seedSpatialPositions(props.nodes.map(n => n.uri), positions.current, props.edges);
+    positions.current = seedSpatialPositions(props.nodes.map(n => n.uri), positions.current, props.edges, dimension);
     engine.update(props.nodes, props.edges, positions.current);
     if (firstLayout.current && props.nodes.length) { firstLayout.current = false; engine.fit(); arrange(); }
     else if (added) arrange(existing, false);
@@ -112,13 +121,27 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
     if (props.selected) renderer.current?.focus(props.selected);
   }, [props.selected, props.inspectedEdge, props.pinned, props.nodes, props.edges]);
   useEffect(() => { renderer.current?.theme(); }, [theme]);
+  useEffect(() => { renderer.current?.setHops(props.hops); }, [props.hops]);
+  // Switching between the flat map and the volume lays the map out afresh.
+  const shownDimension = useRef(dimension);
+  useEffect(() => {
+    const engine = renderer.current;
+    if (!engine || shownDimension.current === dimension) return;
+    shownDimension.current = dimension;
+    stopWorker(); moved.current.clear();
+    engine.setDimension(dimension);
+    positions.current = seedSpatialPositions(latest.current.nodes.map(n => n.uri), new Map(), latest.current.edges, dimension);
+    engine.update(latest.current.nodes, latest.current.edges, positions.current);
+    cameraRevision.current++; engine.fit(); arrange();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dimension]);
 
   function keyboard(event: React.KeyboardEvent) {
     if (event.target !== event.currentTarget) return;
     const axis: Record<string, [number, number]> = { ArrowLeft: [-0.18, 0], ArrowRight: [0.18, 0], ArrowUp: [0, -0.18], ArrowDown: [0, 0.18] };
     if (axis[event.key]) {
       event.preventDefault();
-      if (event.shiftKey) renderer.current?.pan(-axis[event.key][0] * 400, -axis[event.key][1] * 400);
+      if (event.shiftKey || dimension === 2) renderer.current?.pan(-axis[event.key][0] * 400, -axis[event.key][1] * 400);
       else renderer.current?.orbit(...axis[event.key]);
     } else if (event.key === "+" || event.key === "=") { event.preventDefault(); renderer.current?.zoom(0.8); }
     else if (event.key === "-") { event.preventDefault(); renderer.current?.zoom(1.25); }
@@ -129,7 +152,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
   return <>
     <div ref={host} data-testid="graph-canvas" style={{ position: "absolute", inset: 0 }} tabIndex={0} onKeyDown={keyboard}
       className="touch-none bg-surface outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" role="img"
-      aria-label={`3D knowledge graph: ${props.nodes.length} resources, ${props.edges.length} relationships. Arrow keys rotate, Shift and arrows pan, plus and minus zoom, Home resets. Use List to browse all resources.`} />
+      aria-label={dimension === 2
+        ? `Knowledge graph map: ${props.nodes.length} resources, ${props.edges.length} relationships. Arrow keys pan, plus and minus zoom, Home resets. Use List to browse all resources.`
+        : `3D knowledge graph: ${props.nodes.length} resources, ${props.edges.length} relationships. Arrow keys rotate, Shift and arrows pan, plus and minus zoom, Home resets. Use List to browse all resources.`} />
     {!renderError && <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-label="Visible graph labels">
       {labels.filter(label => label.y >= (props.topInset ?? 0)).map(label => {
         const node = props.nodes.find(n => n.uri === label.uri); if (!node) return null;

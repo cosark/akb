@@ -37,7 +37,7 @@ import {
   type NodeKind,
   type RelationKind,
 } from "./graph-types";
-import { GraphNodeMarker, KindSwatch, RelationSwatch } from "./graph-swatches";
+import { GraphNodeMarker, HopLegend, KindSwatch, RelationSwatch } from "./graph-swatches";
 import { docIdFromUri } from "./use-graph-data";
 
 export type GraphDisplayMode = "graph" | "list";
@@ -371,7 +371,7 @@ function GraphControls({
               onClick={() => toggleType(kind)}
               className={cn("h-11 gap-1.5 rounded-[var(--radius-sm)] px-1.5 text-xs hover:bg-surface-hover @min-[40rem]/graph-toolbar:h-7 @min-[40rem]/graph-toolbar:px-2",
                 selected ? "text-foreground" : "text-foreground-muted")}>
-              <GraphNodeMarker kind={kind} />
+              <GraphNodeMarker kind={kind} neutral={!!view.entry} />
               <span className={selected ? undefined : "line-through"}>{label}</span>
               {count !== undefined && <>
                 <span aria-hidden className="min-w-3 text-right tabular-nums text-foreground-muted">{count}</span>
@@ -392,6 +392,18 @@ function GraphControls({
                 onClick={() => updateView(current => ({ ...current, hops }))} aria-pressed={view.hops === hops} aria-label={hops + " hop neighborhood"}
                 className={cn("h-11 min-w-11 rounded-[var(--radius-sm)] px-1.5 tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/graph-toolbar:h-9 @min-[40rem]/graph-toolbar:min-w-9",
                   view.hops === hops ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>{hops}</button>)}
+            </div>
+            <span className="text-foreground-muted">hops</span>
+            <HopLegend hops={view.hops} />
+          </div>
+        )}
+        {!view.entry && view.selected && (
+          <div className="pointer-events-auto flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-border bg-surface px-2 py-0.5 text-xs shadow-xs">
+            <span className="text-foreground-muted">Explore from the selection</span>
+            <div role="group" aria-label="Neighborhood depth from the selection" className="flex items-center rounded-[var(--radius-sm)] bg-surface-2">
+              {([1, 2, 3] as const).map(hops => <button key={hops} type="button"
+                onClick={() => updateView(current => ({ ...current, entry: current.selected, hops }))} aria-label={hops + " hop neighborhood of the selection"}
+                className="h-11 min-w-11 rounded-[var(--radius-sm)] px-1.5 tabular-nums text-foreground-muted hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/graph-toolbar:h-9 @min-[40rem]/graph-toolbar:min-w-9">{hops}</button>)}
             </div>
             <span className="text-foreground-muted">hops</span>
           </div>
@@ -646,7 +658,8 @@ function GraphMoreMenu({
           </> : <ul className="space-y-3 text-sm leading-relaxed text-foreground-muted">
             <li>Select a resource to inspect its connections. Use Show neighborhood to focus around it.</li>
             <li>Loaded resources select within this scene. Vault search can open a different neighborhood.</li>
-            <li>Drag to rotate in 3D, right-drag to pan, and scroll to zoom. On touch screens, use two fingers to pan or pinch to zoom.</li>
+            <li>The map is flat (2D) by default: drag the background to pan and scroll to zoom. Switch to 3D in the bottom-right controls to rotate: drag to rotate, right-drag to pan. In both, drag a resource to move it; it stays there until Rearrange. On touch screens, use two fingers to pan or pinch to zoom.</li>
+            <li>Choose 1, 2 or 3 hops around a focused or selected resource. Around a focus, colour shows the distance (Focus, 1, 2, 3 hops) and shape shows the kind.</li>
             <li>Camera buttons provide the same controls without dragging. Focus the canvas and use arrow keys to rotate, Shift + arrows to pan, + / − to zoom, or Home to fit. List provides a keyboard-accessible view.</li>
             <li>Pin a position from the resource actions. Rearrange calculates a fresh layout.</li>
           </ul>}

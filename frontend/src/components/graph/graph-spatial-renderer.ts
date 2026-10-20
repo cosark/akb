@@ -1,14 +1,14 @@
 import {
   BufferGeometry, CircleGeometry, Color, DynamicDrawUsage,
   Float32BufferAttribute, Group, InstancedMesh, LineBasicMaterial, LineDashedMaterial,
-  LineSegments, Matrix4, Mesh, MeshBasicMaterial, PerspectiveCamera, PlaneGeometry,
-  Raycaster, RingGeometry, Scene, Spherical, Vector2, Vector3, WebGLRenderer,
+  LineSegments, MOUSE, Matrix4, Mesh, MeshBasicMaterial, PerspectiveCamera, Plane, PlaneGeometry,
+  Raycaster, RingGeometry, Scene, Spherical, TOUCH, Vector2, Vector3, WebGLRenderer,
   type Material, type Object3D,
 } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import type { GraphEdge, GraphNode } from "./graph-types";
-import type { SpatialPoint } from "./graph-spatial-layout";
-import { cameraForPoints, edgeCurvePoints, focusSpatialCamera, visibleLabels, type ProjectedLabel } from "./graph-spatial-view";
+import { HOP_TOKENS, type GraphEdge, type GraphNode } from "./graph-types";
+import type { GraphDimension, SpatialPoint } from "./graph-spatial-layout";
+import { CORNER_VIEW, TOP_VIEW, cameraForPoints, edgeCurvePoints, focusSpatialCamera, visibleLabels, type ProjectedLabel } from "./graph-spatial-view";
 
 interface Callbacks {
   onSelect(uri: string | undefined): void;
@@ -17,7 +17,10 @@ interface Callbacks {
   onLabels(labels: ProjectedLabel[]): void;
   onCameraChange(): void;
   onContextLost(): void;
+  /** A resource was dragged to a new position (already written to the shared position map). */
+  onMove?(uri: string): void;
 }
+
 
 /** GPU rendering and camera only. Data, permissions and force layout stay outside. */
 export class SpatialGraphRenderer {
@@ -43,9 +46,12 @@ export class SpatialGraphRenderer {
   private frame = 0;
   private disposed = false;
   private down?: { x: number; y: number; button: number };
+  private drag?: { uri: string; pointerId: number; plane: Plane; grab: Vector3; moved: boolean };
+  private dragFrame = 0;
+  private hops?: Map<string, number>;
   private colors: Record<string, string> = {};
 
-  constructor(private host: HTMLDivElement, private callbacks: Callbacks) {
+  constructor(private host: HTMLDivElement, private callbacks: Callbacks, private dimension: GraphDimension = 2) {
     this.renderer = new WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance", preserveDrawingBuffer: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.domElement.setAttribute("aria-hidden", "true");
@@ -57,9 +63,12 @@ export class SpatialGraphRenderer {
     this.controls.maxDistance = 50000;
     this.controls.screenSpacePanning = true;
     this.controls.addEventListener("change", this.changed);
+    this.applyDimension();
     this.scene.add(this.resources);
     this.camera.position.set(100, 60, 260);
-    this.renderer.domElement.addEventListener("pointerdown", this.pointerDown);
+    // Capture phase: a press on a resource must disable the camera controls
+    // before their own pointerdown handler starts an orbit or a pan.
+    this.renderer.domElement.addEventListener("pointerdown", this.pointerDown, { capture: true });
     this.renderer.domElement.addEventListener("pointerup", this.pointerUp);
     this.renderer.domElement.addEventListener("pointermove", this.pointerMove);
     this.renderer.domElement.addEventListener("pointerleave", this.pointerLeave);
@@ -71,9 +80,63 @@ export class SpatialGraphRenderer {
   private changed = () => { if (!this.adjusting) this.callbacks.onCameraChange(); this.draw(); };
   private contextLost = (event: Event) => { event.preventDefault(); this.callbacks.onContextLost(); };
   private contextMenu = (event: Event) => event.preventDefault();
-  private pointerDown = (event: PointerEvent) => { this.down = { x: event.clientX, y: event.clientY, button: event.button }; };
+  /** 2D: a flat map seen from straight above; left-drag pans. 3D: left-drag orbits, right-drag pans. */
+  private applyDimension() {
+    const flat = this.dimension === 2;
+    this.controls.enableRotate = !flat;
+    this.controls.mouseButtons = flat
+      ? { LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN }
+      : { LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN };
+    this.controls.touches = flat ? { ONE: TOUCH.PAN, TWO: TOUCH.DOLLY_PAN } : { ONE: TOUCH.ROTATE, TWO: TOUCH.DOLLY_PAN };
+    this.camera.up.set(0, 1, 0);
+  }
+
+  setDimension(dimension: GraphDimension) {
+    if (dimension === this.dimension) return;
+    this.dimension = dimension; this.applyDimension();
+  }
+
+  private pointerDown = (event: PointerEvent) => {
+    this.down = { x: event.clientX, y: event.clientY, button: event.button };
+    if (event.button !== 0) return;
+    const node = this.hit(event).node, point = node && this.positions.get(node.uri);
+    if (!node || !point) return;
+    // Drag on the plane through the resource that faces the camera (z = 0 on a flat map).
+    const at = new Vector3(point.x, point.y, point.z);
+    const normal = new Vector3(); this.camera.getWorldDirection(normal);
+    const plane = new Plane().setFromNormalAndCoplanarPoint(normal, at);
+    const grab = this.pointOnPlane(event, plane)?.sub(at) ?? new Vector3();
+    this.drag = { uri: node.uri, pointerId: event.pointerId, plane, grab, moved: false };
+    this.controls.enabled = false;
+    this.renderer.domElement.setPointerCapture?.(event.pointerId);
+    this.host.style.cursor = "grabbing";
+  };
+  private pointOnPlane(event: PointerEvent, plane: Plane) {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.ray.setFromCamera(new Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), this.camera);
+    return this.ray.ray.intersectPlane(plane, new Vector3()) ?? undefined;
+  }
+  private dragTo(event: PointerEvent) {
+    const drag = this.drag!, down = this.down;
+    if (!drag.moved && down && Math.hypot(event.clientX - down.x, event.clientY - down.y) <= 5) return;
+    const hit = this.pointOnPlane(event, drag.plane); if (!hit) return;
+    hit.sub(drag.grab);
+    drag.moved = true;
+    this.positions.set(drag.uri, { x: hit.x, y: hit.y, z: this.dimension === 2 ? 0 : hit.z });
+    // One rebuild per frame keeps the lines attached while the pointer moves.
+    if (!this.dragFrame) this.dragFrame = requestAnimationFrame(() => { this.dragFrame = 0; if (!this.disposed) this.rebuild(); });
+  }
+  private endDrag(event: PointerEvent) {
+    const drag = this.drag; if (!drag) return;
+    this.drag = undefined; this.controls.enabled = true;
+    if (this.renderer.domElement.hasPointerCapture?.(drag.pointerId)) this.renderer.domElement.releasePointerCapture(drag.pointerId);
+    this.host.style.cursor = "pointer";
+    if (drag.moved) { this.dragTo(event); this.callbacks.onMove?.(drag.uri); }
+  }
   private pointerUp = (event: PointerEvent) => {
+    const dragged = this.drag?.moved; this.endDrag(event);
     const down = this.down; this.down = undefined;
+    if (dragged) return;
     if (!down || Math.hypot(event.clientX - down.x, event.clientY - down.y) > 5) return;
     const hit = this.hit(event);
     if (down.button === 2) { if (hit.node) this.callbacks.onContext(hit.node, event.clientX, event.clientY); }
@@ -84,12 +147,13 @@ export class SpatialGraphRenderer {
     }
   };
   private pointerMove = (event: PointerEvent) => {
+    if (this.drag) { this.dragTo(event); return; }
     if (event.buttons) return;
     const hit = this.hit(event), uri = hit.node?.uri;
     this.host.style.cursor = hit.node || hit.edge ? "pointer" : "grab";
     if (uri !== this.hovered) { this.hovered = uri; this.draw(); }
   };
-  private pointerLeave = () => { this.hovered = undefined; this.host.style.cursor = "grab"; this.draw(); };
+  private pointerLeave = () => { if (this.drag) return; this.hovered = undefined; this.host.style.cursor = "grab"; this.draw(); };
 
   private hit(event: PointerEvent) {
     const rect = this.renderer.domElement.getBoundingClientRect();
@@ -114,9 +178,12 @@ export class SpatialGraphRenderer {
     this.selected = selected; this.edge = edge; this.pinned = pinned; this.rebuild();
   }
 
+  /** Distance from the focused resource; while set, a resource's colour is its distance and its shape its kind. */
+  setHops(hops: Map<string, number> | undefined) { this.hops = hops; this.rebuild(); }
+
   theme() {
     const css = getComputedStyle(document.documentElement);
-    this.colors = Object.fromEntries(["surface", "cat-1", "cat-3", "cat-4", "graph-edge", "link"].map(key => [key, css.getPropertyValue(`--color-${key}`).trim()]));
+    this.colors = Object.fromEntries(["surface", "cat-1", "cat-2", "cat-3", "cat-4", "cat-5", "graph-edge", "link"].map(key => [key, css.getPropertyValue(`--color-${key}`).trim()]));
     this.scene.background = new Color(this.colors.surface);
     this.rebuild();
   }
@@ -152,7 +219,10 @@ export class SpatialGraphRenderer {
       mesh.renderOrder = 1;
       nodes.forEach((node, i) => {
         const active = node.uri === this.selected, nearby = this.neighbors.has(node.uri);
-        const color = new Color(this.colors[kind === "document" ? "cat-1" : kind === "table" ? "cat-3" : "cat-4"]);
+        const hop = this.hops?.get(node.uri);
+        const color = new Color(this.colors[this.hops
+          ? HOP_TOKENS[Math.min(hop ?? HOP_TOKENS.length - 1, HOP_TOKENS.length - 1)]
+          : kind === "document" ? "cat-1" : kind === "table" ? "cat-3" : "cat-4"]);
         if (this.selected && !active && !nearby) color.lerp(background, 0.65);
         mesh.setColorAt(i, color);
       });
@@ -252,7 +322,8 @@ export class SpatialGraphRenderer {
   }
 
   fit() {
-    const view = cameraForPoints(this.nodes.flatMap(n => this.positions.has(n.uri) ? [this.positions.get(n.uri)!] : []), this.camera.aspect);
+    const view = cameraForPoints(this.nodes.flatMap(n => this.positions.has(n.uri) ? [this.positions.get(n.uri)!] : []), this.camera.aspect,
+      this.dimension === 2 ? TOP_VIEW : CORNER_VIEW);
     this.adjusting = true;
     this.camera.position.set(view.position.x, view.position.y, view.position.z); this.controls.target.set(view.target.x, view.target.y, view.target.z);
     this.controls.update(); this.adjusting = false; this.draw();
@@ -273,6 +344,7 @@ export class SpatialGraphRenderer {
     this.adjusting = !user; this.camera.position.add(offset); this.controls.target.add(offset); this.controls.update(); this.adjusting = false; this.draw();
   }
   orbit(x: number, y: number) {
+    if (this.dimension === 2) return;
     const sphere = new Spherical().setFromVector3(this.camera.position.clone().sub(this.controls.target));
     sphere.theta += x; sphere.phi = Math.max(0.1, Math.min(Math.PI - 0.1, sphere.phi + y));
     this.camera.position.copy(new Vector3().setFromSpherical(sphere).add(this.controls.target)); this.controls.update(); this.draw();
@@ -284,10 +356,10 @@ export class SpatialGraphRenderer {
   }
 
   dispose() {
-    this.disposed = true; cancelAnimationFrame(this.frame);
+    this.disposed = true; cancelAnimationFrame(this.frame); cancelAnimationFrame(this.dragFrame);
     this.controls.removeEventListener("change", this.changed); this.controls.dispose(); this.clearObjects();
     const canvas = this.renderer.domElement;
-    canvas.removeEventListener("pointerdown", this.pointerDown); canvas.removeEventListener("pointerup", this.pointerUp);
+    canvas.removeEventListener("pointerdown", this.pointerDown, { capture: true }); canvas.removeEventListener("pointerup", this.pointerUp);
     canvas.removeEventListener("pointermove", this.pointerMove); canvas.removeEventListener("pointerleave", this.pointerLeave);
     canvas.removeEventListener("contextmenu", this.contextMenu); canvas.removeEventListener("webglcontextlost", this.contextLost);
     this.renderer.dispose(); this.renderer.forceContextLoss(); canvas.remove();

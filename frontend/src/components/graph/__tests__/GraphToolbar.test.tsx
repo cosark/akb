@@ -314,4 +314,27 @@ describe("GraphToolbar commands", () => {
     fireEvent.click(screen.getByRole("button", { name: "3 hop neighborhood" }));
     expect(localStorage.getItem("akb:graph:hops")).toBeNull();
   });
+
+  it("lets a selection choose its neighborhood depth directly", () => {
+    const { props } = setup({ view: { ...DEFAULT_VIEW, selected: documentNode.uri } });
+    expect(screen.queryByRole("button", { name: "1 hop neighborhood" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "2 hop neighborhood of the selection" }));
+    expect(props.onChange).toHaveBeenCalledWith(expect.objectContaining({ entry: documentNode.uri, hops: 2, selected: documentNode.uri }));
+  });
+
+  it("names the colour of each hop up to the chosen depth around a focus", () => {
+    const { rerender } = setup({ view: { ...DEFAULT_VIEW, entry: documentNode.uri, hops: 2 } });
+    const legend = screen.getByLabelText("Hop colours");
+    expect(legend).toHaveTextContent("Focus12");
+    expect(legend).not.toHaveTextContent("3");
+    rerender({ view: { ...DEFAULT_VIEW, entry: documentNode.uri, hops: 3 } });
+    expect(screen.getByLabelText("Hop colours")).toHaveTextContent("Focus123");
+  });
+
+  it("keeps the whole-Vault legend in kind colours and greys it while hops colour the map", () => {
+    const { container, rerender } = setup({ resourceCounts: { document: 1, table: 0, file: 0 } });
+    expect(container.querySelector("svg.text-cat-1")).not.toBeNull();
+    rerender({ view: { ...DEFAULT_VIEW, entry: documentNode.uri } });
+    expect(container.querySelector("svg.text-cat-1")).toBeNull();
+  });
 });
