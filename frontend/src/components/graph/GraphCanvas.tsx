@@ -30,6 +30,8 @@ interface Props {
   dimension?: GraphDimension;
   /** Hops from the focused resource; present only for a focused neighborhood. */
   hops?: Map<string, number>;
+  /** Resources joined to the focus by a body link only; drawn faded. */
+  weak?: Set<string>;
 }
 
 export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCanvas(props, ref) {
@@ -121,7 +123,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
     if (props.selected) renderer.current?.focus(props.selected);
   }, [props.selected, props.inspectedEdge, props.pinned, props.nodes, props.edges]);
   useEffect(() => { renderer.current?.theme(); }, [theme]);
-  useEffect(() => { renderer.current?.setHops(props.hops); }, [props.hops]);
+  useEffect(() => { renderer.current?.setHops(props.hops, props.weak); }, [props.hops, props.weak]);
   // Switching between the flat map and the volume lays the map out afresh.
   const shownDimension = useRef(dimension);
   useEffect(() => {

@@ -121,6 +121,50 @@ export function endpointUri(end: unknown): string {
 /** uri → degree (incident visible-edge count). Normalizes legacy object
  *  endpoints through endpointUri. Shared by scene labels and page hub ranking
  *  so the visible-degree rule lives once. */
+/** A focused neighbourhood that keeps only strong connections.
+ *
+ *  Strong connections are explicit relations: from the focus they are followed
+ *  outward (a resource's own context, e.g. an incident's cluster, node, service
+ *  and owner) and, for ``derived_from``, also back to what was derived from it
+ *  (an incident's postmortem). Following them outward only is what stops a walk
+ *  at shared context such as a cluster, instead of fanning out to every other
+ *  incident of that cluster. Body links (implicit) are weak: only the focus's
+ *  own weak neighbours stay, listed in ``weak`` and never walked further.
+ *  A map without any explicit relation is returned unchanged with
+ *  ``strong: false``, so a Vault that never declares relations keeps its links. */
+export function strongNeighborhood(
+  p: GraphPayload,
+  focus: string | undefined,
+  hops: number,
+): GraphPayload & { weak: Set<string>; strong: boolean } {
+  const explicit = p.edges.filter(e => e.kind === "explicit" && e.source !== e.target);
+  if (!focus || explicit.length === 0) return { ...p, weak: new Set(), strong: false };
+  const reach = new Map<string, number>([[focus, 0]]);
+  const queue = [focus];
+  for (let index = 0; index < queue.length; index += 1) {
+    const here = queue[index], next = reach.get(here)! + 1;
+    if (next > hops) continue;
+    for (const e of explicit) {
+      const other = e.source === here ? e.target : e.relation === "derived_from" && e.target === here ? e.source : undefined;
+      if (other === undefined || reach.has(other)) continue;
+      reach.set(other, next); queue.push(other);
+    }
+  }
+  const weak = new Set<string>();
+  for (const e of p.edges) {
+    if (e.kind === "explicit") continue;
+    const other = e.source === focus ? e.target : e.target === focus ? e.source : undefined;
+    if (other !== undefined && !reach.has(other)) weak.add(other);
+  }
+  const keep = new Set([...reach.keys(), ...weak]);
+  const edges = p.edges.filter(e => {
+    if (!keep.has(e.source) || !keep.has(e.target)) return false;
+    if (e.kind === "explicit") return reach.has(e.source) && reach.has(e.target);
+    return e.source === focus || e.target === focus;
+  });
+  return { nodes: p.nodes.filter(n => keep.has(n.uri)), edges, meta: p.meta, weak, strong: true };
+}
+
 /** Hops from ``start`` over the loaded relationships, either direction. Resources the walk does not reach are absent. */
 export function hopDistances(edges: GraphEdge[], start: string | undefined): Map<string, number> {
   const distance = new Map<string, number>();

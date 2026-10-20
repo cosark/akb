@@ -66,6 +66,9 @@ export interface GraphView {
   // field was called `depth`, which collided with the also-
   // renamed `akb_browse.depth` (collection-tree depth).
   hops: 1 | 2 | 3;
+  /** Around a focus: follow explicit relations only ("strong", the default)
+   *  or every loaded connection, body links included ("all"). */
+  links: "strong" | "all";
   types: Set<NodeKind>;
   relations: Set<RelationKind>;
   selected?: string;
@@ -78,6 +81,7 @@ export const HOP_TOKENS = ["cat-5", "cat-1", "cat-2", "cat-3"] as const;
 
 export const DEFAULT_VIEW: GraphView = {
   hops: 1,
+  links: "strong",
   types: new Set(ALL_NODE_KINDS),
   relations: new Set(ALL_RELATIONS),
 };

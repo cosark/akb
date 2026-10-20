@@ -768,7 +768,13 @@ an `sr-only` summary, never the only signal.
   lightness-ramped run of the categorical scale — and shape alone carries the
   kind; a compact hop legend beside the control names each colour, and the
   kind legend's markers turn neutral so they do not claim a colour the map is
-  not using. Keep gesture instructions in Help, not another persistent title row.
+  not using. Around a focus, "Strong links only" is on by default: the map
+  follows explicit relations outward from the focus (and `derived_from` back
+  to what was derived from it), so shared context such as a cluster ends the
+  walk instead of pulling in every other resource that shares it; the focus's
+  own body links stay as faded weak neighbours and are never followed. Turning
+  it off (`links=all`) shows every loaded connection. A Vault without explicit
+  relations around the focus shows all connections with a one-line notice. Keep gesture instructions in Help, not another persistent title row.
   Measure the dock's actual height after wrapping: List's scroll viewport,
   inspector, relationship details, and notices must begin below it. Focusable
   canvas labels must also stay clear. Empty space around floating controls

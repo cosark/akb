@@ -390,6 +390,13 @@ function GraphControls({
                   view.hops === hops ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>{hops}</button>)}
             </div>
             <span className="text-foreground-muted">hops</span>
+            <button type="button" aria-pressed={view.links === "strong"}
+              onClick={() => updateView(current => ({ ...current, links: current.links === "strong" ? "all" : "strong" }))}
+              title="Strong links are explicit relations, followed outward from the focus. Body links are weak: only the focus's own are shown, faded, and never followed."
+              className={cn("min-h-11 rounded-[var(--radius-sm)] px-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/graph-toolbar:min-h-9",
+                view.links === "strong" ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>
+              Strong links only
+            </button>
             <HopLegend hops={view.hops} />
           </div>
         )}
@@ -656,6 +663,7 @@ function GraphMoreMenu({
             <li>Loaded resources select within this scene. Vault search can open a different neighborhood.</li>
             <li>The map is flat (2D) by default: drag the background to pan and scroll to zoom. Switch to 3D in the bottom-right controls to rotate: drag to rotate, right-drag to pan. In both, drag a resource to move it; it stays there until Rearrange. On touch screens, use two fingers to pan or pinch to zoom.</li>
             <li>Choose 1, 2 or 3 hops around a focused or selected resource. Around a focus, colour shows the distance (Focus, 1, 2, 3 hops) and shape shows the kind.</li>
+            <li>Strong links only (on by default) follows explicit relations outward from the focus; the focus's body links appear faded and are not followed. Turn it off to see every loaded connection.</li>
             <li>Camera buttons provide the same controls without dragging. Focus the canvas and use arrow keys to rotate, Shift + arrows to pan, + / − to zoom, or Home to fit. List provides a keyboard-accessible view.</li>
             <li>Pin a position from the resource actions. Rearrange calculates a fresh layout.</li>
           </ul>}
