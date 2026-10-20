@@ -74,6 +74,18 @@ the version under review or its token. Save the reviewed draft using the
 reviewed snapshot's revision; a further conflict requires another latest read
 and review while keeping the draft.
 
+An authentication, access, or missing-document error disables applying and
+saving without discarding the comparison's in-progress combined result. The
+editor owns that result and its field choices across presentation remounts.
+`Check access` retries only the lightweight head read; it does not reload the
+comparison. A later network or service failure cannot clear known lost access.
+Only a successful authorized head read, or a new editor identity/base, clears
+that observation. Reloading a comparison stays disabled until access recovers.
+After a user confirms replacing a composed result, its inputs and field choices
+stay disabled during the comparison read. This prevents new edits from being
+silently replaced by the arriving snapshot; cancellation still keeps the
+original editor draft.
+
 ## Existing integrations
 
 The web document editor and skill editor already send the edit-start revision.

@@ -53,7 +53,7 @@ import { useDocumentHistoryGuard } from "@/hooks/use-document-history-guard";
 import { useDocumentHead } from "@/hooks/use-document-head";
 import { extractMarkdownTargets } from "@akb/markdown-editor";
 import { assetIdFromUrl } from "@/lib/image-assets";
-import type { DocumentConflictResult } from "@/lib/document-conflict";
+import type { DocumentConflictResolution, DocumentConflictResult } from "@/lib/document-conflict";
 import { SummaryFold } from "@/components/summary-fold";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -264,6 +264,7 @@ function DocumentPageContent({
     latest: DocumentConflictSnapshot | null;
     latestError?: string;
     headAtReview?: string | null;
+    resolution?: DocumentConflictResolution;
   } | null>(null);
   const [loadingComparison, setLoadingComparison] = useState(false);
   const latestReadGeneration = useRef(0);
@@ -1111,6 +1112,7 @@ function DocumentPageContent({
       latest: latest ? makeConflictSnapshot("Latest server version", latest.current_commit, latest.title || "", latest.content || "", documentDetailsFrom(latest)) : null,
       latestError: latest ? undefined : latestServerErrorRef.current,
       headAtReview: latestObservedCommit.current,
+      resolution: undefined,
     } : null);
     setLoadingComparison(false);
   }
@@ -1953,7 +1955,7 @@ function DocumentPageContent({
                         </div>
                       </Alert>
                     )}
-                    {saveConflict && editorWritable && (
+                    {saveConflict && canEdit && (
                       <DocumentConflictNotice
                         key={saveConflict.latest?.commit ?? "loading-comparison"}
                         base={saveConflict.base}
@@ -1961,6 +1963,11 @@ function DocumentPageContent({
                         latest={saveConflict.latest}
                         latestError={saveConflict.latestError}
                         loading={loadingComparison}
+                        accessError={headUnavailable ? "Document access could not be verified." : undefined}
+                        checkingAccess={observedHead.checking}
+                        onCheckAccess={() => void observedHead.check()}
+                        resolution={saveConflict.resolution}
+                        onResolutionChange={(resolution) => setSaveConflict(current => current ? { ...current, resolution } : null)}
                         newerRevision={observedCommit !== saveConflict.headAtReview && observedCommit !== editBaseCommit ? observedCommit : null}
                         onApply={applyCombinedChanges}
                         onRetryLatest={() => void reloadComparison()}

@@ -125,6 +125,40 @@ describe("document head observer", () => {
     expect(result.current.error).toBeNull();
   });
 
+  it.each([401, 403, 404])("retains status %s through transient failures until an authorized head succeeds", async status => {
+    const unavailable = new ApiError("Access unavailable", status, null);
+    vi.mocked(getDocumentHead).mockRejectedValueOnce(unavailable);
+    const { result } = renderHook(useDocumentHead, { initialProps: initial });
+    await flush();
+    for (const failure of [new ApiError("Unavailable", 503, null), new TypeError("Failed to fetch")]) {
+      vi.mocked(getDocumentHead).mockRejectedValueOnce(failure);
+      await act(async () => { await result.current.check(); });
+      expect(result.current.error).toBe(unavailable);
+      expect(result.current.head).toBeNull();
+    }
+    const pending = deferred<DocumentHead>();
+    vi.mocked(getDocumentHead).mockReturnValueOnce(pending.promise);
+    act(() => { void result.current.check(); });
+    expect(result.current.error).toBe(unavailable);
+    await act(async () => pending.resolve(head));
+    expect(result.current.error).toBeNull();
+    expect(result.current.head).toEqual(head);
+  });
+
+  it.each([{ scope: "another-account" }, { baseCommit: "another-base" }])("does not carry terminal failure into a new generation %j", async change => {
+    vi.mocked(getDocumentHead).mockRejectedValueOnce(new ApiError("Unavailable", 403, null));
+    const { result, rerender } = renderHook(useDocumentHead, { initialProps: initial });
+    await flush();
+    expect(result.current.error).toBeInstanceOf(ApiError);
+    const pending = deferred<DocumentHead>();
+    vi.mocked(getDocumentHead).mockReturnValueOnce(pending.promise);
+    rerender({ ...initial, ...change });
+    expect(result.current.error).toBeNull();
+    expect(result.current.head).toBeNull();
+    await act(async () => pending.resolve(head));
+    expect(result.current.head).toEqual(head);
+  });
+
   it("starts when visibility returns and cancels a flight when the page becomes hidden", async () => {
     setVisibility("hidden");
     const { result } = renderHook(useDocumentHead, { initialProps: initial });

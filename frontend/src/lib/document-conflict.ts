@@ -17,6 +17,12 @@ export interface DocumentConflictResult {
 
 export type DocumentConflictField = "title" | "body" | keyof DocumentDetailsValues;
 
+/** Owned by the editor comparison so transient view remounts cannot lose work. */
+export interface DocumentConflictResolution {
+  result: DocumentConflictResult;
+  reviewed: DocumentConflictField[];
+}
+
 /** Merge independent fields, never infer a textual or semantic body merge. */
 export function planDocumentConflict(
   base: DocumentConflictSnapshot,

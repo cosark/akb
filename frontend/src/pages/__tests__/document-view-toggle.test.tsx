@@ -973,6 +973,47 @@ describe("DocumentPage view toggle", () => {
     expect(updateDocumentMock).toHaveBeenLastCalledWith("v", "notes/hello.md", expect.objectContaining({ expected_commit: "r2", content: "Recovered remote body my change" }));
   });
 
+  it.each([401, 403, 404])("preserves the combined body, title and details through head status %s and transient retry", async status => {
+    const user = userEvent.setup();
+    getVaultInfoMock.mockResolvedValue({ role: "writer" });
+    getDocumentMock.mockResolvedValue(makeDoc({ summary: "Before" }));
+    renderAt("/vault/v/doc/notes%2Fhello.md?view=edit");
+    await user.type(await screen.findByRole("textbox", { name: "Document body (markdown)" }), " my change");
+    await user.clear(screen.getByRole("textbox", { name: "Document title" }));
+    await user.type(screen.getByRole("textbox", { name: "Document title" }), "My title");
+    await user.clear(screen.getByRole("textbox", { name: "Summary" }));
+    await user.type(screen.getByRole("textbox", { name: "Summary" }), "My summary");
+    updateDocumentMock.mockRejectedValueOnce(new ApiError("moved", 409, { code: "conflict" }));
+    getDocumentMock.mockResolvedValue(makeDoc({ title: "Remote title", content: "Reviewed remote", summary: "Remote summary", current_commit: "r1" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    const combined = await screen.findByRole("textbox", { name: "Combined document body" });
+    await user.type(combined, " manually combined work");
+    await user.click(screen.getByRole("button", { name: "Use my title" }));
+    await user.click(screen.getByRole("button", { name: "Use my summary" }));
+    getDocumentHeadMock.mockRejectedValueOnce(new ApiError("Unavailable", status, null));
+    await act(async () => { window.dispatchEvent(new Event("online")); });
+    const dialog = screen.getByRole("dialog", { name: "Review document changes" });
+    expect(combined).toHaveValue("Reviewed remote manually combined work");
+    expect(within(dialog).getByRole("button", { name: "Apply combined changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save changes", hidden: true })).toBeDisabled();
+    await user.type(combined, " while offline");
+    getDocumentHeadMock.mockRejectedValueOnce(new ApiError("Unavailable", 503, null));
+    await user.click(within(dialog).getByRole("button", { name: "Check access" }));
+    expect(within(dialog).getByRole("button", { name: "Apply combined changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save changes", hidden: true })).toBeDisabled();
+    expect(combined).toHaveValue("Reviewed remote manually combined work while offline");
+    getDocumentHeadMock.mockResolvedValue({ kind: "document_head", uri: "akb://v/coll/notes/doc/hello.md", vault: "v", path: "notes/hello.md", current_commit: "r1", updated_at: null });
+    await user.click(within(dialog).getByRole("button", { name: "Check access" }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Apply combined changes" })).toBeEnabled());
+    expect(within(dialog).getByRole("textbox", { name: "Combined title" })).toHaveValue("My title");
+    await user.click(within(dialog).getByRole("button", { name: "Apply combined changes" }));
+    expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue("My summary");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(updateDocumentMock).toHaveBeenLastCalledWith("v", "notes/hello.md", expect.objectContaining({
+      expected_commit: "r1", title: "My title", summary: "My summary", content: "Reviewed remote manually combined work while offline",
+    }));
+  });
+
   it("keeps a displayed comparison revision even when a newer head arrives", async () => {
     const user = userEvent.setup();
     getVaultInfoMock.mockResolvedValue({ role: "writer" });

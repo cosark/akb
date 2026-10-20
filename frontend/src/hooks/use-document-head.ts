@@ -31,6 +31,10 @@ interface Observation {
   error: Error | null;
 }
 
+function isTerminalHeadError(error: unknown): error is ApiError {
+  return error instanceof ApiError && [401, 403, 404].includes(error.status);
+}
+
 /** Observe only the current editor; private observations never enter a shared cache. */
 export function useDocumentHead({ vault, document: documentRef, scope, baseCommit, enabled }: DocumentHeadOptions) {
   const generation = useMemo<Generation>(() => ({
@@ -68,14 +72,17 @@ export function useDocumentHead({ vault, document: documentRef, scope, baseCommi
       } catch (caught) {
         if (!isCurrent()) return null;
         const error = caught instanceof Error ? caught : new Error("Unable to check the latest document.");
-        const terminal = error instanceof ApiError && [401, 403, 404].includes(error.status);
+        const terminal = isTerminalHeadError(error);
         setObservation(previous => ({
           generation,
           // A failed connection does not undo a known remote change. Access
           // loss or deletion does invalidate the last private observation.
           head: !terminal && previous?.generation === generation ? previous.head : null,
           checking: false,
-          error,
+          // A network failure does not prove restored access. Keep the last
+          // terminal failure until this generation has an authorized success.
+          error: !terminal && previous?.generation === generation && isTerminalHeadError(previous.error)
+            ? previous.error : error,
         }));
         return null;
       } finally {

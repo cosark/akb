@@ -14,7 +14,7 @@ import { LoadingState } from "@/components/ui/loading-state";
 import { Textarea } from "@/components/ui/textarea";
 import { SettingRow, SettingsSection } from "@/components/ui/settings-section";
 import { ApiError, authSessionSnapshot, getDocument, getSkillTemplate, isCurrentAuthSession, updateDocument } from "@/lib/api";
-import type { DocumentConflictResult, DocumentConflictSnapshot } from "@/lib/document-conflict";
+import type { DocumentConflictResolution, DocumentConflictResult, DocumentConflictSnapshot } from "@/lib/document-conflict";
 import { VAULT_SKILL_PATH } from "@/lib/skill";
 import { timeAgo } from "@/lib/utils";
 import { useResourceNavigation, useResourceNavigationGuard } from "@/contexts/resource-navigation-context";
@@ -35,6 +35,7 @@ interface GuideComparison {
   latest: DocumentConflictSnapshot | null;
   latestError?: string;
   observedCommit: string | null;
+  resolution?: DocumentConflictResolution;
 }
 
 function validRevision(value: unknown): value is string {
@@ -259,6 +260,7 @@ export function SkillSection({
         latest: guideSnapshot("Latest server version", latest.current_commit, latest.content || ""),
         latestError: undefined,
         observedCommit: remoteCommit,
+        resolution: undefined,
       } : null);
     } catch (caught) {
       if (!currentOperation()) return;
@@ -509,6 +511,11 @@ export function SkillSection({
         latest={activeComparison.latest}
         latestError={activeComparison.latestError}
         loading={loadingComparison}
+        accessError={unavailable ? "Guide access could not be verified." : undefined}
+        checkingAccess={observedHead.checking}
+        onCheckAccess={() => void observedHead.check()}
+        resolution={activeComparison.resolution}
+        onResolutionChange={(resolution) => setComparison(current => current ? { ...current, resolution } : null)}
         newerRevision={remoteCommit !== activeComparison.observedCommit ? remoteCommit : null}
         onApply={applyCombinedChanges}
         onRetryLatest={() => void loadComparison()}

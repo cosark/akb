@@ -80,6 +80,106 @@ test.describe("document concurrency against the real API", () => {
     expect((await head.json()).content).toBeUndefined();
   });
 
+  for (const status of [401, 403, 404]) {
+    test("preserves a composed result through head " + status + ", transient failure and verified recovery", async ({ page, request }) => {
+      const fixture = await setup(page, request);
+      await fixture.source.fill("Base line\nMy addition\n");
+      const changed = await request.patch(fixture.path, { headers: fixture.headers, data: {
+        content: "Base line\nRemote addition\n", expected_commit: fixture.document.current_commit,
+      } });
+      expect(changed.ok()).toBeTruthy();
+      const remote = await changed.json();
+      await page.getByRole("button", { name: "Check for changes" }).click();
+      await page.getByRole("button", { name: "Compare changes" }).click();
+      const combined = page.getByRole("textbox", { name: "Combined document body" });
+      await expect(combined).toHaveValue("Base line\nRemote addition");
+      await combined.fill("Base line\nRemote addition\nMy manually composed result\n");
+      await expect(combined).toHaveValue("Base line\nRemote addition\nMy manually composed result\n");
+      let failure: number | null = status;
+      // Inject only Head failures; login, comparison GET and final PATCH use the real API.
+      await page.route("**/api/v1/document-head/**", async route => {
+        if (failure === null) await route.continue();
+        else await route.fulfill({ status: failure, json: { detail: { code: "injected_head_failure", message: "Head unavailable" } } });
+      });
+      const writes: Record<string, unknown>[] = [];
+      page.on("request", req => { if (req.method() === "PATCH" && req.url().includes("/api/v1/documents/")) writes.push(req.postDataJSON()); });
+      await page.evaluate(() => window.dispatchEvent(new Event("online")));
+      await expect(page.getByText(/Your combined result is preserved/)).toBeVisible();
+      await expect(combined).toHaveValue(/My manually composed result/);
+      await expect(page.getByRole("button", { name: "Apply combined changes" })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Save changes", includeHidden: true })).toBeDisabled();
+      await expect(page).toHaveURL(/\/vault\//);
+      failure = 503;
+      await page.getByRole("button", { name: "Check access" }).click();
+      await expect(page.getByRole("button", { name: "Check access" })).toBeEnabled();
+      await expect(page.getByRole("button", { name: "Apply combined changes" })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Save changes", includeHidden: true })).toBeDisabled();
+      expect(writes).toHaveLength(0);
+      failure = null;
+      await page.getByRole("button", { name: "Check access" }).click();
+      await expect(page.getByRole("button", { name: "Apply combined changes" })).toBeEnabled();
+      await expect(combined).toHaveValue(/My manually composed result/);
+      await page.getByRole("button", { name: "Apply combined changes" }).click();
+      await page.getByRole("button", { name: "Save changes" }).click();
+      await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+      expect(writes).toHaveLength(1);
+      expect(writes[0].expected_commit).toBe(remote.current_commit);
+      const final = await request.get(fixture.path, { headers: fixture.headers });
+      const saved = await final.json();
+      expect(saved.content).toContain("Remote addition");
+      expect(saved.content).toContain("My manually composed result");
+    });
+  }
+
+  test("locks combined fields during a delayed, explicitly confirmed comparison reload", async ({ page, request }) => {
+    const fixture = await setup(page, request);
+    await fixture.source.fill("Base line\nMy addition\n");
+    await page.getByRole("textbox", { name: "Document title" }).fill("My title");
+    const changed = await request.patch(fixture.path, { headers: fixture.headers, data: {
+      content: "Base line\nRemote addition\n", title: "Remote title", expected_commit: fixture.document.current_commit,
+    } });
+    expect(changed.ok()).toBeTruthy();
+    const remote = await changed.json();
+    await page.getByRole("button", { name: "Check for changes" }).click();
+    await page.getByRole("button", { name: "Compare changes" }).click();
+    const combined = page.getByRole("textbox", { name: "Combined document body" });
+    await expect(combined).toHaveValue("Base line\nRemote addition");
+    await combined.fill("Combined before reload");
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    // Delay only the real comparison read, not its response data or the save.
+    await page.route("**/api/v1/documents/**", async route => {
+      if (route.request().method() === "GET") await pending;
+      await route.continue();
+    });
+    try {
+      await page.getByRole("button", { name: "Reload comparison", exact: true }).click();
+      await page.getByRole("dialog", { name: "Reload this comparison?" }).getByRole("button", { name: "Reload comparison", exact: true }).click();
+      await expect(combined).toBeDisabled();
+      await expect(combined).toHaveValue("Combined before reload");
+      await expect(page.getByRole("textbox", { name: "Combined title" })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Use my title" })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Keep latest body" })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Apply combined changes" })).toBeDisabled();
+    } finally {
+      release();
+    }
+    await expect(combined).toBeEnabled();
+    await expect(combined).toHaveValue("Base line\nRemote addition");
+    await expect(page.getByRole("button", { name: "Apply combined changes" })).toBeDisabled();
+    await combined.fill("Base line\nRemote addition\nMy addition after reload\n");
+    await page.getByRole("button", { name: "Use my title" }).click();
+    await page.getByRole("button", { name: "Apply combined changes" }).click();
+    const savedResponse = page.waitForResponse(response => response.request().method() === "PATCH" && response.url().includes("/api/v1/documents/"));
+    await page.getByRole("button", { name: "Save changes" }).click();
+    expect((await savedResponse).request().postDataJSON().expected_commit).toBe(remote.current_commit);
+    await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+    const final = await request.get(fixture.path, { headers: fixture.headers });
+    const saved = await final.json();
+    expect(saved.title).toBe("My title");
+    expect(saved.content).toContain("My addition after reload");
+  });
+
   test("cancels comparison without replacing the draft and detects a second change before saving", async ({ page, request }) => {
     const fixture = await setup(page, request);
     await fixture.source.fill("Base line\nMy addition\n");

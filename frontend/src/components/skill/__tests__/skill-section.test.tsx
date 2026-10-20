@@ -317,9 +317,42 @@ describe("SkillSection", () => {
     expect(screen.getByLabelText("Vault guide body")).toHaveValue(`${DOC.content} local draft`);
     expect(updateDocument).not.toHaveBeenCalled();
 
+    getDocumentHead.mockRejectedValueOnce(new ApiError("Unavailable", 503, null));
+    await user.click(screen.getByRole("button", { name: "Check for changes" }));
+    expect(screen.getByRole("button", { name: "Save guide" })).toBeDisabled();
+    expect(screen.getByLabelText("Vault guide body")).toHaveValue(`${DOC.content} local draft`);
     await user.click(screen.getByRole("button", { name: "Check for changes" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Save guide" })).toBeEnabled());
     expect(screen.queryByText("Guide unavailable")).not.toBeInTheDocument();
+  });
+
+  it.each([401, 403, 404])("preserves a combined guide through head status %s and rechecks access before applying", async status => {
+    const user = userEvent.setup();
+    getDocumentHead.mockResolvedValue(headAt("new-remote-revision"));
+    updateDocument.mockResolvedValue({ current_commit: "saved-revision" });
+    render(wrap(<SkillSection vault="my-v" doc={DOC} canManage />));
+    await user.click(screen.getByRole("button", { name: "Edit guide" }));
+    await user.type(screen.getByLabelText("Vault guide body"), " local draft");
+    await user.click(screen.getByRole("button", { name: "Compare changes" }));
+    const dialog = screen.getByRole("dialog", { name: "Review document changes" });
+    const body = await within(dialog).findByRole("textbox", { name: "Combined document body" });
+    await user.type(body, " combined guide");
+    getDocumentHead.mockRejectedValueOnce(new ApiError("Unavailable", status, null));
+    await act(async () => { window.dispatchEvent(new Event("online")); });
+    expect(body).toHaveValue("New remote guide combined guide");
+    expect(within(dialog).getByRole("button", { name: "Apply combined changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save guide", hidden: true })).toBeDisabled();
+    getDocumentHead.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await user.click(within(dialog).getByRole("button", { name: "Check access" }));
+    expect(within(dialog).getByRole("button", { name: "Apply combined changes" })).toBeDisabled();
+    await user.click(within(dialog).getByRole("button", { name: "Check access" }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Apply combined changes" })).toBeEnabled());
+    expect(body).toHaveValue("New remote guide combined guide");
+    await user.click(within(dialog).getByRole("button", { name: "Apply combined changes" }));
+    await user.click(screen.getByRole("button", { name: "Save guide" }));
+    expect(updateDocument).toHaveBeenCalledExactlyOnceWith("my-v", VAULT_SKILL_PATH, {
+      content: "New remote guide combined guide", expected_commit: "new-remote-revision",
+    });
   });
 
   it("allows a conditional save after a transient head failure", async () => {
@@ -428,6 +461,9 @@ describe("SkillSection", () => {
     await user.click(screen.getByRole("button", { name: "Compare changes" }));
     const dialog = screen.getByRole("dialog", { name: "Review document changes" });
     expect(await within(dialog).findByText(/latest guide could not be loaded/i)).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Try loading latest" })).toBeDisabled();
+    await user.click(within(dialog).getByRole("button", { name: "Check access" }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Try loading latest" })).toBeEnabled());
     await user.click(within(dialog).getByRole("button", { name: "Try loading latest" }));
     const result = await screen.findByRole("textbox", { name: "Combined document body" });
     await user.clear(result);

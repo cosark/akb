@@ -1058,6 +1058,13 @@ an `sr-only` summary, never the only signal.
   Apply combined changes updates the editor, not the server. The next save
   still checks the reviewed revision. Cancelling preserves the original draft;
   access loss disables saving without navigating away from recovery text.
+  Own the composed result and field choices in the editor comparison, not its
+  presentation lifetime. Preserve them through Head access errors and view
+  remounts. Disable Apply and reload, and offer Check access without resetting the
+  candidate. Transient failures never clear a known access failure; a successful
+  scoped check restores those actions. An explicitly confirmed comparison reload
+  disables result inputs and field choices until its read finishes, so edits
+  cannot race with replacement of the reviewed snapshot.
   Full-viewer Vault links ask before leaving unsaved edits and keep the existing
   local-draft recovery behavior. Keep editing is always available; navigation
   cannot abandon an active save or image upload. Modified/new-tab link gestures
