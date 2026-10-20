@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PerspectiveCamera, Vector3 } from "three";
-import { cameraForPoints, edgeCurvePoints, focusSpatialCamera, visibleLabels } from "../graph-spatial-view";
+import { TOP_VIEW, cameraForPoints, edgeCurvePoints, focusSpatialCamera, visibleLabels } from "../graph-spatial-view";
 
 describe("spatial graph presentation", () => {
   it.each([12, 400])("brings a selected point into the unobscured viewport from camera depth %i", distance => {
@@ -39,5 +39,15 @@ describe("spatial graph presentation", () => {
     const labels = [{ uri: "normal", x: 100, y: 100, depth: 0, priority: 0 }, { uri: "selected", x: 105, y: 100, depth: 0, priority: 100 }, { uri: "behind-camera", x: 300, y: 200, depth: 2, priority: 0 }];
     expect(visibleLabels(labels, 800, 600).map(l => l.uri)).toEqual(["selected"]);
     expect(labels).toHaveLength(3);
+  });
+});
+
+describe("flat map camera", () => {
+  it("looks straight down on the map's centre", () => {
+    const view = cameraForPoints([{ x: -50, y: 0, z: 0 }, { x: 50, y: 20, z: 0 }], 1.5, TOP_VIEW);
+    expect(view.position.x).toBeCloseTo(view.target.x);
+    expect(view.position.y).toBeCloseTo(view.target.y);
+    expect(view.position.z).toBeGreaterThan(view.target.z);
+    expect(view.target).toEqual({ x: 0, y: 10, z: 0 });
   });
 });

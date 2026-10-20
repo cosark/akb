@@ -71,6 +71,11 @@ export interface GraphView {
   selected?: string;
 }
 
+/** Colour tokens for the distance from the focused resource: the focus, then
+ *  1, 2 and 3 hops away. A lightness-ramped run of the categorical scale, so
+ *  neighbouring steps differ slightly and the focus stands out in the accent. */
+export const HOP_TOKENS = ["cat-5", "cat-1", "cat-2", "cat-3"] as const;
+
 export const DEFAULT_VIEW: GraphView = {
   hops: 1,
   types: new Set(ALL_NODE_KINDS),

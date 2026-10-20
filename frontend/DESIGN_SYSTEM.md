@@ -761,8 +761,14 @@ an `sr-only` summary, never the only signal.
   still operable. These are independent pressed-state filter buttons,
   not tabs; hidden kinds retain their counts and remain recoverable. Counts
   describe the loaded map, not an assumed complete Vault inventory. A
-  focused-neighborhood breadcrumb and hop control appear only when
-  relevant. Keep gesture instructions in Help, not another persistent title row.
+  focused-neighborhood breadcrumb and hop control (1–3) appear around a focus;
+  a selection in the whole-Vault map offers the same 1–3 choice, which focuses
+  it. Around a focus the canvas colours each resource by its hop distance —
+  focus `cat-5`, then `cat-1`, `cat-2`, `cat-3` for 1, 2 and 3 hops, a
+  lightness-ramped run of the categorical scale — and shape alone carries the
+  kind; a compact hop legend beside the control names each colour, and the
+  kind legend's markers turn neutral so they do not claim a colour the map is
+  not using. Keep gesture instructions in Help, not another persistent title row.
   Measure the dock's actual height after wrapping: List's scroll viewport,
   inspector, relationship details, and notices must begin below it. Focusable
   canvas labels must also stay clear. Empty space around floating controls
@@ -770,10 +776,11 @@ an `sr-only` summary, never the only signal.
   Honest loaded-resource/relationship counts live at the canvas foot.
   Relation kinds, hidden resources, and orphan decluttering live
   behind Filters rather than in a permanent left rail; resource types are also
-  available there. Hop depth appears only
-  after a resource becomes the focus. The graph canvas owns the remaining
-  workspace: a true Three.js/WebGL perspective scene, with compact bottom
-  orbit/zoom/fit/pan tools. Use Obsidian-inspired unlit, camera-facing dots and
+  available there. The graph canvas owns the remaining
+  workspace: a Three.js/WebGL scene shown as a flat map by default (every
+  resource on one plane, seen from straight above, no rotation) with a 2D / 3D
+  choice in the bottom tools that the browser remembers; 3D is the
+  perspective volume with compact orbit buttons. Zoom/fit/pan tools serve both. Use Obsidian-inspired unlit, camera-facing dots and
   plain projected text, never glossy spheres, cubes, boxed labels or lighting.
   Dot radius stays bounded in screen pixels, including single-resource fit and
   zoom; loaded connections modestly increase size. Small flat circles identify
@@ -784,13 +791,18 @@ an `sr-only` summary, never the only signal.
   curved lines preserve parallel relationships;
   dashed lines mean body links, not a different relation type. Selection accents
   only the resource and its immediate connections. All initial scenes use
-  off-thread three-dimensional force layout, never row/column packing or a
-  tilted 2D plane. Projected labels face the reader and avoid overlap; zoom,
+  off-thread force layout in the chosen dimension (two for the flat map, three
+  for 3D), never row/column packing or a tilted plane; switching dimension
+  lays the map out afresh. Projected labels face the reader and avoid overlap; zoom,
   selection or List reveals dense titles. Selection, theme and filtering do
   not restart layout; incremental expansion fixes existing coordinates.
-  Left-drag orbits, right-drag pans, scroll/pinch zooms. There is no automatic
-  camera motion; buttons and canvas keyboard shortcuts provide alternatives.
-  Pinning is explicit. WebGL2 initialization/context failure offers List instead
+  On the flat map, dragging the background pans and arrow keys pan; in 3D,
+  left-drag orbits and right-drag pans. Scroll/pinch zooms in both. Dragging a
+  resource moves that resource (on its camera-facing plane, z = 0 on the flat
+  map) with its lines attached and never selects it; it keeps that place
+  through later layouts until Rearrange. There is no automatic camera motion;
+  buttons and canvas keyboard shortcuts provide alternatives. Pinning is
+  explicit. WebGL2 initialization/context failure offers List instead
   of silently substituting another renderer. Selecting a node opens a 22rem overlay inspector and never
   narrows the canvas. The inspector prioritizes title/location, Preview / Open
   in vault, Explore connections and Load connections; summary and secondary

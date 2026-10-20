@@ -192,3 +192,28 @@ describe("layoutSpatialGraph", () => {
     expect(volume6(Object.values(output).slice(-4))).toBeGreaterThan(1);
   }, 20_000);
 });
+
+describe("flat map layout", () => {
+  it("seeds and lays out every resource on z = 0, including pinned ones", () => {
+    const ids = Array.from({ length: 12 }, (_, index) => `akb://fixture/doc/flat-${index}.md`);
+    const seeded = seedSpatialPositions(ids, new Map(), [], 2);
+    expect([...seeded.values()].every(point => point.z === 0)).toBe(true);
+    const placed = layoutSpatialGraph({
+      nodes: ids.map(id => ({ id, position: { ...seeded.get(id)!, z: 5 } })),
+      edges: ids.slice(1).map((id, index) => ({ source: ids[index], target: id })),
+      pinned: [ids[0]], dimensions: 2,
+    });
+    const points = Object.values(placed);
+    expectFinite(points);
+    expect(points.every(point => point.z === 0)).toBe(true);
+    expect(new Set(points.map(point => `${point.x.toFixed(3)},${point.y.toFixed(3)}`)).size).toBe(ids.length);
+  });
+
+  it("places new neighbours of a flat map on the same plane", () => {
+    const existing = new Map([["akb://fixture/doc/a.md", { x: 10, y: 20, z: 0 }]]);
+    const seeded = seedSpatialPositions(["akb://fixture/doc/a.md", "akb://fixture/doc/b.md"], existing,
+      [{ source: "akb://fixture/doc/a.md", target: "akb://fixture/doc/b.md" }], 2);
+    expect(seeded.get("akb://fixture/doc/b.md")!.z).toBe(0);
+    expect(seeded.get("akb://fixture/doc/a.md")).toEqual({ x: 10, y: 20, z: 0 });
+  });
+});

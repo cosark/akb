@@ -121,6 +121,28 @@ export function endpointUri(end: unknown): string {
 /** uri → degree (incident visible-edge count). Normalizes legacy object
  *  endpoints through endpointUri. Shared by scene labels and page hub ranking
  *  so the visible-degree rule lives once. */
+/** Hops from ``start`` over the loaded relationships, either direction. Resources the walk does not reach are absent. */
+export function hopDistances(edges: GraphEdge[], start: string | undefined): Map<string, number> {
+  const distance = new Map<string, number>();
+  if (!start) return distance;
+  const neighbors = new Map<string, string[]>();
+  for (const { source, target } of edges) {
+    if (source === target) continue;
+    neighbors.set(source, [...(neighbors.get(source) ?? []), target]);
+    neighbors.set(target, [...(neighbors.get(target) ?? []), source]);
+  }
+  distance.set(start, 0);
+  const queue = [start];
+  for (let index = 0; index < queue.length; index += 1) {
+    const here = queue[index], next = distance.get(here)! + 1;
+    for (const other of neighbors.get(here) ?? []) {
+      if (distance.has(other)) continue;
+      distance.set(other, next); queue.push(other);
+    }
+  }
+  return distance;
+}
+
 export function degreeMap(edges: GraphEdge[]): Map<string, number> {
   const d = new Map<string, number>();
   for (const e of edges) {

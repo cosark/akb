@@ -1,7 +1,11 @@
 import { Vector3, type PerspectiveCamera } from "three";
 import type { SpatialPoint } from "./graph-spatial-layout";
 
-export function cameraForPoints(points: SpatialPoint[], aspect: number) {
+/** The direction the camera looks from: straight above a flat map, from a raised corner in 3D. */
+export const TOP_VIEW = { x: 0, y: 0, z: 1 } as const;
+export const CORNER_VIEW = { x: 0.55, y: 0.32, z: 1 } as const;
+
+export function cameraForPoints(points: SpatialPoint[], aspect: number, from: SpatialPoint = CORNER_VIEW) {
   const box = points.length ? points : [{ x: 0, y: 0, z: 0 }];
   const min = new Vector3(Infinity, Infinity, Infinity), max = new Vector3(-Infinity, -Infinity, -Infinity);
   for (const p of box) { min.min(new Vector3(p.x, p.y, p.z)); max.max(new Vector3(p.x, p.y, p.z)); }
@@ -9,7 +13,7 @@ export function cameraForPoints(points: SpatialPoint[], aspect: number) {
   const radius = Math.max(30, ...box.map(p => center.distanceTo(new Vector3(p.x, p.y, p.z))));
   const angle = Math.min(Math.PI / 8, Math.atan(Math.tan(Math.PI / 8) * Math.max(0.15, aspect)));
   const distance = radius / Math.sin(angle) * 1.2 + 25;
-  const position = new Vector3(0.55, 0.32, 1).normalize().multiplyScalar(distance).add(center);
+  const position = new Vector3(from.x, from.y, from.z).normalize().multiplyScalar(distance).add(center);
   return { position: { x: position.x, y: position.y, z: position.z }, target: { x: center.x, y: center.y, z: center.z }, distance };
 }
 
