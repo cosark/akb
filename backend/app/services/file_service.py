@@ -47,6 +47,7 @@ from app.services.resource_hash import (
 )
 from app.services.s3_delete_worker import cancel_delete as _cancel_s3_delete
 from app.services.s3_delete_worker import enqueue_delete as _enqueue_s3_delete
+from app.services.s3_delete_worker import enqueue_pending_upload_delete
 from app.services import skill_policy
 from app.services.uri_service import file_uri
 from app.services.m1_file_measurement import MeasurementFileService, measurement_enabled
@@ -481,6 +482,23 @@ def _file_envelope(row: dict, vault_name: str) -> dict:
         "description": row["description"],
         "created_by": row["created_by"],
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    }
+
+
+def _upload_confirmation_envelope(row: dict, vault_name: str | None) -> dict:
+    return {
+        "kind": "file",
+        "uri": file_uri(vault_name, str(row["id"]), collection=row["collection"]) if vault_name else None,
+        "vault": vault_name,
+        "name": row["name"],
+        "collection": row["collection"],
+        "mime_type": row["mime_type"],
+        "size_bytes": row["size_bytes"],
+        "content_hash": row["content_hash"],
+        "hash_algorithm": row["hash_algorithm"],
+        "etag": row["etag"],
+        "storage_version": row["storage_version"],
+        "version": _file_version(row),
     }
 
 
@@ -1061,6 +1079,11 @@ class FileService:
                 )
                 if not row:
                     raise NotFoundError("File", file_id)
+                if row["upload_state"] == "confirmed":
+                    if content_hash is not None and content_hash != row["content_hash"]:
+                        raise ConflictError("Confirmed file hash mismatch")
+                    vault_row = await conn.fetchrow("SELECT name FROM vaults WHERE id = $1", vault_id)
+                    return _upload_confirmation_envelope(row, vault_row["name"] if vault_row else None)
 
         # Read object size. Treat NoSuchKey specially: that means the
         # client never finished its presigned upload; clean up the
@@ -1069,15 +1092,10 @@ class FileService:
             meta = s3_adapter.head(row["s3_key"])
             size_bytes = meta["ContentLength"]
         except NotFoundError:
-            async with pool.acquire() as conn:
-                # One transaction so the publication cannot outlive the row
-                # it points at — the same atomicity the delete paths need.
-                async with conn.transaction():
-                    await _delete_file_publications(conn, vault_id, file_id)
-                    await vault_files_repo.delete(conn, fid)
-            logger.warning("Orphan file record deleted: %s (S3 object missing)", file_id)
+            await self.cancel_upload(vault_id, file_id, actor_id=actor_id)
+            logger.warning("Pending upload cleanup requested: %s (S3 object missing)", file_id)
             raise AKBError(
-                f"Upload not found in storage — file record cleaned up: {file_id}",
+                f"Upload not found in storage; any still-pending reservation was cancelled: {file_id}",
                 status_code=404,
             )
 
@@ -1099,13 +1117,9 @@ class FileService:
             or not _content_key_honors_hash(row["s3_key"], server_content_hash)
         )
         if stored_bytes_disowned:
-            async with pool.acquire() as conn:
-                async with conn.transaction():
-                    await _delete_file_publications(conn, vault_id, file_id)
-                    await vault_files_repo.delete(conn, fid)
-                    await _enqueue_s3_delete(conn, row["s3_key"])
+            await self.cancel_upload(vault_id, file_id, actor_id=actor_id)
             raise AKBError(
-                "Uploaded file hash mismatch; file record was cleaned up.",
+                "Uploaded file hash mismatch; only a still-pending reservation was cancelled.",
                 status_code=409,
             )
 
@@ -1123,6 +1137,12 @@ class FileService:
                     storage_version=storage_version,
                 )
                 if not confirmed:
+                    existing = await vault_files_repo.find_by_id(conn, vault_id, fid)
+                    if existing and existing.get("kind") == "file" and existing.get("upload_state") == "confirmed":
+                        if content_hash is not None and content_hash != existing["content_hash"]:
+                            raise ConflictError("Confirmed file hash mismatch")
+                        vault_row = await conn.fetchrow("SELECT name FROM vaults WHERE id = $1", vault_id)
+                        return _upload_confirmation_envelope(existing, vault_row["name"] if vault_row else None)
                     raise NotFoundError("File", file_id)
                 vault_row = await conn.fetchrow(
                     "SELECT name FROM vaults WHERE id = $1", vault_id,
@@ -1183,23 +1203,29 @@ class FileService:
 
         logger.info("Upload confirmed: %s (%d bytes)", row["name"], size_bytes)
         vault_name = vault_row["name"] if vault_row else None
-        return {
-            "kind": "file",
-            "uri": (
-                file_uri(vault_name, file_id, collection=row["collection"])
-                if vault_name else None
-            ),
-            "vault": vault_name,
-            "name": row["name"],
-            "collection": row["collection"],
-            "mime_type": row["mime_type"],
-            "size_bytes": size_bytes,
-            "content_hash": server_content_hash,
-            "hash_algorithm": HASH_ALGORITHM,
-            "etag": etag,
-            "storage_version": storage_version,
-            "version": storage_version or etag,
-        }
+        return _upload_confirmation_envelope({
+            **row, "size_bytes": size_bytes, "content_hash": server_content_hash,
+            "hash_algorithm": HASH_ALGORITHM, "etag": etag, "storage_version": storage_version,
+        }, vault_name)
+
+    async def cancel_upload(self, vault_id: uuid.UUID, file_id: str, *, actor_id: str) -> dict:
+        """Idempotent pending-only cleanup; never deletes a confirmed File."""
+        try:
+            fid = uuid.UUID(file_id)
+        except (ValueError, AttributeError):
+            raise ValidationError("file_id must be a UUID") from None
+        if self._measurement is not None:
+            return await self._measurement.cancel_upload(vault_id, file_id)
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                deleted = await vault_files_repo.delete_pending_file(conn, vault_id, fid)
+                if deleted:
+                    await enqueue_pending_upload_delete(conn, deleted["s3_key"])
+                    return {"cancelled": True, "state": "cancelled"}
+                existing = await vault_files_repo.find_by_id(conn, vault_id, fid)
+                confirmed = existing and existing.get("kind") == "file" and existing.get("upload_state") == "confirmed"
+                return {"cancelled": False, "state": "confirmed" if confirmed else "absent"}
 
     async def get_download_url(
         self, vault_id: uuid.UUID, file_id: str, *, actor_id: str | None = None,

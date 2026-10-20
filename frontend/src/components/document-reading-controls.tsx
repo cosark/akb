@@ -16,7 +16,7 @@ export function DocumentTimestamp({ value, label = "Last edited", compact = fals
   return <TooltipProvider delayDuration={250}><Tooltip>
     <TooltipTrigger asChild>
       <time dateTime={date.toISOString()} tabIndex={0}
-        className="min-w-0 truncate @[48rem]/reader:shrink-0 rounded-[var(--radius-sm)] text-xs text-foreground-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        className="min-w-0 truncate @[48rem]/reader:shrink-0 rounded-[var(--radius-sm)] text-sm text-foreground-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
         <span aria-hidden>{label} {timeAgo(value)}</span>
         <span className="sr-only">{label}: {exact}</span>
       </time>

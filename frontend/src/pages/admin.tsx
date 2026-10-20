@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "react-router-dom";
 
@@ -216,6 +216,14 @@ function providerBadge(state: AdminSsoProvider["state"]) {
 }
 
 function SsoProviderControl() {
+  const mounted = useRef(true);
+  const editRevision = useRef(0);
+  const saveGeneration = useRef(0);
+  const toggleGeneration = useRef(0);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; editRevision.current += 1; };
+  }, []);
   const [form, setForm] = useState(EMPTY_PROVIDER_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [togglingAlias, setTogglingAlias] = useState<string | null>(null);
@@ -229,12 +237,14 @@ function SsoProviderControl() {
   const catalog = catalogQuery.data;
 
   function setField(field: keyof typeof form, value: string) {
+    editRevision.current += 1;
     setForm((current) => ({ ...current, [field]: value }));
     setError("");
     setNotice("");
   }
 
   function editProvider(provider: AdminSsoProvider) {
+    editRevision.current += 1;
     setForm({
       providerType: provider.provider_type,
       alias: provider.alias,
@@ -253,6 +263,10 @@ function SsoProviderControl() {
     setError("");
     setNotice("");
     setSubmitting(true);
+    const revision = editRevision.current;
+    const generation = ++saveGeneration.current;
+    const alias = form.alias.trim();
+    const existingProvider = catalog?.providers.some(provider => provider.alias === alias);
     const issuer = form.issuer.trim().replace(/\/+$/, "");
     const providerType = form.providerType.trim();
     // Refuse rather than substitute: silently saving a provider as a different
@@ -270,7 +284,7 @@ function SsoProviderControl() {
       return;
     }
     try {
-      await configureAdminSsoProvider(form.alias.trim(), {
+      await configureAdminSsoProvider(alias, {
         provider_type: providerType,
         display_name: form.displayName.trim(),
         issuer,
@@ -278,29 +292,46 @@ function SsoProviderControl() {
         client_id: form.clientId.trim(),
         ...(form.clientSecret ? { client_secret: form.clientSecret } : {}),
       });
-      setForm((current) => ({ ...current, clientSecret: "" }));
-      setNotice("Provider configuration was saved disabled. Enable it after checking the redirect URI.");
-      await catalogQuery.refetch();
+      if (!mounted.current) return;
+      const refreshed = await catalogQuery.refetch();
+      if (!mounted.current) return;
+      if (revision === editRevision.current && generation === saveGeneration.current) {
+        if (refreshed.isError || (existingProvider && !refreshed.data?.providers.some(provider => provider.alias === alias))) {
+          setError("The saved provider could not be verified in the current catalog. Check its state before saving again.");
+          return;
+        }
+        setForm((current) => ({ ...current, clientSecret: "" }));
+        setNotice("Provider configuration was saved disabled. Enable it after checking the redirect URI.");
+      }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Provider configuration failed");
+      if (mounted.current && revision === editRevision.current && generation === saveGeneration.current) {
+        setError(caught instanceof Error ? caught.message : "Provider configuration failed");
+      }
     } finally {
-      setSubmitting(false);
+      if (mounted.current && generation === saveGeneration.current) setSubmitting(false);
     }
   }
 
   async function toggleProvider(provider: AdminSsoProvider) {
+    const revision = editRevision.current;
+    const generation = ++toggleGeneration.current;
     const enabled = !provider.enabled;
     setError("");
     setNotice("");
     setTogglingAlias(provider.alias);
     try {
       await setAdminSsoProviderEnabled(provider.alias, enabled);
-      setNotice(`${provider.display_name} was ${enabled ? "enabled" : "disabled"}.`);
+      if (!mounted.current) return;
+      if (revision === editRevision.current && generation === toggleGeneration.current) {
+        setNotice(`${provider.display_name} was ${enabled ? "enabled" : "disabled"}.`);
+      }
       await catalogQuery.refetch();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Provider state change failed");
+      if (mounted.current && revision === editRevision.current && generation === toggleGeneration.current) {
+        setError(caught instanceof Error ? caught.message : "Provider state change failed");
+      }
     } finally {
-      setTogglingAlias(null);
+      if (mounted.current && generation === toggleGeneration.current) setTogglingAlias(null);
     }
   }
 

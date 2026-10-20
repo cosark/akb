@@ -261,12 +261,14 @@ for (const width of [2560, 1440, 768, 375]) for (const dark of [false, true]) {
       await page.mouse.up();
       await expect.poll(async () => (await page.getByRole("separator", { name: "Resize tree panel" }).boundingBox())!.x).toBeGreaterThan(handle.x + 20);
       await page.screenshot({ path: testInfo.outputPath("vault-full-height-navigation.png"), fullPage: true });
-      const titleRow = page.getByRole("navigation", { name: "Vault sections", exact: true });
-      const titleBottom = (await titleRow.boundingBox())!;
+      await expect(page.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Navigate in platform", exact: true })).toHaveText("Navigate");
+      const managementBottoms: number[] = [];
       for (const selector of ['[data-slot="vault-management-row"]', '[data-slot="collection-management-row"]']) {
         const row = (await page.locator(selector).boundingBox())!;
-        expect(row.y + row.height).toBe(titleBottom.y + titleBottom.height);
+        managementBottoms.push(row.y + row.height);
       }
+      expect(managementBottoms[0]).toBe(managementBottoms[1]);
       await page.getByRole("button", { name: "Minimize vault list to a rail", exact: true }).click();
       expect((await vaultList.boundingBox())!.width).toBe(56);
       expect((await vaultList.boundingBox())!.y).toBe(0);

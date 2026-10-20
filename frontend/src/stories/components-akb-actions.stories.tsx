@@ -112,9 +112,9 @@ export const RoleChangeSuccess: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByRole("button", { name: /Change role for writer-user/i }));
-    await userEvent.click(await within(document.body).findByRole("menuitemradio", { name: "writer" }));
+    await userEvent.click(await within(document.body).findByRole("menuitemradio", { name: "Writer" }));
     const trigger = canvas.getByRole("button", { name: /Change role for writer-user/i });
-    await expect(await within(trigger).findByText("writer")).toBeVisible();
+    await expect(await within(trigger).findByText("Writer")).toBeVisible();
   },
 };
 
@@ -141,7 +141,7 @@ export const RoleChangeFailure: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByRole("button", { name: /Change role for readonly-user/i }));
-    await userEvent.click(await within(document.body).findByRole("menuitemradio", { name: "writer" }));
+    await userEvent.click(await within(document.body).findByRole("menuitemradio", { name: "Writer" }));
     await expect(await canvas.findByRole("alert")).toHaveTextContent("Not allowed");
   },
 };

@@ -429,6 +429,13 @@ execution command without exposing credential values to the descriptor or
 runtime files. The curated list and assertion-count behavior come from the
 shared suite runner, not from duplicated workflow shell steps.
 
+The combined API/browser job has a 45-minute budget. In CI, Playwright's whole
+browser suite is bounded to 30 minutes, leaving time for runtime preparation,
+the API suites, cleanup, and failure-log upload. Existing per-test timeouts and
+assertions remain unchanged. A browser-suite timeout is a failing check, not a
+successful or skipped run; its diagnostics stay in `frontend-e2e.log` within the
+runtime's failure artifacts.
+
 ### Clean Ubuntu 24.04 host
 
 Use the optional bootstrap when the host needs its container and Python

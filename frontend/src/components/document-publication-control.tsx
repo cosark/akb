@@ -130,6 +130,7 @@ export function DocumentPublicationControl({
                   variant="outline"
                   size="sm"
                   data-reader-control
+                  data-publication-trigger
                   aria-haspopup="dialog"
                   aria-expanded={open && !publishDisabled}
                   aria-disabled={publishDisabled || undefined}
@@ -140,7 +141,10 @@ export function DocumentPublicationControl({
                   }}
                 >
                   <Globe2 className="h-4 w-4" aria-hidden />
-                  {publicSlug ? "Public link" : "Publish"}
+                  <span className="document-publication-label">
+                    <span className="document-publication-reserve" aria-hidden>Public link</span>
+                    <span>{publicSlug ? "Public link" : "Publish"}</span>
+                  </span>
                 </Button>
               </PopoverTrigger>
             </TooltipTrigger>

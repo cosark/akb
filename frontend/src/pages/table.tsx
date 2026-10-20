@@ -42,6 +42,9 @@ import { ResourceDeleteDialog } from "@/components/resource-delete-dialog";
 import { PublicationSuccessBanner } from "@/components/publication-success-banner";
 import { TablePublishDialog } from "@/components/table-publish-dialog";
 import { TableRowDialog } from "@/components/table-row-dialog";
+import { TableCellInspector, type InspectedTableCell } from "@/components/table-cell-inspector";
+import { TableSchemaOverlay } from "@/components/table-schema-overlay";
+import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import {
   TableFilterBar,
   TableFilterDialog,
@@ -114,14 +117,24 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
   const [selectedRow, setSelectedRow] = useState<Record<string, unknown> | null>(null);
   const [rowToDelete, setRowToDelete] = useState<Record<string, unknown> | null>(null);
   const [rowNotice, setRowNotice] = useState("");
+  const [activeCell, setActiveCell] = useState({ row: 0, column: 0 });
+  const [inspectedCell, setInspectedCell] = useState<InspectedTableCell | null>(null);
+  const cellReturnFocus = useRef<HTMLElement | null>(null);
+  const recordsRef = useRef<HTMLDivElement | null>(null);
   const schemaToggleRef = useRef<HTMLButtonElement | null>(null);
   const schemaCloseRef = useRef<HTMLButtonElement | null>(null);
+  const schemaAnchorRef = useRef<HTMLDivElement | null>(null);
+  const rowDialogReturnFocusRef = useRef<HTMLElement | null>(null);
   const loadedAccessRevision = useRef(accessRevision);
   const queryState = useMemo(() => parseTableQueryState(searchParams), [searchParams]);
+  useEffect(() => { setInspectedCell(null); }, [accessChecking, accessRevision]);
 
   const setQueryState = useCallback(
-    (next: TableQueryState) => {
-      setSearchParams(writeTableQueryState(searchParams, next), { replace: true });
+    (next: TableQueryState, replace = false) => {
+      const params = writeTableQueryState(searchParams, next);
+      if (params.toString() !== searchParams.toString()) setSearchParams(params, { replace });
+      setActiveCell({ row: 0, column: 0 });
+      setInspectedCell(null);
     },
     [searchParams, setSearchParams],
   );
@@ -198,7 +211,6 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
 
   const closeSchema = useCallback(() => {
     setSchemaOpen(false);
-    window.requestAnimationFrame(() => schemaToggleRef.current?.focus());
   }, []);
 
   useEffect(() => {
@@ -208,25 +220,10 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
   }, [rowNotice]);
 
   useEffect(() => {
-    if (!schemaOpen) return;
-    const focusFrame = window.requestAnimationFrame(() => schemaCloseRef.current?.focus());
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      closeSchema();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.cancelAnimationFrame(focusFrame);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [closeSchema, schemaOpen]);
-
-  useEffect(() => {
     if (!rowsQuery.data || rowsQuery.isPlaceholderData) return;
     const pageCount = Math.max(1, Math.ceil(total / queryState.pageSize));
     if (queryState.pageIndex < pageCount) return;
-    setQueryState({ ...queryState, pageIndex: pageCount - 1 });
+    setQueryState({ ...queryState, pageIndex: pageCount - 1 }, true);
   }, [queryState, rowsQuery.data, rowsQuery.isPlaceholderData, setQueryState, total]);
 
   const columnByName = useMemo(
@@ -315,7 +312,8 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
               size="sm"
               className="min-h-11 sm:min-h-0"
               aria-label="Add row"
-              onClick={() => {
+              onClick={(event) => {
+                rowDialogReturnFocusRef.current = event.currentTarget;
                 setSelectedRow(null);
                 setRowDialogMode("create");
               }}
@@ -366,7 +364,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
         />
       )}
 
-      <div className="relative min-h-0 flex-1 overflow-hidden">
+      <div ref={schemaAnchorRef} data-testid="table-workspace-canvas" className="relative min-h-0 flex-1 overflow-hidden">
         <ResourceCanvas variant="reading">
           {writeRestriction && (
             <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2 text-xs text-foreground-muted">
@@ -440,7 +438,8 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                       variant="accent"
                       size="sm"
                       className="mt-5"
-                      onClick={() => {
+                      onClick={(event) => {
+                        rowDialogReturnFocusRef.current = event.currentTarget;
                         setSelectedRow(null);
                         setRowDialogMode("create");
                       }}
@@ -452,12 +451,15 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                 </div>
               ) : (
                 <div
+                  ref={recordsRef}
                   role="region"
                   aria-label={`Records for ${table}`}
+                  aria-describedby="table-cell-keyboard-help"
                   aria-busy={rowsQuery.isFetching || undefined}
                   tabIndex={0}
                   className="min-h-0 flex-1 overflow-auto focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 >
+                  <p id="table-cell-keyboard-help" className="sr-only">Focus a cell, use arrow keys to move, and press Enter or Space to read and copy its full value.</p>
                   <table className="min-w-full border-separate border-spacing-0 text-sm">
                     <thead>
                       <tr>
@@ -491,6 +493,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                                 type="button"
                                 className="flex min-h-11 w-full cursor-pointer items-center justify-between gap-3 px-3 py-2 text-left hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                                 onClick={() => updateSort(columnName)}
+                                title={`${columnName}${columnByName.get(columnName)?.type ? ` · ${columnByName.get(columnName)?.type}` : ""}. View Schema for constraints.`}
                                 aria-label={`Sort by ${columnName}, ${
                                   sorted ? activeSort.direction : "not currently sorted"
                                 }`}
@@ -499,11 +502,6 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                                   <span className="block truncate whitespace-nowrap font-mono text-xs font-medium text-foreground">
                                     {columnName}
                                   </span>
-                                  {columnByName.get(columnName)?.type && (
-                                    <span className="mt-0.5 block whitespace-nowrap text-xs font-normal text-foreground-muted">
-                                      {columnByName.get(columnName)?.type}
-                                    </span>
-                                  )}
                                 </span>
                                 <SortIcon
                                   className={cn(
@@ -535,7 +533,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                           <td className="sticky left-0 z-[var(--z-raised)] border-b border-r border-border bg-surface px-3 py-2 text-xs text-foreground-muted tabular-nums group-hover:bg-surface-hover">
                             {displayPageIndex * displayPageSize + rowIndex + 1}
                           </td>
-                          {cols.map((columnName) => {
+                          {cols.map((columnName, columnIndex) => {
                             const value = row[columnName];
                             const numeric =
                               typeof value === "number" ||
@@ -543,8 +541,32 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                             return (
                               <TooltipText key={columnName} asChild tip={formatCellFull(value)}>
                                 <td
+                                  data-cell-row={rowIndex}
+                                  data-cell-column={columnIndex}
+                                  tabIndex={Math.min(activeCell.row, rows.length - 1) === rowIndex && Math.min(activeCell.column, cols.length - 1) === columnIndex ? 0 : -1}
+                                  aria-label={`Row ${displayPageIndex * displayPageSize + rowIndex + 1}, ${columnName}. Press Enter to inspect full value.`}
+                                  onFocus={() => setActiveCell({ row: rowIndex, column: columnIndex })}
+                                  onClick={event => {
+                                    cellReturnFocus.current = event.currentTarget;
+                                    setInspectedCell({ column: columnName, row: displayPageIndex * displayPageSize + rowIndex + 1, value: formatCellFull(value) });
+                                  }}
+                                  onKeyDown={event => {
+                                    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.currentTarget.click(); return; }
+                                    let nextRow = rowIndex, nextColumn = columnIndex;
+                                    if (event.key === "ArrowDown") nextRow++;
+                                    else if (event.key === "ArrowUp") nextRow--;
+                                    else if (event.key === "ArrowRight") nextColumn++;
+                                    else if (event.key === "ArrowLeft") nextColumn--;
+                                    else if (event.key === "Home") { nextColumn = 0; if (event.ctrlKey) nextRow = 0; }
+                                    else if (event.key === "End") { nextColumn = cols.length - 1; if (event.ctrlKey) nextRow = rows.length - 1; }
+                                    else return;
+                                    event.preventDefault();
+                                    nextRow = Math.max(0, Math.min(rows.length - 1, nextRow));
+                                    nextColumn = Math.max(0, Math.min(cols.length - 1, nextColumn));
+                                    recordsRef.current?.querySelector<HTMLElement>(`[data-cell-row="${nextRow}"][data-cell-column="${nextColumn}"]`)?.focus();
+                                  }}
                                   className={cn(
-                                    "max-w-md truncate whitespace-nowrap border-b border-r border-border px-3 py-2 text-foreground last:border-r-0",
+                                    "max-w-md cursor-pointer truncate whitespace-nowrap border-b border-r border-border px-3 py-2 text-foreground last:border-r-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                                     numeric && "text-right tabular-nums",
                                     value !== null && typeof value === "object" && "font-mono text-xs",
                                     value === null && "italic text-foreground-muted",
@@ -559,7 +581,8 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                             <td className="sticky right-0 z-[var(--z-raised)] border-b border-l border-border bg-surface px-1 py-1 text-center group-hover:bg-surface-hover">
                               <RowActionsMenu
                                 rowNumber={displayPageIndex * displayPageSize + rowIndex + 1}
-                                onEdit={() => {
+                                onEdit={(trigger) => {
+                                  rowDialogReturnFocusRef.current = trigger;
                                   setSelectedRow(row);
                                   setRowDialogMode("edit");
                                 }}
@@ -587,28 +610,23 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
           </section>
         </ResourceCanvas>
 
-        {schemaOpen && (
-          <button
-            type="button"
-            aria-label="Close table schema"
-            onClick={closeSchema}
-            className="absolute inset-0 z-[var(--z-raised)] bg-black/40 lg:hidden"
-          />
-        )}
+        <TableCellInspector cell={!accessChecking && !accessRefreshing ? inspectedCell : null} onClose={() => setInspectedCell(null)} returnFocusRef={cellReturnFocus} />
+        <TableSchemaOverlay
+          open={schemaOpen}
+          onOpenChange={setSchemaOpen}
+          anchorRef={schemaAnchorRef}
+          returnFocusRef={schemaToggleRef}
+          closeFocusRef={schemaCloseRef}
+        >
         <aside
           id="table-schema-panel"
           aria-label="Table schema"
-          aria-hidden={!schemaOpen}
-          inert={!schemaOpen}
-          className={cn(
-            "absolute inset-y-0 right-0 z-[var(--z-overlay)] flex w-full max-w-xl flex-col overflow-hidden border-l border-border bg-surface transition-transform duration-[var(--duration-base)] ease-[var(--ease-out)] lg:w-[30rem]",
-            schemaOpen ? "translate-x-0 shadow-xl" : "pointer-events-none translate-x-full",
-          )}
+          className="flex min-h-0 flex-1 flex-col overflow-hidden bg-surface"
         >
           <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
             <div>
-              <h2 className="text-sm font-semibold text-foreground">Table schema</h2>
-              <p className="text-xs text-foreground-muted">Columns and constraints</p>
+              <DialogTitle className="text-sm">Table schema</DialogTitle>
+              <DialogDescription className="text-xs">Columns and constraints</DialogDescription>
             </div>
             <Button
               ref={schemaCloseRef}
@@ -694,6 +712,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
             )}
           </div>
         </aside>
+        </TableSchemaOverlay>
       </div>
       <ResourceDeleteDialog
         open={deleteOpen}
@@ -730,6 +749,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
         }
       />
       <TableRowDialog
+        returnFocusRef={rowDialogReturnFocusRef}
         open={rowDialogMode !== null}
         onOpenChange={(open) => {
           if (open) return;
@@ -760,7 +780,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                 : "Row added",
             );
             if (queryState.filters.length === 0 && queryState.pageIndex !== 0) {
-              setQueryState({ ...queryState, pageIndex: 0 });
+              setQueryState({ ...queryState, pageIndex: 0 }, true);
             }
           }
           await Promise.all([
@@ -851,15 +871,17 @@ function RowActionsMenu({
   onDelete,
 }: {
   rowNumber: number;
-  onEdit: () => void;
+  onEdit: (trigger: HTMLButtonElement | null) => void;
   onDelete: () => void;
 }) {
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const itemClass =
     "flex cursor-pointer select-none items-center gap-2 rounded-[var(--radius-sm)] px-3 py-2 text-sm text-foreground outline-none data-[highlighted]:bg-surface-hover";
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <Button
+          ref={triggerRef}
           type="button"
           variant="ghost"
           size="icon"
@@ -875,7 +897,7 @@ function RowActionsMenu({
           sideOffset={6}
           className="z-[var(--z-popover)] min-w-40 overflow-hidden rounded-[var(--radius-md)] border border-border bg-surface p-1 shadow-md"
         >
-          <DropdownMenu.Item onSelect={onEdit} className={itemClass}>
+          <DropdownMenu.Item onSelect={() => onEdit(triggerRef.current)} className={itemClass}>
             <Pencil className="h-4 w-4 text-foreground-muted" aria-hidden />
             Edit row
           </DropdownMenu.Item>

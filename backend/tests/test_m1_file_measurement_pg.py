@@ -114,6 +114,37 @@ def _token(url: str) -> str:
 
 
 @pytest.mark.asyncio
+async def test_pending_cancellation_never_deletes_a_confirmed_measurement_file(context):
+    _pool, vault_id, denied_vault_id, vault_name = context
+    service = m1.MeasurementFileService()
+    payload = b"confirmed measurement file"
+    digest = hashlib.sha256(payload).hexdigest()
+    reserved = await service.initiate_upload(
+        vault_name=vault_name, vault_id=vault_id, collection="", filename="saved.bin",
+        actor_id="fixture", mime_type="application/octet-stream", content_hash=digest, description="",
+    )
+    await service.transfer(_token(reserved["upload_url"]), method="PUT", body=payload)
+    saved = await service.confirm_upload(vault_id, reserved["file_id"], content_hash=digest)
+    assert await service.cancel_upload(denied_vault_id, reserved["file_id"]) == {"cancelled": False, "state": "absent"}
+    assert await service.cancel_upload(vault_id, reserved["file_id"]) == {"cancelled": False, "state": "confirmed"}
+    assert await service.confirm_upload(vault_id, reserved["file_id"], content_hash=digest) == saved
+
+
+@pytest.mark.asyncio
+async def test_pending_cancellation_withdraws_expired_measurement_intent_only(context):
+    pool, vault_id, _denied_vault_id, vault_name = context
+    service = m1.MeasurementFileService()
+    reserved = await service.initiate_upload(
+        vault_name=vault_name, vault_id=vault_id, collection="", filename="pending.bin",
+        actor_id="fixture", mime_type="application/octet-stream", description="", content_hash=None,
+    )
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE m1_file_transfer_intents SET expires_at = NOW() - INTERVAL '1 hour' WHERE file_id = $1", uuid.UUID(reserved["file_id"]))
+    assert await service.cancel_upload(vault_id, reserved["file_id"]) == {"cancelled": True, "state": "cancelled"}
+    assert await service.cancel_upload(vault_id, reserved["file_id"]) == {"cancelled": False, "state": "absent"}
+
+
+@pytest.mark.asyncio
 async def test_measurement_upload_checks_the_parent_vault_lock(monkeypatch):
     """The measurement facade follows the same vault-delete contract."""
     class FakeTransaction:

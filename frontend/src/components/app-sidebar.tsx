@@ -15,7 +15,7 @@ import {
 import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { useCurrentUser } from "@/contexts/current-user-context";
+import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
 import { useSettingsDialog } from "@/contexts/settings-dialog-context";
 import { readLegacyVaultFavorites, useVaultFavorites } from "@/hooks/use-vault-favorites";
 import { WorkspacePersonalSections } from "@/components/workspace-personal-sections";
@@ -72,6 +72,7 @@ export function AppSidebar({
   const settings = useSettingsDialog();
   const navigate = useNavigate();
   const user = useCurrentUser();
+  const { checking, revision } = useAccessVerification();
   const { favorites, toggleFavorite, importFavorites } = useVaultFavorites();
   const [importOpen, setImportOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -81,13 +82,13 @@ export function AppSidebar({
   const [showAll, setShowAll] = useState(false);
   const disclosure = useRef<HTMLButtonElement>(null);
   const vaultQuery = useQuery({
-    queryKey: ["workspace-favorite-vaults", user?.user_id, pathname],
+    queryKey: ["workspace-favorite-vaults", user?.user_id, revision, pathname],
     queryFn: () => listVaults(),
-    enabled: !!user,
+    enabled: !!user && !checking,
     retry: false,
   });
   // Resolve saved IDs against accessible Vaults; never persist display names.
-  const vaults = vaultQuery.isError ? [] : (vaultQuery.data?.vaults ?? []);
+  const vaults = checking || vaultQuery.isError ? [] : (vaultQuery.data?.vaults ?? []);
   const pinned = favorites.flatMap(id => {
     const vault = vaults.find(v => v.id === id);
     return vault ? [vault] : [];
@@ -234,8 +235,9 @@ export function AppSidebar({
           <p><strong>Vaults</strong> are shared knowledge spaces. Open one to browse its Collections, documents, tables, and files.</p>
           <p><strong>Favorites and Pinned</strong> are personal shortcuts. Star a Vault, use Pin in the document toolbar, or pin a Collection from its actions menu. They do not change sharing permissions.</p>
           <p><strong>Recently viewed and Drafts</strong> help you return to work saved in this browser. Drafts are not published documents.</p>
-          <p><strong>Watch</strong> a document to receive changes in your Inbox. Pinning does not subscribe you to notifications.</p>
+          <p><strong>Watch</strong> a document to receive changes in Notifications. Pinning does not subscribe you to notifications.</p>
           <p><strong>Search</strong> in the top bar for quick results, or use the Search page for advanced filters.</p>
+          <p><strong>Sidebar filters</strong> narrow the names in that sidebar. To search content in a Collection, choose Search in collection from its actions menu.</p>
           <Link to="/settings?tab=tokens" onClick={event => {
             if (settings && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
               event.preventDefault(); setHelpOpen(false);

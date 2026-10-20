@@ -110,22 +110,17 @@ export function AppRoutes() {
     <>
       <Routes location={backgroundLocation ?? location}>
         {renderRoutes(["admin", "auth", "public"])}
-        <Route element={<Layout />}>
+        <Route element={<Layout routeOverlay={backgroundLocation && (
+          <Routes location={location}>
+            <Route path="/vault/:name/doc/:id" element={<DocumentPreviewDialog />} />
+          </Routes>
+        )} />}>
           {renderRoutes(["app-layout"])}
           <Route element={<VaultShell />}>
             {renderRoutes(["vault-shell"], !backgroundLocation)}
           </Route>
         </Route>
       </Routes>
-
-      {backgroundLocation && (
-        <Routes location={location}>
-          <Route
-            path="/vault/:name/doc/:id"
-            element={<DocumentPreviewDialog />}
-          />
-        </Routes>
-      )}
     </>
   );
 }

@@ -79,7 +79,7 @@ describe("Admin tab search + sort", () => {
     const usernames = screen.getAllByTestId("admin-user-row").map((el) =>
       el.querySelector("[data-testid='admin-user-name']")?.textContent
     );
-    expect(usernames).toEqual(["alice", "carol", "bob"]); // 3, 1, 0
+    expect(usernames).toEqual(["Alice", "Carol", "Bob"]); // 3, 1, 0
   });
 
   it("hides admin password reset controls in SSO mode", async () => {
@@ -105,6 +105,8 @@ describe("Admin tab search + sort", () => {
 
     await screen.findByText("bob");
     expect(screen.queryByRole("button", { name: /reset password/i })).toBeNull();
-    expect(screen.getByRole("button", { name: /delete user bob/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Actions for bob" }));
+    expect(screen.queryByRole("menuitem", { name: /reset password/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /delete user bob/i })).toBeInTheDocument();
   });
 });

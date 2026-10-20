@@ -1,7 +1,8 @@
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type RefObject } from "react";
 import { Braces, Plus, Save, TableRowsSplit } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
   DialogContent,
@@ -31,6 +32,7 @@ interface TableRowDialogProps {
     options?: { force?: boolean },
   ) => Promise<void>;
   onReloadConflict?: () => Promise<Record<string, unknown> | null>;
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }
 
 const UNSET_OPTION = "__akb_unset__";
@@ -46,6 +48,7 @@ export function TableRowDialog({
   row,
   onSave,
   onReloadConflict,
+  returnFocusRef,
 }: TableRowDialogProps) {
   const formRef = useRef<HTMLFormElement>(null);
   const formId = useId();
@@ -56,6 +59,9 @@ export function TableRowDialog({
   const [saving, setSaving] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [conflict, setConflict] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const initialDraft = useRef("");
+  const draftFocusRef = useRef<HTMLElement | null>(null);
 
   const editableColumns = useMemo(
     () => columns.filter((column) => !isSystemColumn(column.name)),
@@ -73,11 +79,23 @@ export function TableRowDialog({
     }
     setValues(initialValues);
     setNullColumns(initialNulls);
+    initialDraft.current = draftSignature(initialValues, initialNulls);
+    setDiscardOpen(false);
     setTouched(new Set());
     setErrors({});
     setSubmitError("");
     setConflict(false);
   }, [editableColumns, mode, open, row]);
+
+  function requestOpenChange(next: boolean) {
+    if (saving) return;
+    if (!next && draftSignature(values, nullColumns) !== initialDraft.current) {
+      draftFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setDiscardOpen(true);
+      return;
+    }
+    onOpenChange(next);
+  }
 
   function updateValue(column: VaultTableColumnInput, value: string) {
     setValues((current) => ({ ...current, [column.name]: value }));
@@ -193,6 +211,7 @@ export function TableRowDialog({
       }
       setValues(nextValues);
       setNullColumns(nextNulls);
+      initialDraft.current = draftSignature(nextValues, nextNulls);
       setTouched(new Set());
       setErrors({});
       setConflict(false);
@@ -204,13 +223,19 @@ export function TableRowDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !saving && onOpenChange(next)}>
+    <>
+    <Dialog open={open} onOpenChange={requestOpenChange}>
       <DialogContent
-        className="max-w-3xl gap-0 overflow-hidden p-0"
+        className="flex max-w-3xl flex-col gap-0 overflow-hidden p-0"
         onEscapeKeyDown={(event) => saving && event.preventDefault()}
         onPointerDownOutside={(event) => saving && event.preventDefault()}
+        onCloseAutoFocus={(event) => {
+          if (!returnFocusRef?.current?.isConnected) return;
+          event.preventDefault();
+          returnFocusRef.current.focus({ preventScroll: true });
+        }}
       >
-        <DialogHeader className="border-b border-border px-5 py-4 pr-14 sm:px-6">
+        <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-14 sm:px-6">
           <DialogTitle className="flex items-center gap-2">
             {mode === "create" ? (
               <Plus className="h-5 w-5 text-accent-strong" aria-hidden />
@@ -340,7 +365,7 @@ export function TableRowDialog({
           </div>
 
           <DialogFooter className="shrink-0 border-t border-border bg-surface-2 px-5 py-4 sm:px-6">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            <Button type="button" variant="outline" onClick={() => requestOpenChange(false)} disabled={saving}>
               Cancel
             </Button>
             <Button
@@ -356,7 +381,23 @@ export function TableRowDialog({
         </form>
       </DialogContent>
     </Dialog>
+    <ConfirmDialog
+      open={open && discardOpen}
+      onOpenChange={setDiscardOpen}
+      title="Discard row changes?"
+      description="Your unsaved row values will be lost."
+      cancelLabel="Keep editing"
+      confirmLabel="Discard changes"
+      variant="destructive"
+      returnFocusRef={draftFocusRef}
+      onConfirm={() => onOpenChange(false)}
+    />
+    </>
   );
+}
+
+function draftSignature(values: Record<string, string>, nulls: Set<string>): string {
+  return JSON.stringify([Object.entries(values).sort(([a], [b]) => a.localeCompare(b)), [...nulls].sort()]);
 }
 
 function RowField({

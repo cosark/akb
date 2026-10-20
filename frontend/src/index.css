@@ -276,7 +276,12 @@
 @container vault-toolbar (max-width: 700px) {
   #global-search-trigger { width: 2.25rem; padding-inline: 0; justify-content: center; }
   #global-search-trigger > span { display: none; }
-  [data-testid="header-indexing-status"] { width: 8rem; }
+  /* Indexing stays content-sized: an empty live region reserves no idle slot. */
+}
+/* At zoomed/narrow working widths, preserve location before repeated identity.
+   The avatar retains the complete account name in its label, title and menu. */
+@container vault-toolbar (max-width: 44rem) {
+  [data-slot="account-name"], [data-slot="account-chevron"] { display: none; }
 }
 .vault-app-header > div { overflow-x: auto; }
 
@@ -419,6 +424,13 @@ h1, h2, h3, h4, h5, h6 {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+
+/* The light-brand teal gradient is too dark on slate. Keep the wordmark
+   readable without changing the mark or introducing another palette. */
+.dark .brand-gradient {
+  background: none;
+  color: var(--color-foreground);
 }
 
 /* Search-led Home masthead. The mockup uses one strict 800px axis: a 44px,
@@ -856,6 +868,12 @@ body::before {
   min-width: var(--reader-control-size);
   padding-inline: 0;
 }
+/* A successful publish changes the label, not the reader's height. Measure
+   both labels with the current font; preview-header controls remain unchanged. */
+.document-publication-reserve { display: none; }
+.document-command-inner .document-publication-label { display: inline-grid; }
+.document-command-inner .document-publication-label > span { grid-area: 1 / 1; }
+.document-command-inner .document-publication-reserve { display: block; visibility: hidden; }
 .document-command-group {
   display: inline-flex;
   flex-shrink: 0;
@@ -888,6 +906,7 @@ body::before {
 @container resource-commands (max-width: 32rem) {
   .document-command-inner [data-slot="resource-command-actions"] { gap: .25rem; }
   .document-read-modes [role="tab"] { padding-inline: .5rem; }
+  .document-command-inner [data-publication-trigger] > svg { display: none; }
 }
 
 .document-preview-surface {
@@ -939,7 +958,8 @@ body::before {
   margin-inline: auto;
 }
 .document-reading-flow .ProseMirror > :first-child { margin-top: 0; }
-.document-reading-flow .ProseMirror > p:has(img) { max-width: none; }
+/* Image frames live inside paragraphs: keep that paragraph on the same
+   reading measure as prose, including loading and unavailable placeholders. */
 .document-reading-flow .ProseMirror img { max-width: 100%; height: auto; }
 .document-reading-flow .ProseMirror table {
   display: table;

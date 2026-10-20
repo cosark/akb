@@ -264,12 +264,23 @@ an `sr-only` summary, never the only signal.
   changes density. The desktop header's left side holds a compact 14px current
   page label on ordinary routes. Named Vault routes instead show the Vault /
   current-page breadcrumb; resources use the resolved Vault / Collection /
-  human-title trail. Vault section menus never occupy this global header. An
+  human-title trail. Every named Vault route begins with the same independent
+  `Navigate ▾` button before the breadcrumb, separated by one quiet hairline.
+  Its name, position and treatment never change with the destination. The
+  nonmodal menu uses real links for Overview, Graph, Public links, Members and
+  Settings; a divider separates content destinations from Members / Settings.
+  Only the actual current destination is checked inside the menu. Document,
+  File, Table, Search and Activity do not imply Overview is selected. The menu
+  supports keyboard selection/Escape and does not lock scrolling. Breadcrumbs
+  remain location-only: the Vault crumb opens Overview and the current page or
+  human title is passive text, never a page-switching control. An
   ordinary page label is preceded by a quiet 16px Lucide page icon, matching its sidebar entry;
   the adjacent text supplies its accessible name, so the glyph is decorative. It is
   location chrome, not another H1 or a card. Long names truncate without
-  displacing account actions. Working pages have one dedicated section-navigation
-  row below the header; full resource readers retain this same row. All named
+  displacing account actions. No Vault route adds a middle section-navigation
+  row, including Overview, Search, Activity, File and Table. Content exploration
+  still keeps Collections; focused tasks omit that explorer independently of
+  the shared menu. All named
   Vault pages share `VaultBreadcrumb` with resource readers: one leading Box,
   text-only path and current label, matching separators, spacing and emphasis.
   Ordinary Vault sections do not repeat their tab icon in the trail; only
@@ -297,10 +308,11 @@ an `sr-only` summary, never the only signal.
   (white in light mode, slate in dark), with a bottom hairline separating each
   navigation level. Keep the global header's bottom
   hairline visible on every Vault route, including the unselected Vault index;
-  preserve the 56px/40px row geometry and full-height navigation rail alignment.
+  preserve the 56px header and full-height navigation rail alignment. The
+  shared Vault menu replaces the section row on every named Vault route.
   Home instead uses the common header's `paper`
-  variant to continue its `surface` canvas. Full Search routes also use `paper`
-  (including their Vault section row). They retain the common page identity,
+  variant to continue its `surface` canvas. Full Search routes also use `paper`.
+  They retain the common page identity,
   global quick-search trigger and profile; their editable query belongs to the
   page command row below. Legacy Account Settings deep links use Home behind
   the dialog, with a `paper` header (including session verification). The dialog's
@@ -309,6 +321,10 @@ an `sr-only` summary, never the only signal.
   token radii. The account trigger is a quiet avatar/name/chevron disclosure,
   not a raised outlined card; keep the name from `sm`, with full identity in the
   accessible name, tooltip and open menu. Do not add unrelated shortcut buttons.
+  In a Vault header narrower than 44rem of actual available width, including
+  zoomed layouts, keep the account avatar and hide its repeated name/chevron
+  before sacrificing the resource location. Its full accessible name, title
+  and opened account menu remain unchanged; ordinary widths keep the name.
   Loading chrome reserves the same rail width as the destination route.
   From `lg`, a compact passive `N indexing` badge immediately left of Search
   reports pending search chunks across accessible Vaults. It is not a button and
@@ -497,13 +513,12 @@ an `sr-only` summary, never the only signal.
   The app header begins after the combined
   navigation width and tracks both resize handles and collapsed states. The
   resource command row remains below it; desktop reading controls remain `h-8`.
-  Overview, Search, Graph, Public links, Members, Settings, Activity and full resource readers share one
-  flat section-navigation row above their working content and outside its scroll
-  region. Its real links begin with Overview / Graph / Public links.
-  Members / Settings immediately follow the content destinations, with a short
-  neutral divider before Members rather than a large gap across the workspace.
+  Overview, Search, Activity, File and Table readers share the same header-level
+  Vault menu as documents and focused tasks. No second navigation row consumes
+  working height. The menu order is Overview / Graph / Public links, then a
+  neutral divider before Members / Settings.
   The global header owns the only quick-search entry point; do not duplicate
-  it as a field, button, or Search destination in this section row. Named Vault
+  it as a field, button, or Search destination in the Vault menu. Named Vault
   routes default to that Vault each time the dialog opens; Home, account Settings,
   the Vault index and the creation route default to all accessible Vaults.
   A shared scope control sits inside the modal and full-page query fields.
@@ -531,35 +546,42 @@ an `sr-only` summary, never the only signal.
   query and resource kind to the existing full search route. Document results keep
   the preview-and-return flow; the app-level resource navigation guard protects
   unsaved edits for both scoped and all-Vault results.
-  All links and More follow the same left-to-right flow.
-  The divider's padding participates in overflow measurements, not unmeasured margins.
-  When links no longer fit, measure the actual label/icon widths and move the
-  trailing destinations into a labelled More disclosure. Keep Overview and the
-  actual current destination visible where both fit; at very narrow widths the
-  current destination takes priority. Preserve the original link order.
-  This is purpose-based grouping, not measured usage frequency or a permission gate.
-  Use 14px icon-and-label links, neutral hover, and a
-  teal underline plus stronger weight for the current destination. Desktop links
-  are 40px high; mobile links are 44px. The row never wraps or creates horizontal
-  page scroll. The nonmodal More menu uses real destination links, supports
-  keyboard navigation and Escape, and does not lock the page scrollbar.
-  Resizing must restore focus if a destination moves into overflow.
-  Overview owns a selected
-  state on the exact Vault root; Activity does not select it. Both the Vault list
-  and Vault breadcrumb also return there, including when reselecting the current
-  Vault. Document, File and Table retain the same navigation without falsely
-  selecting Overview; their breadcrumb and tree identify the current resource.
-  Creation and redirect routes omit the row. Previews do not mount it inside
-  their dialog; the launching workspace remains inactive until dismissal.
-  No additional global or Collections menu duplicates these destinations. If the chosen rails leave too
+  The independent `Navigate` trigger is non-shrinking, uses 14px medium text,
+  a quiet outline and a chevron, and retains its label on narrow screens.
+  Its height is 36px on desktop and 44px on mobile. Location text yields space
+  before the trigger or account tools. The bounded menu uses neutral hover,
+  explicit current-page check/text and visible keyboard focus in both themes.
+  Overview is current only at the exact Vault root (including a trailing slash),
+  never while reading resources or Activity. Both the Vault list and Vault
+  breadcrumb return to Overview, including when reselecting the current Vault.
+  The menu retains real new-tab links, Escape focus restoration and the same
+  unsaved-edit guard on every destination, including Settings. Choosing a new
+  destination closes the menu without restoring focus over a leave confirmation.
+  Collections and its stored visibility/width remain available on Overview and
+  resource readers. Previews do not mount a second Vault menu inside their
+  dialog; the launching workspace remains inactive until dismissal.
+  Focused Vault tasks have no Collections tree, collapsed
+  Collections strip, tree resize handle, or Collections in their mobile drawer.
+  Workspace and Vault selection remain available; the header's page switcher
+  provides the sole page-navigation menu, with exactly the same placement and
+  label as content routes. The current page label never becomes a menu.
+  Route ownership, including
+  direct links and trailing slashes, selects the mode synchronously; it never
+  changes stored tree visibility or width. Returning to content restores the
+  user's tree choice. Header offsets and temporary drawer decisions measure only
+  the rails actually present. The explicit navigator shortcut toggles the Vault
+  list in focused tasks, not an invisible Collections preference.
+  No Collections menu duplicates Vault destinations. If the chosen rails leave too
   little space for search/indexing/account controls plus a readable trail, the complete Vault
   navigator temporarily uses its existing drawer. The header exposes its toggle;
   Escape/backdrop dismiss it. This does not write saved widths or collapse
   preferences, and expanding the workspace restores inline rails. Do not oscillate
-  based on the drawer's own rendered width.
+  based on the drawer's own rendered width. Compare layout CSS pixels for the
+  workspace, rails and header controls, including the fixed Vault menu, so zoom
+  cannot keep an inline navigator while clipping the location trail.
   Mobile retains its existing drawer and `h-10` navigation headers.
-  Named Vault routes retain the user's Collections preference rather than
-  automatically collapsing it by page type. The collapsed rail leaves only
+  Content-oriented Vault routes retain the user's Collections preference. Focused
+  task routes omit the explorer without overwriting that preference. The collapsed content rail leaves only
   a labelled Expand collections control; no extra icon menu is invented.
   A Collection deep link may temporarily reveal the tree without overwriting
   the saved preference. The explorer tree scrolls independently; its identity,
@@ -567,8 +589,8 @@ an `sr-only` summary, never the only signal.
   masthead: Overview alone uses the compact Vault identity header. Operational
   routes begin directly with the control or data surface that performs the task
   (search form, roster toolbar, publication list, settings local nav) and retain
-  an `sr-only` H1 for route orientation and heading hierarchy. The active Vault
-  tab and breadcrumb already provide visible location context; do not repeat it.
+  an `sr-only` H1 for route orientation and heading hierarchy. The shared
+  breadcrumb already provides visible location context; do not repeat it.
   Account Settings uses one global modal above the current route, not a page
   or extra workspace rail. Desktop width is capped at 1040px and height at
   760px with 24px viewport clearance. A 56px title row, 208px grouped navigation
@@ -577,6 +599,20 @@ an `sr-only` summary, never the only signal.
   quiet hairlines, cardless section headings and 20/28px content padding.
   Profile uses a compact avatar identity row and stacked profile/password forms;
   label/input columns and appearance previews respond to their container width.
+  Profile photos reuse that identity row, not a new card or modal. Choosing a
+  JPEG/PNG/still WebP shows a circular, centered-square preview; Save photo is
+  explicit and independent of Save profile. Cancel returns focus to the photo
+  picker without discarding text drafts. Removal uses an inline confirmation.
+  Pending photo writes participate in Settings' dirty/busy guards; native-file
+  picker focus changes alone never close Settings. Recoverable errors preserve
+  the saved photo and selected draft. A revision conflict keeps Reload photo
+  available even after dismissing the error, and never silently overwrites.
+  `UserAvatar` owns the fixed 28/40/48px shapes in the header, account menu and
+  Profile, with authenticated, session-scoped images and grapheme initials on
+  absence/failure. Photos are self-only; Members/author images remain unchanged.
+  Local and SSO users follow the photo capability, independently of SSO-managed
+  text fields. Older servers or missing storage retain initials and explain why
+  photo editing is unavailable; a request failure is not a feature-detection signal.
   Agent connections preserves three explicit phases, stacked in reading order:
   prepare access, configure, then try a read-only request. Never hide the final
   phase until token creation or offer a placeholder secret as usable config.
@@ -602,29 +638,55 @@ an `sr-only` summary, never the only signal.
   and section changes guard unsaved edits or newly generated secrets; pending
   writes block those actions. Nested confirmations close before their parent.
   Restore focus to the invoking control and never persist token secrets.
-  Vault Settings uses one task-focused content column, not another pair of
-  navigation and context rails inside the existing Vault workspace. Four
-  horizontal underline tabs—General, Access, Vault guide, Advanced—share a
-  neutral full-width bottom hairline. Keep only the selected panel visible;
-  preserve all in-progress form and guide state when switching. Existing
-  `#general`, `#access`, `#skill`, and `#danger` links and browser history select
-  the corresponding panel. Tabs span the workspace and start at its left edge
-  with a small inset, never inside a centered max-width container. Keep forms
-  left-aligned at a 64rem maximum reading width and 12/20/24px responsive side
-  padding; tab labels share this content baseline. The tab row
-  remains outside the desktop content scroll; use `rail-scroll` inside it.
-  Vault details stays visible beside the active form across all four tabs.
-  Use the Overview context-panel vocabulary: a thin border, small radius,
-  neutral header with the Vault glyph, and a surface body. Group ownership and
-  dates as definition rows, followed by compact two-column resource counts and
-  the Overview link. At 52rem of actual content width, add an 18rem secondary
-  column; at 72rem use 20rem. Keep the combined workspace left-aligned and
-  bounded to 86rem so the panel stays near the form on ultrawide screens.
-  Container queries account for resized navigators; below the threshold, show
-  details after the form without a disclosure. No sticky or separately scrolling
-  information rail. Advanced owns Operations and lifecycle controls; do not
-  repeat these in the details panel. Missing inventory remains unavailable,
-  never fabricated as zero. Only the tab row may scroll horizontally.
+  Vault Settings is one compact settings sheet: General, Access, Vault guide,
+  then owner-only Danger zone. Do not add category tabs, another navigation
+  sidebar, a permanent context column, repeated title/description blocks or
+  explanatory filler cards. Existing `#general`, `#access`, `#skill`, and
+  `#danger` links scroll only the active content scroll surface to their section;
+  they never hide or remount other forms. Use 12/20/24px responsive side padding,
+  16px semibold section headings outside one quiet outlined group per section.
+  Use the shared SettingsSection/SettingRow primitives: a shadow-free workspace
+  Panel, neutral strong border and subtle background label cells beside white
+  surface value cells. Separate rows with hairlines; on narrow screens labels
+  stack above values with a horizontal divider. Danger uses a restrained red
+  outline/title, never a red-filled content slab. At 48rem of actual
+  sheet width, align each setting's label in an 11rem column and its value in a
+  shrinkable column; keep the value/editor at no more than 56rem, with related
+  actions nearby. Stack labels above controls on narrow screens.
+  General has a labelled three-line description input and a copyable permanent
+  address row. Ownership, dates and inventory belong to Overview. Access uses
+  native radio rows under Who can access, labelled Invited members only /
+  Everyone can view / Everyone can edit, not oversized choice cards. The selected
+  option's help names the actual audience: people signed in to this AKB, not
+  anonymous visitors. Avoid technical labels such as world-writable in the
+  confirmation; explicitly retain the ability to delete content. Each compact choice has a small
+  radius and visible border; selection adds teal emphasis without removing the
+  native radio indicator. A footer divider separates member/sharing shortcuts
+  from policy controls. Keep the selected policy's effect
+  visible, explicitly warn that public writing includes deletion, and preserve
+  owner-only writes plus public-write confirmation. Members/Public links are
+  compact guarded links with one short anonymous-sharing distinction.
+  Each editable scope shows Save/Discard only while changed or saving, followed
+  by a polite saved status; do not reserve disabled action footers. Serialize
+  Description, Access and Guide writes. Saving must not overwrite another scope's
+  saved snapshot or pull focus away from another field on completion.
+  Guide starts as a two-line excerpt on a quiet inset surface, visually separate
+  from Preview guide, owner-only Edit
+  guide. Expand reading/editing inline without inner tabs. History, Agent view
+  and Reset to template live in the labelled Guide options menu; resetting still
+  requires confirmation. Preserve Guide drafts and their original OCC revision
+  across reading modes and failed writes. The danger area has two compact action
+  rows with short visible consequences, not a large red-filled banner.
+  Indexing observations remain available through Indexing details beside the
+  Overview queue badge; they are not editable settings. Unverified/stale/missing
+  status must never read as healthy. Keep one desktop sheet scroll surface, no
+  forced viewport-height cards or filler information, and match loading geometry.
+  All scopes share one workspace-level leave confirmation. Same-path hash history
+  retains drafts without a warning; actual departure asks once. Keep editing
+  retains every draft, and pending writes block departure. A confirmed departure
+  never clears one draft before another guard can cancel navigation. Cancelling a
+  menu-origin departure returns focus to the visible Vault menu, with Description
+  as a fallback. Account Settings is a separate dialog and is not changed here.
   The expanded Vaults rail and Collections explorer share `RailIdentity`,
   `RailManagement`, `RailCollapseButton`, `RailFilterToggle`, and `RailFilterField`.
   Their grammar is identity (56px desktop / 40px mobile), management (40px),
@@ -855,9 +917,10 @@ an `sr-only` summary, never the only signal.
   location trail (`Vault / Collection ancestry / human title (kind)`) and one
   `ResourceCommandRow`. Document metadata and reading tools share this row;
   all three readers use a flat full-width canvas. Desktop puts the
-  trail in the existing 56px app header. The shared Vault section-navigation row
-  stays below that header; a separate command row owns only resource actions
-  and optional metadata. Do not add a resource-only Explore menu or global menu list.
+  trail in the existing 56px app header. All readers use the same independent
+  `Navigate` before their breadcrumb, without a middle section-navigation row;
+  a separate command row owns resource
+  actions and optional metadata. Do not add another Explore menu or menu on the title.
   Collections remains dedicated to browsing resources. The Vault crumb is a direct Overview
   link. Location never inherits metadata's small-screen hiding rules; mobile
   uses the same trail beside the navigation toggle below its app header.
@@ -879,6 +942,11 @@ an `sr-only` summary, never the only signal.
   decorative and the resource kind available to assistive technology without
   repeating it as a visible text suffix. Truncated Collection links reveal their
   complete name on hover/focus.
+  Below 20rem of actual resource-trail width, the leading Vault link keeps its
+  Box in a 36px-wide target with its full name available to assistive technology
+  and in its title. Hide only its visual text so the current resource title
+  receives space before ancestors. The direct Overview destination and ancestry
+  disclosure remain reachable; the global Vault menu keeps its explicit label.
   The current title is passive text, never a second navigation menu or an
   expansion control. Truncated titles reveal their full value on hover/focus;
   Document info also wraps the full title for touch access.
@@ -887,12 +955,15 @@ an `sr-only` summary, never the only signal.
   identity. Keep one semantic `h1#doc-title` without a second title card, and
   preserve authored body headings and their anchors. One full-width white/slate
   command row owns Draft, Last edited, line/byte statistics and an optional
-  labelled `Summary: …` on the left; Preview / Raw, Copy / Edit and
-  overflow follow on the right. Publish / Public link belongs to the right edge
-  of the existing Vault section-navigation row, separated from its links with a
-  neutral hairline. Preview dialogs place it in their own breadcrumb header,
+  labelled `Summary: …` on the left; Preview / Raw, Copy / Edit,
+  Publish / Public link and overflow follow on the right in that order.
+  The full-page reader has no second Vault section row. Preview dialogs place
+  Publish / Public link in their own breadcrumb header,
   not in the background page. No extra title band is introduced. The document
   owns publication state and permissions; leaving the reader removes its action.
+  Reserve the publication label's natural width in the reading toolbar so a
+  successful Publish does not reflow the canvas. Below 32rem of command width,
+  retain its text label but omit the decorative globe; keep touch targets intact.
   Read modes are
   compact segmented tabs on a neutral inset with a token-selected surface, not
   a second underline navigation row or solid primary button slabs. Copy/Edit
@@ -937,7 +1008,10 @@ an `sr-only` summary, never the only signal.
   mode change. Wide removes the measure for all these blocks together. Target the actual
   `.ProseMirror` / `.tableWrapper` DOM, not legacy direct-child selectors.
   Code and wide tables scroll inside their own labelled, keyboard-focusable
-  regions. Small images retain natural dimensions and aspect ratio.
+  regions. Image-containing paragraphs and their loading/unavailable frames
+  share the same reading measure as prose; images never escape to the full
+  canvas independently. Small images retain natural dimensions and aspect
+  ratio; larger images shrink to their parent without stretching or cropping.
   Context has one entry per view in a 3rem right-edge icon rail: Document info,
   Table of contents, Relations and Version history. Do not duplicate these entries
   in overflow or add another header Info button. Each control has a tooltip,
@@ -981,9 +1055,10 @@ an `sr-only` summary, never the only signal.
   entered options and scroll only the publication surface into view. Success
   changes this same popover to the ready URL and copy actions. Destructive
   unpublishing keeps its confirmation dialog; cancelling returns to the
-  popover's Unpublish action. Publication retains its label and compact globe;
-  on narrow screens, Vault destinations yield into More before that action is
-  squeezed. Edit hides publishing until the draft is saved or cancelled.
+  popover's Unpublish action. Publication retains its explicit text label;
+  the narrow full-page toolbar omits only its decorative globe, while previews
+  retain their existing header treatment. Edit hides publishing until the draft
+  is saved or cancelled.
   Edit uses the context command row for visible draft/upload state and Cancel /
   Save changes. It never adds another `Editing document` band. Clean Cancel exits;
   unsaved Cancel retains its confirmation. Same-account access verification must
@@ -1209,11 +1284,17 @@ Shell: `Layout` (neutral `app-header` + responsive `AppSidebar` + content) and
 `VaultShell` (header + content, collection tree in a left slide-over toggled by
 the Tree button / ⌘\).
 
-Member invitation is a two-stage permission console within `Dialog`: searchable
-AKB accounts form the left ledger; the selected identity and descriptive role
-cards form the right review pane. A single footer sentence restates the person
-and role before the orange Invite action. On narrow screens the same order
-stacks into one flow; existing members remain excluded from results.
+Member invitation uses one compact account ledger within `Dialog`, not a
+two-column role console. Each row groups human name and contact on the left
+with a neutral `MemberRolePicker` on the right, shared with the member roster.
+Choosing a role selects that one account; it never writes access immediately.
+Only the selected row shows its chosen role and a check, and choosing another
+account clears the previous row. A quiet footer restates the person and role
+before the explicit orange Invite action. Keep search/header and footer fixed
+while only the account ledger scrolls. Existing members remain excluded;
+search errors offer Retry rather than an empty-state claim. Pending invitations
+disable search, role controls, clearing, and dismissal. No permanent role
+explanation, duplicate selected-person card, or owner option belongs here.
 
 The Publish route is a full-working-width, single-column public-link registry,
 not a creation landing page. It shares Activity's thin 12–20px route gutter and
@@ -1249,29 +1330,71 @@ On every route, the global trigger opens the existing modal for quick
 lookup and document previews; its scope/query/kind carry into the full page.
 On `/search` and `/vault/:name/search`, the common global title, location icon,
 quick-search trigger and profile remain intact. A dedicated command row below
-owns the wide, URL-backed query form and explicit Search action. The compact
+owns the URL-backed query form and explicit Search action. The compact
 global trigger opens an independent quick lookup; opening or dismissing it must
-not change the page's query or filters. The header and working canvas use `surface` (white in light mode and
-the corresponding slate token in dark mode), not a grey title band.
+not change the page's query or filters. The workspace uses the same cool-gray
+`background` canvas and bounded `Panel` list as Vault Overview. A single
+`max-w-6xl` frame aligns the query field and results panel, with the standard
+12 / 16 / 24px responsive gutters. At `lg` and wider, the global location already
+names the page, so the body H1 is visually hidden. Below `lg`, retain a small
+Search text heading without an icon tile because the global location is hidden.
 
-The full page takes its information hierarchy from GitHub search: a 256px
-refinement rail, an honest result-count/scope row, and separate bordered results.
-Semantic/Literal and content kinds are immediately visible; More filters reveals
-document types, tags, collection, state and literal options. Search mode uses
-underlined selections; content kinds use compact navigation rows with a leading
-selection marker and check, labelled All / Documents / Tables / Files. More
-filters is a neutral chevron disclosure, not another competing selected tab.
-Active filter chips
-remain removable above the results even when the advanced controls are closed.
-The rail appears only when the *available workspace* is at least 56rem wide;
-below that, controls reflow above results and use capped, independent scroll.
-This avoids squeezing results alongside the existing Vault/Collection rails.
-Search owns its viewport and results scroll. Result cards have 16px/24px outer
-gutters and a 76rem reading cap; initial re-entry content is narrower, with
-recent queries, recent documents and suggested searches separated from the input.
+One bordered search field contains Vault scope, query, Search method, and the
+quiet teal Search action. The full-page scope picker uses its `summary` variant:
+All vaults, one Vault's name, or N vaults. Long names truncate inside a bounded
+trigger; the existing menu keeps every selection visible and removable even
+when the directory refresh fails. Quick search retains its existing inline
+Vault chips. By meaning / Exact text options explain Semantic / Literal
+behavior. Enter submits the same form as the integrated trailing Search action.
+
+At an available workspace width of 45rem or more, scope / query / method /
+submit share one row of about 52px. Below 45rem, scope and method share the first
+row, with query and submit below; this follows available container width rather
+than the browser viewport. Query text is 16px in the stacked field and 14px in
+the wide row. Scope names and selected counts cannot squeeze out the input.
+Query clear, method, scope, and submit controls have 44px height. The entire
+field shares one border and focus treatment. Keep the alignment frame's overflow
+visible so its outer focus ring is not clipped; the padded viewport and results
+panel own clipping and scrolling. Do not add a separate title toolbar,
+context footer, or individual button outlines. The results panel follows with
+a 16px gap.
+
+There is no permanent refinement rail or resource-kind tab strip. A Result type
+menu in the results panel header selects All content / Documents / Tables / Files
+for Semantic search. The heading reads Results, or Exact matches for Literal
+search, beside an honest result count. One Filters action opens the complete
+refinement dialog. Collection, document type and tag controls stay inside that
+dialog. It preserves independent Collection Apply, immediate metadata/state
+changes, Literal options and Reset filters. Its body scrolls while its title and
+Done action remain reachable. Escape returns focus to Filters. Active filter
+chips remain removable above results when the dialog is closed, and removal
+retains focus on a remaining chip or Filters.
+
+Search owns its viewport and results scroll. The results panel follows content
+height until the viewport fills, then scrolls below its fixed header. Result rows
+use the same 14px dark semibold titles, teal resource glyphs, quiet dividers, and
+16px panel inset as the existing workspace ledgers. A two-line excerpt follows
+the title; location, source type and compact metadata share a quiet line below.
+Preview / Open occupies the trailing edge. Top match stays beside metadata.
+Initial re-entry content shows recent queries, recent documents and suggested
+searches inside the same panel, without a separate hero or nested outer card.
+Keep the ready-state ledgers connected: each region has a compact, softly
+filled `surface-2/60` header band, small semibold H3 label, and divided list rows
+immediately below. Recent searches and Recently viewed share the upper row with
+a continuous vertical boundary when the available workspace reaches 40rem;
+stacked regions use a horizontal boundary. Omit absent ledgers. Recent items
+retain their compact tonal icon tiles. Suggested searches occupy a full-width
+header band followed by three joined action cells at 40rem, or stacked cells
+below it. Preserve wrapping labels and a visible forward arrow. The ready state
+has no outer body padding: section bands and dividers reach the panel edges.
+Section headers and list/action rows own a single 16px horizontal inset. Reserve
+scrollbar space only when ready-state content overflows. Active pre-query filter
+chips and notices keep their own 16px inset; searched results retain the normal
+padded body and stable scrollbar gutter. Do not replace the bands with large
+free-standing headings or separate suggestion cards.
 No illustrative sidebar, invented facet totals, unsupported sort, or query
 qualifier parser is added. Server contracts and saved URL state remain authoritative.
-The shared multi-Vault chips live inside the page query field, not in a second
+The shared multi-Vault picker lives inside the page query field, not in a second
 scope-picker row above results. On a named Vault search route, an absent `v`
 defaults to the route Vault; explicit `v=` selects All, and a comma-delimited
 `v` retains a specific set through reload and browser history. The request uses
@@ -1284,8 +1407,8 @@ available: user-scoped browser search history and recently viewed documents are
 shown as connected ledgers, with inaccessible Vault history removed through the
 existing Vault list. The history stores query/scope/mode and document identity
 only—never result bodies—and silently disappears when browser storage is not
-available. Semantic cards lead with location, a resource icon and linked title,
-one focused excerpt, then source type/tags. Literal cards retain exact snippets,
+available. Semantic rows lead with a resource icon and linked title,
+one focused excerpt, then location and source type/tags. Literal rows retain exact snippets,
 body-relative line numbers and match counts. Stable result IDs and accessible
 ranks preserve preview return focus. Optional backend
 tags progressively add compact result badges and optional tag suggestions.
@@ -1351,8 +1474,8 @@ page; tables and files go directly to their native resource. The full Search rou
 an explicit advanced-search destination for Literal mode, Vault scope, and type
 filters; opening the search panel by itself never changes browser history.
 The app header is the quick-search entry; Collection overflow instead scopes
-the local sidebar name filter. The Vault section row has no
-duplicate search control. Header openings default to the route's Vault, or all accessible
+the local sidebar name filter. The Vault menu has no duplicate search control.
+Header openings default to the route's Vault, or all accessible
 Vaults outside a named Vault route. A manual scope change remains in effect while
 the panel is open and immediately invalidates old results; empty results never
 silently expand the scope. An explicit `Search all vaults instead` action does.
@@ -1373,30 +1496,60 @@ existing inline pattern and flag for extraction.
 
 ### Personal notification ledger
 
-Personal notifications use one shared ledger in the header panel and full inbox.
-Use two header bands: title and overflow actions, then text-only category
-underline tabs (All / Documents / Access) with an independent Unread only
-checkbox. Allow the filter band to wrap on narrow screens. Do not mix read state
-and event categories in one tab list.
-Category filters are server predicates applied before pagination, not a filter
-over the first loaded page. The full inbox URL and the panel's View all action
-retain both filters. The header overflow groups Mark all notifications read
-(explicitly global) and Notification settings. Unknown server category support
-shows a recovery notice, never a misleading filtered-empty result. Rows stay
-title-first with a short event label and non-repeated Vault context; unread
-weight and a narrow indicator complement accessible state text. Times and
-always-accessible read actions sit side by side at the trailing edge. Group rows
-under Today / Yesterday / Earlier using local calendar boundaries, preserving
-server order. Avoid repeated row dividers and icon boxes. Category color stays
-on compact glyphs; do not tint entire rows or add invented counters.
-Navigable titles use link color and an always-visible arrow, with destination
-purpose in the accessible description. Notice-only rows retain neutral titles,
-say Notice only beside the event label, and have no row hover treatment or fake
-disabled navigation button. Read/unread controls remain available independently.
-Use 8px vertical row padding, 14px/20px titles and 12px/16px metadata separated
-by 2px: a normal two-line notification is approximately 54px tall. Keep long
-titles readable rather than fixing the row height. Header bands use 48px and
-36px minimum heights; read controls remain 36px.
+Personal notifications share query/mutation ownership and resource navigation,
+but the header's approved Compact dropdown is distinct from the full inbox.
+The bell anchors a nonmodal 404px Popover at every viewport width, bounded by
+an 8px viewport inset. Let its height follow content, capped at 40rem and the
+available viewport height; the feed scrolls while header and footer remain
+visible. Do not add a category rail, fullscreen mobile shell, transparent
+overlay, scroll lock, or focus trap. Outside actions work on their first click.
+Keep the same mounted controller and surface when the viewport changes.
+
+The compact header is 56px minimum: title, plain global unread text and two
+quiet icon controls (Mark all notifications read / Close). No large Bell tile,
+count pill, or separate text CTA. All / Unread are horizontal underline state
+tabs; compact queries include every event category. The state is a server
+predicate before pagination, not a local filter of one loaded page. Category
+filtering belongs on the full page. Initial focus goes to the selected state
+tab, not a tooltip-bearing header action, so the first Escape closes the panel.
+
+Compact rows are a flat list divided by quiet hairlines, not individual cards.
+Use a plain 16px event glyph, a 14px/20px title and 12px/16px event, Vault and
+time metadata beneath it, with 12px vertical padding. Unread uses a heavier
+title and a small trailing dot; the labelled dot control marks read. Read rows
+have a check control revealed on pointer hover, keyboard focus and coarse
+pointers, labelled to mark unread. These controls stay focusable while busy,
+with aria-disabled and guarded handlers. If marking read removes a focused row
+from Unread, focus its surviving neighbor or the Unread tab. Never invent
+per-category counts, actors or role details from unavailable data. Link and
+description IDs remain distinct between the panel and page.
+
+Navigable compact titles retain foreground with teal hover/focus; notice-only
+rows have neutral titles, Notice only metadata, no fake navigation and no row
+hover fill. Read actions remain independent of resource navigation. The compact
+footer is one 48px band: View all notifications on the left, a tooltip-labelled
+Watched documents settings icon on the right. View all preserves read state
+with category=all. Match the approved Lucide outline glyphs at 16px and 1.7px
+stroke: FilePenLine / ArrowRightLeft / UserRoundCheck / Archive / Trash2 for
+updated / moved / access granted / archived / deleted; CheckCheck / X /
+Settings2 for header and footer actions. Ownership changes use UserRoundKey;
+KeyRound remains reserved for access changes. Desktop fine-pointer header/footer
+controls are 32px and row read controls are 24px with a 1px top inset. Keep
+44px targets on small screens and coarse pointers. The header bell uses the
+same stroke and a 5px unread dot, not a numeric badge; keep the exact global
+count in its accessible name and the panel header. Empty-state glyphs are 24px.
+Keep long titles wrapping, never fixed-height or clipped.
+
+The full page keeps its single compact header aligned to a 56rem ledger,
+visible Watched documents action, All / Documents / Vault access underline
+category tabs and independent Unread only checkbox. Categories are server
+predicates before pagination, with unknown support shown as a recovery notice.
+Its dated Today / Yesterday / Earlier groups, row cards with TonalIcons,
+per-row read menus and header Mark all overflow remain available for detailed
+review. Retention information belongs only at the full ledger's foot. Mark all
+uses the observed global snapshot in either view. Unknown counts show loading
+or unavailable feedback, never claim zero; pending actions retain focus and
+prevent duplicate writes.
 The app-header notification and account controls use content-sized, non-shrinking
 slots, never share a fixed account-width box. Account names stay visible from
 `sm` (bounded only for unusually long names); smaller screens use the avatar
@@ -1486,3 +1639,27 @@ with the full identity available in its labelled account menu.
    CTA, semantic + icon for status, `surface-selected` for current.
 5. Loading/empty/error are three distinct states; secrets + async use `role=status`.
 6. Run the gate: `npm run design:check && npm run typecheck && npm run lint && npm run test`.
+
+### Audit refinements (2026-10-14)
+
+- The no-selection Vault workspace is a usable directory, not an onboarding
+  hero for returning users. Name filtering, favorites, ownership, direct links,
+  and progressive reveal remain usable without the sidebar. A genuinely empty
+  account gets one first-Vault action and an invitation alternative.
+- Overview context cards flow as two columns below the activity ledger at
+  medium workspace widths, and one right rail when the workspace has room.
+- Guide preview uses one outer panel and a quiet divider for metadata; do not
+  add another framed card around the rendered body.
+- Search keeps title/excerpt/location-and-metadata hierarchy, with at most two
+  excerpt lines. Preserve the full document in preview, not in the result row.
+- Narrow editor toolbars keep every command mounted in a horizontally
+  scrollable row and offer an explicit expand/collapse control. Keyboard
+  roving focus, selection, and Visual/Markdown state must survive expansion.
+- Public document attribution sits below its title. Optional classification
+  uses a native disclosure, not a permanent metadata column. Authored headings
+  stay intact to preserve meaning and anchors.
+- Public-link lists progressively reveal 30 loaded rows; distinguish display
+  limits from server pagination. Availability stays primary, type/delivery are
+  subordinate, and the technical address is available on request.
+- Keep the default light wordmark gradient, but use the foreground token for
+  its dark-mode text: a dark teal gradient is not readable against slate.

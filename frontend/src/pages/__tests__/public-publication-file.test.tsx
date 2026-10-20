@@ -29,9 +29,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   getPublicFile.mockResolvedValue(publication);
   getCapabilities.mockResolvedValue({ can_edit: false });
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-    text: async () => raw,
-  } as Response));
+  vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response(raw)));
 });
 
 afterEach(() => {

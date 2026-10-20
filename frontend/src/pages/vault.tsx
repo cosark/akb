@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Activity, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { SettingsLink } from "@/contexts/settings-dialog-context";
 import {
@@ -24,6 +24,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
 import {
   getDocument,
   getRecent,
@@ -43,6 +44,7 @@ import { Panel } from "@/components/ui/panel";
 import { EmptyState } from "@/components/empty-state";
 import { RoleBadge, VaultStateBadge } from "@/components/status-badge";
 import { VaultIndexingStatus } from "@/components/pending-indexing-badge";
+import { VaultProcessingDetails } from "@/components/vault-processing-details";
 import { VAULT_SKILL_PATH } from "@/lib/skill";
 import { TooltipText } from "@/components/ui/tooltip-text";
 import { cn } from "@/lib/utils";
@@ -196,6 +198,13 @@ function changeMark(change?: string) {
 }
 
 export default function VaultPage() {
+  const user = useCurrentUser();
+  const { checking, revision } = useAccessVerification();
+  const { name } = useParams<{ name: string }>();
+  return <VaultWorkspace key={JSON.stringify([user?.user_id, name])} checking={checking} scope={JSON.stringify([user?.user_id, revision])} />;
+}
+
+function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string }) {
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
   const { refetchTree } = useVaultRefresh();
@@ -206,20 +215,33 @@ export default function VaultPage() {
   const [tableCreateOpen, setTableCreateOpen] = useState(false);
   const [info, setInfo] = useState<VaultInfo | null>(null);
   const [infoError, setInfoError] = useState(false);
+  const [loadedScope, setLoadedScope] = useState<string | null>(null);
+  const latestScope = useRef(scope);
+  const latestChecking = useRef(checking);
+  latestScope.current = scope;
+  latestChecking.current = checking;
   const [recent, setRecent] = useState<RecentRow[]>([]);
   const [recentLoading, setRecentLoading] = useState(true);
   const [recentError, setRecentError] = useState(false);
   const [activity, setActivity] = useState<ActivityRow[]>([]);
   const [activityLoading, setActivityLoading] = useState(true);
   const [activityError, setActivityError] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const skillQuery = useQuery({
-    queryKey: ["document", name, VAULT_SKILL_PATH],
+    queryKey: ["document", name, VAULT_SKILL_PATH, scope],
     queryFn: () => getDocument(name!, VAULT_SKILL_PATH),
     retry: false,
-    enabled: !!name && !!info && !info.is_external_git,
+    enabled: !checking && !!name && !!info && !info.is_external_git,
   });
-  const skillExists = !skillQuery.isError && !!skillQuery.data;
+  const skillMissing = skillQuery.isError &&
+    typeof skillQuery.error === "object" && skillQuery.error !== null &&
+    "status" in skillQuery.error && skillQuery.error.status === 404;
+  const skillError = skillQuery.isError && !skillMissing
+    ? skillQuery.error.message || "Couldn't load the vault guide."
+    : undefined;
+  const skillExists = !skillMissing && !!skillQuery.data;
   const about = skillExists ? aboutExcerpt(skillQuery.data!.content) : "";
 
   // Every normal vault carries the guide, so "defined?" says nothing — the chip
@@ -248,48 +270,54 @@ export default function VaultPage() {
         : true
       : undefined;
 
-  function loadInfo(vault: string, alive: () => boolean = () => true) {
+  function loadInfo(vault: string, alive: () => boolean = () => mounted.current) {
+    const requestScope = scope;
+    const current = () => alive() && requestScope === latestScope.current && !latestChecking.current;
     getVaultInfo(vault)
-      .then((d) => alive() && setInfo(d))
-      .catch(() => alive() && setInfoError(true));
+      .then((d) => { if (current()) { setInfo(d); setLoadedScope(requestScope); } })
+      .catch(() => { if (current()) { setInfoError(true); setLoadedScope(requestScope); } });
   }
 
-  async function loadRecent(vault: string, alive: () => boolean = () => true) {
+  async function loadRecent(vault: string, alive: () => boolean = () => mounted.current) {
+    const requestScope = scope;
+    const current = () => alive() && requestScope === latestScope.current && !latestChecking.current;
     setRecentLoading(true);
     setRecentError(false);
     try {
       const d = await getRecent(vault, 12);
-      if (!alive()) return;
+      if (!current()) return;
       setRecent(d.changes || []);
     } catch {
-      if (!alive()) return;
+      if (!current()) return;
       setRecentError(true);
     } finally {
-      if (alive()) setRecentLoading(false);
+      if (current()) setRecentLoading(false);
     }
   }
 
   async function loadActivity(
     vault: string,
-    alive: () => boolean = () => true,
+    alive: () => boolean = () => mounted.current,
   ) {
+    const requestScope = scope;
+    const current = () => alive() && requestScope === latestScope.current && !latestChecking.current;
     setActivityLoading(true);
     setActivityError(false);
     try {
       const result = await getVaultActivity(vault, { limit: 10 });
-      if (!alive()) return;
+      if (!current()) return;
       setActivity(result.activity || []);
     } catch {
-      if (!alive()) return;
+      if (!current()) return;
       setActivity([]);
       setActivityError(true);
     } finally {
-      if (alive()) setActivityLoading(false);
+      if (current()) setActivityLoading(false);
     }
   }
 
   useEffect(() => {
-    if (!name) return;
+    if (!name || checking) return;
     let alive = true;
     const isAlive = () => alive;
     // Reset stale state from the previous param before the re-fetch resolves;
@@ -308,7 +336,9 @@ export default function VaultPage() {
     return () => {
       alive = false;
     };
-  }, [name]);
+    // Account/vault keys own the draft dialogs. Revisions only reset reads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, checking, scope]);
 
   // Name the browser tab/history entry for this vault (helps tab switching and
   // screen-reader route-change orientation); restore the app default on leave.
@@ -335,12 +365,16 @@ export default function VaultPage() {
   const isEmpty =
     !!info &&
     !skillQuery.isLoading &&
+    !skillError &&
     knownCount(info.document_count) &&
     info.document_count - scaffoldDocs <= 0 &&
     info.table_count === 0 &&
     info.file_count === 0;
 
   return (
+    <>
+    {(checking || loadedScope !== scope) && <p role="status">{checking ? "Verifying vault access…" : "Loading vault overview…"}</p>}
+    <Activity mode={!checking && loadedScope === scope ? "visible" : "hidden"}>
     <div
       role="region"
       aria-label={`${name} Vault overview`}
@@ -385,6 +419,7 @@ export default function VaultPage() {
                 publicAccess={info?.public_access}
               />
               <VaultIndexingStatus vaultName={name!} />
+              <VaultProcessingDetails vaultName={name!} />
             </>
           }
           className="min-h-0 rounded-none border-0 bg-transparent p-0 shadow-none [&>div:first-child]:max-w-full [&_h1]:whitespace-normal [&_h1]:break-words [&_h1]:[overflow-wrap:anywhere]"
@@ -478,6 +513,9 @@ export default function VaultPage() {
             guideDefined={skillExists}
             guideCustomized={skillCustomized}
             guideLoading={skillQuery.isLoading}
+            guideError={skillError}
+            guideRetrying={skillQuery.isFetching}
+            onGuideRetry={() => { void skillQuery.refetch(); }}
           />
         ) : infoError ? (
           <aside aria-label="Vault overview details">
@@ -490,14 +528,19 @@ export default function VaultPage() {
         )}
       </div>
 
+    </div>
+    </Activity>
+
       {name && (
         <>
           <FileUploadDialog
             open={uploadOpen}
+            visible={!checking && loadedScope === scope && canCreateContent}
             onOpenChange={setUploadOpen}
             vault={name}
             returnFocusRef={uploadButtonRef}
             onUploaded={(file) => {
+              if (!mounted.current || scope !== latestScope.current || latestChecking.current) return;
               refetchTree();
               loadInfo(name);
               void loadRecent(name);
@@ -510,10 +553,12 @@ export default function VaultPage() {
           />
           <TableCreateDialog
             open={tableCreateOpen}
+            visible={!checking && loadedScope === scope && canCreateContent}
             onOpenChange={setTableCreateOpen}
             vault={name}
             returnFocusRef={tableButtonRef}
             onCreated={(tableName) => {
+              if (!mounted.current || scope !== latestScope.current || latestChecking.current) return;
               refetchTree();
               loadInfo(name);
               void loadRecent(name);
@@ -522,7 +567,7 @@ export default function VaultPage() {
           />
         </>
       )}
-    </div>
+    </>
   );
 }
 
@@ -829,6 +874,9 @@ function VaultOverviewAside({
   guideDefined,
   guideCustomized,
   guideLoading,
+  guideError,
+  guideRetrying,
+  onGuideRetry,
 }: {
   name: string;
   info: VaultInfo;
@@ -836,10 +884,15 @@ function VaultOverviewAside({
   guideDefined: boolean;
   guideCustomized?: boolean;
   guideLoading: boolean;
+  guideError?: string;
+  guideRetrying: boolean;
+  onGuideRetry: () => void;
 }) {
   const guideStatus = guideLoading
     ? "Checking…"
-    : !guideDefined
+    : guideError
+      ? "Guide unavailable"
+      : !guideDefined
       ? "Guide not configured"
       : guideCustomized === undefined
         ? "Guide ready"
@@ -848,7 +901,9 @@ function VaultOverviewAside({
           : "Starter template";
   const summary = info.is_external_git
     ? "This vault mirrors an external Git source, which remains the authoritative guide."
-    : guideCustomized && about
+    : guideLoading
+      ? "Checking the vault guide."
+      : guideCustomized && about
       ? about
       : guideDefined
         ? "Add purpose, scope, and agent instructions when you are ready to customize this guide."
@@ -878,20 +933,26 @@ function VaultOverviewAside({
       : HelpCircle;
 
   return (
-    <aside className="flex min-w-0 flex-col gap-3" aria-label="Vault overview details">
+          <aside className="grid min-w-0 items-start gap-3 @[40rem]/vault-overview:grid-cols-2 @[60rem]/vault-overview:grid-cols-1" aria-label="Vault overview details">
       <Panel variant="workspace" flush className="min-w-0 rounded-[var(--radius-sm)]" role="region" aria-labelledby="vault-guide-heading">
         <OverviewContextHeading id="vault-guide-heading" icon={BookText} tone="guide">
           Vault guide
         </OverviewContextHeading>
         <div className="p-4">
-          <p className="line-clamp-3 max-w-prose break-words text-sm leading-relaxed text-foreground [overflow-wrap:anywhere]">
-            {summary}
-          </p>
+          {guideError ? (
+            <Alert variant="destructive" title="Couldn't load the vault guide">{guideError}</Alert>
+          ) : (
+            <p className="line-clamp-3 max-w-prose break-words text-sm leading-relaxed text-foreground [overflow-wrap:anywhere]">
+              {summary}
+            </p>
+          )}
           <div className="mt-3 flex max-w-md flex-wrap items-center justify-between gap-2">
             <Badge id="vault-guide-status" variant="outline" className="rounded-[var(--radius-sm)] text-xs">
               {info.is_external_git ? "Git managed" : guideStatus}
             </Badge>
-            {!info.is_external_git && (
+            {!info.is_external_git && guideError ? (
+              <Button variant="outline" size="sm" onClick={onGuideRetry} loading={guideRetrying}>Retry</Button>
+            ) : !info.is_external_git && !guideLoading && (
               <Button asChild variant="outline" size="sm" className="h-9 rounded-[var(--radius-sm)] text-link">
                 <Link
                   to={`/vault/${name}/settings#skill`}

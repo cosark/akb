@@ -5,16 +5,18 @@ import { installDocumentHistoryGuard, useDocumentHistoryGuard } from "@/hooks/us
 
 let uninstall: () => void;
 
-function Probe({ enabled, requestExit }: {
+function Probe({ enabled, requestExit, shouldGuardDestination }: {
   enabled: boolean;
   requestExit: (proceed: () => void) => void;
+  shouldGuardDestination?: (destination: URL) => boolean;
 }) {
-  useDocumentHistoryGuard(enabled, requestExit);
-  return <output aria-label="Rendered route">{useLocation().pathname}</output>;
+  useDocumentHistoryGuard(enabled, requestExit, shouldGuardDestination);
+  const location = useLocation();
+  return <output aria-label="Rendered route">{location.pathname}{location.hash}</output>;
 }
 
-function renderGuard(enabled = true, requestExit = vi.fn<(proceed: () => void) => void>()) {
-  const props = { enabled, requestExit };
+function renderGuard(enabled = true, requestExit = vi.fn<(proceed: () => void) => void>(), shouldGuardDestination?: (destination: URL) => boolean) {
+  const props = { enabled, requestExit, shouldGuardDestination };
   const view = render(<BrowserRouter><Probe {...props} /></BrowserRouter>);
   return {
     ...view,
@@ -25,9 +27,9 @@ function renderGuard(enabled = true, requestExit = vi.fn<(proceed: () => void) =
   };
 }
 
-function pop(index: number) {
+function pop(index: number, path = `/entry-${index}`) {
   act(() => {
-    window.history.replaceState({ idx: index, key: `entry-${index}` }, "", `/entry-${index}`);
+    window.history.replaceState({ idx: index, key: `entry-${index}` }, "", path);
     window.dispatchEvent(new PopStateEvent("popstate", { state: window.history.state }));
   });
 }
@@ -52,6 +54,24 @@ afterEach(() => {
 });
 
 describe("useDocumentHistoryGuard", () => {
+  it("allows local workspace hashes while protecting a subsequent route departure", () => {
+    window.history.replaceState({ idx: 4, key: "entry-4" }, "", "/vault/team/settings#general");
+    const { requestExit } = renderGuard(true, vi.fn(), destination => destination.pathname !== "/vault/team/settings");
+    pop(3, "/vault/team/settings#access");
+    expect(screen.getByLabelText("Rendered route")).toHaveTextContent("/vault/team/settings#access");
+    expect(window.history.go).not.toHaveBeenCalled();
+    expect(requestExit).not.toHaveBeenCalled();
+    pop(2, "/vault/team/members");
+    flushCorrection();
+    expect(window.history.go).toHaveBeenLastCalledWith(1);
+    expect(screen.getByLabelText("Rendered route")).toHaveTextContent("/vault/team/settings#access");
+    pop(3, "/vault/team/settings#access");
+    act(requestExit.mock.calls[0][0]);
+    expect(window.history.go).toHaveBeenLastCalledWith(-1);
+    pop(2, "/vault/team/members");
+    expect(screen.getByLabelText("Rendered route")).toHaveTextContent("/vault/team/members");
+  });
+
   it("lets clean browser navigation reach BrowserRouter without a corrective traversal", () => {
     const { requestExit } = renderGuard(false);
     pop(3);

@@ -331,6 +331,9 @@ jobs:
             tests/test_recovery_admin_provisioning_postgres.py
             tests/test_local_session_generation_postgres.py
             tests/test_account_self_lifecycle_postgres.py
+            # Photo revision races, session revocation and cleanup are real
+            # transaction guarantees; otherwise this file skips in both lanes.
+            tests/test_user_avatar_postgres.py
             tests/test_sso_account_lifecycle_postgres.py
             tests/test_sso_account_sync_postgres.py
             tests/test_pat_issuance_postgres.py

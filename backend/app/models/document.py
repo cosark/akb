@@ -70,7 +70,11 @@ class DocumentPutRequest(NFCModel):
 
 
 class DocumentUpdateRequest(NFCModel):
-    """Request body for akb_update."""
+    """Request body for akb_update.
+
+    Compatibility contract: omitted fields and explicit null retain existing
+    values. Send an empty string to clear summary/domain; null is not removal.
+    """
 
     content: str | None = None
     title: str | None = None

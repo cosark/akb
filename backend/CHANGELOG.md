@@ -14,6 +14,55 @@ specifically; the proxy has its own log in
   OpenAPI response contract. Declared enum values, table data, constraints,
   and drift reporting are unchanged.
 
+## 0.17.0 — 2026-10-19
+
+### Accounts
+
+- Add private profile photos for human local and SSO browser sessions. Upload,
+  replace and remove a photo in Settings without changing SSO-managed identity
+  fields. Photos use authenticated self-only reads, revision conflict checks,
+  bounded image normalization and durable object cleanup. Migration 114 and
+  matching API/worker versions are required; see
+  [profile photo operations](../docs/operations/profile-photos.md).
+
+### Authentication
+
+- Complete a workspace SSO login after the person selects an enabled upstream
+  on the realm's login page. The browser state records the allowed choices;
+  both verified tokens must name the same allowed provider, which is checked
+  again without the provider cache before admission. Admission/domain policy
+  uses that actual provider. Direct-provider and legacy logins remain exactly
+  pinned; rejected callbacks return to the sign-in page instead of a JSON error.
+  Upgrade all callback-serving API processes together before issuing the new
+  workspace states; see the standalone SSO deployment guide (#768).
+
+### Identity and resource handling
+
+- Separate stable account handles and UUIDs from mutable profile display names,
+  including member selection, mentions and user-directory lookup (#738).
+- Improve file-upload recovery and idempotent retries, document metadata clearing,
+  and effective access reporting for public Vaults (#741).
+
+### Bundled web application
+
+- Reorganize workspace navigation, reading and editing flows, Settings, Vault
+  management and accessible resource dialogs while preserving user state (#741).
+- Center Search on its query and results, with compact filters and clearly
+  separated recent searches, recently viewed items and suggestions (#772).
+- Simplify the notifications dropdown and align document images (#770).
+
+### Upgrade notes
+
+- Apply additive migration 114 and replace the deletion worker before enabling
+  the new API's photo writes; do not run an older deletion worker against live
+  account photos. Retain photo-aware cleanup and the new tables during rollback.
+- Replace all callback-serving API processes together, using Recreate or a
+  drained fleet switch. Old callback readers reject the new workspace states.
+  Keep the existing SSO session generation, epoch and Native installation
+  identity for this ordinary image upgrade.
+- Update the bundled frontend after the backend. The CI fixture/reset changes
+  in #739 do not require a production data reset or search-index rebuild.
+
 ## 0.16.2 — 2026-10-13
 
 ### Authentication

@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronRight, ChevronDown } from "lucide-react";
 
 interface Props {
-  data: any;
+  data: unknown;
   name?: string;
   depth?: number;
 }
@@ -20,7 +20,11 @@ export function JsonTree({ data, name, depth = 0 }: Props) {
   // Open only the top level by default — deep auto-expansion mounts the whole
   // payload up front.
   const [open, setOpen] = useState(depth < 1);
-  const [showAll, setShowAll] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(CHILD_CAP);
+  const keys = useMemo(
+    () => data && typeof data === "object" && !Array.isArray(data) ? Object.keys(data) : null,
+    [data],
+  );
 
   // Type-coloring uses the brand-neutral categorical scale, NOT the semantic
   // success/warning/info tokens (those mean ok/warn/error, not syntax).
@@ -36,11 +40,10 @@ export function JsonTree({ data, name, depth = 0 }: Props) {
 
   const isArray = Array.isArray(data);
   if (isArray || typeof data === "object") {
-    const keys = isArray ? null : Object.keys(data);
     const len = isArray ? data.length : keys!.length;
     if (len === 0) return <span className="text-foreground-muted">{isArray ? "[]" : "{}"}</span>;
 
-    const shownCount = showAll ? len : Math.min(len, CHILD_CAP);
+    const shownCount = Math.min(len, visibleCount);
     const label = isArray ? `[${len}]` : `{${len}}`;
 
     return (
@@ -57,7 +60,7 @@ export function JsonTree({ data, name, depth = 0 }: Props) {
         {open && (
           <div className="ml-4 border-l border-border pl-3">
             {isArray
-              ? data.slice(0, shownCount).map((v: any, i: number) => (
+              ? data.slice(0, shownCount).map((v: unknown, i: number) => (
                   <div key={i} className="text-sm font-mono">
                     <span className="text-subtle mr-2">{i}:</span>
                     <JsonTree data={v} depth={depth + 1} />
@@ -66,15 +69,15 @@ export function JsonTree({ data, name, depth = 0 }: Props) {
               : keys!.slice(0, shownCount).map((k) => (
                   <div key={k} className="text-sm font-mono">
                     <span className="text-primary mr-2">{k}:</span>
-                    <JsonTree data={data[k]} name={k} depth={depth + 1} />
+                    <JsonTree data={(data as Record<string, unknown>)[k]} name={k} depth={depth + 1} />
                   </div>
                 ))}
             {len > shownCount && (
               <button
-                onClick={() => setShowAll(true)}
-                className="coord mt-1 hover:text-primary rounded-[var(--radius-sm)] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                onClick={() => setVisibleCount((count) => Math.min(len, count + CHILD_CAP))}
+                className="mt-1 min-h-9 rounded-[var(--radius-sm)] px-2 text-xs text-link hover:text-link-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
-                + {len - shownCount} more
+                Show {Math.min(CHILD_CAP, len - shownCount)} more ({len - shownCount} remaining)
               </button>
             )}
           </div>
