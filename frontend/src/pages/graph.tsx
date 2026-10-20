@@ -100,15 +100,17 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
   }, [base, merged.nodes]);
   const filterKey = JSON.stringify([[...view.types].sort(), [...view.relations].sort()]);
   const entryNode = merged.nodes.find(n => n.uri === view.entry || docIdFromUri(n.uri) === view.entry);
+  // Strong membership is decided on the whole loaded map, before display filters, so hiding a resource
+  // cannot cut the walk; what the reader loaded or followed (the overlay) always stays.
   const scene = useMemo(() => {
-    const visible = visibleGraph(merged, view, hidden, hideOrphans);
-    return view.entry && entryNode && view.links === "strong"
-      ? strongNeighborhood(visible, entryNode.uri, view.hops)
-      : { ...visible, weak: new Set<string>(), strong: false };
+    const strong = view.entry && entryNode && view.links === "strong"
+      ? strongNeighborhood(merged, entryNode.uri, view.hops, overlay.nodes.map(n => n.uri))
+      : { ...merged, weak: new Set<string>(), strong: false };
+    return { ...visibleGraph(strong, view, hidden, hideOrphans), weak: strong.weak, strong: strong.strong };
   },
     // Selection is deliberately excluded: it cannot invalidate renderer data.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [merged, filterKey, hidden, hideOrphans, view.entry, entryNode, view.links, view.hops]);
+    [merged, overlay, filterKey, hidden, hideOrphans, view.entry, entryNode, view.links, view.hops]);
   const displayed = scene;
   const selected = view.selected ? displayed.nodes.find(n => n.uri === view.selected || n.doc_id === view.selected || docIdFromUri(n.uri) === view.selected) : undefined;
   const edge = displayed.edges.find(item => edgeSelection && item.source === edgeSelection.source && item.target === edgeSelection.target && item.relation === edgeSelection.relation && item.kind === edgeSelection.kind);

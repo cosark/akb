@@ -71,6 +71,8 @@ export class SpatialGraphRenderer {
     // before their own pointerdown handler starts an orbit or a pan.
     this.renderer.domElement.addEventListener("pointerdown", this.pointerDown, { capture: true });
     this.renderer.domElement.addEventListener("pointerup", this.pointerUp);
+    this.renderer.domElement.addEventListener("pointercancel", this.pointerCancel);
+    this.renderer.domElement.addEventListener("lostpointercapture", this.pointerCancel);
     this.renderer.domElement.addEventListener("pointermove", this.pointerMove);
     this.renderer.domElement.addEventListener("pointerleave", this.pointerLeave);
     this.renderer.domElement.addEventListener("contextmenu", this.contextMenu);
@@ -118,24 +120,40 @@ export class SpatialGraphRenderer {
     return this.ray.ray.intersectPlane(plane, new Vector3()) ?? undefined;
   }
   private dragTo(event: PointerEvent) {
-    const drag = this.drag!, down = this.down;
+    const drag = this.drag, down = this.down;
+    if (!drag || event.pointerId !== drag.pointerId) return;
     if (!drag.moved && down && Math.hypot(event.clientX - down.x, event.clientY - down.y) <= 5) return;
     const hit = this.pointOnPlane(event, drag.plane); if (!hit) return;
     hit.sub(drag.grab);
-    drag.moved = true;
+    if (!drag.moved) {
+      // The move counts from the first frame past the click threshold, so a
+      // layout that finishes mid-gesture cannot overwrite the dragged position.
+      drag.moved = true;
+      this.callbacks.onMove?.(drag.uri);
+    }
     this.positions.set(drag.uri, { x: hit.x, y: hit.y, z: this.dimension === 2 ? 0 : hit.z });
     // One rebuild per frame keeps the lines attached while the pointer moves.
     if (!this.dragFrame) this.dragFrame = requestAnimationFrame(() => { this.dragFrame = 0; if (!this.disposed) this.rebuild(); });
   }
-  private endDrag(event: PointerEvent) {
-    const drag = this.drag; if (!drag) return;
-    this.drag = undefined; this.controls.enabled = true;
-    if (this.renderer.domElement.hasPointerCapture?.(drag.pointerId)) this.renderer.domElement.releasePointerCapture(drag.pointerId);
-    this.host.style.cursor = "pointer";
-    if (drag.moved) { this.dragTo(event); this.callbacks.onMove?.(drag.uri); }
+  /** Ends the drag of ``event``'s pointer; ``commit`` places the resource at the release point first. Always restores the camera controls. */
+  private endDrag(event: PointerEvent, commit: boolean) {
+    const drag = this.drag; if (!drag || event.pointerId !== drag.pointerId) return;
+    try {
+      if (commit && drag.moved) this.dragTo(event);
+    } finally {
+      this.drag = undefined; this.controls.enabled = true;
+      if (this.renderer.domElement.hasPointerCapture?.(drag.pointerId)) this.renderer.domElement.releasePointerCapture(drag.pointerId);
+      this.host.style.cursor = "pointer";
+    }
   }
+  private pointerCancel = (event: PointerEvent) => {
+    if (this.drag?.pointerId !== event.pointerId) return;
+    this.endDrag(event, false); this.down = undefined;
+  };
   private pointerUp = (event: PointerEvent) => {
-    const dragged = this.drag?.moved; this.endDrag(event);
+    // Another pointer (a second finger) neither ends nor clicks during a drag.
+    if (this.drag && event.pointerId !== this.drag.pointerId) return;
+    const dragged = this.drag?.moved; this.endDrag(event, true);
     const down = this.down; this.down = undefined;
     if (dragged) return;
     if (!down || Math.hypot(event.clientX - down.x, event.clientY - down.y) > 5) return;
@@ -247,7 +265,7 @@ export class SpatialGraphRenderer {
         const a = this.positions.get(edge.source), b = this.positions.get(edge.target);
         if (!a || !b) return;
         const parallel = pairs.get(JSON.stringify([edge.source, edge.target].sort()))!;
-        const points = edgeCurvePoints(a, b, parallel.indexOf(edgeIndex), parallel.length);
+        const points = edgeCurvePoints(a, b, parallel.indexOf(edgeIndex), parallel.length, this.dimension === 2);
         const active = edge.source === this.selected || edge.target === this.selected || this.isInspected(edge);
         const color = new Color(this.colors[active ? "link" : "graph-edge"]);
         if (!active) color.lerp(background, 0.25);
@@ -362,6 +380,7 @@ export class SpatialGraphRenderer {
     this.controls.removeEventListener("change", this.changed); this.controls.dispose(); this.clearObjects();
     const canvas = this.renderer.domElement;
     canvas.removeEventListener("pointerdown", this.pointerDown, { capture: true }); canvas.removeEventListener("pointerup", this.pointerUp);
+    canvas.removeEventListener("pointercancel", this.pointerCancel); canvas.removeEventListener("lostpointercapture", this.pointerCancel);
     canvas.removeEventListener("pointermove", this.pointerMove); canvas.removeEventListener("pointerleave", this.pointerLeave);
     canvas.removeEventListener("contextmenu", this.contextMenu); canvas.removeEventListener("webglcontextlost", this.contextLost);
     this.renderer.dispose(); this.renderer.forceContextLoss(); canvas.remove();

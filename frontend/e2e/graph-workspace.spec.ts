@@ -918,7 +918,7 @@ test.describe("flat map (the default view)", () => {
 
   test("dragging a resource moves only that resource and it stays there", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await fixture(page, fixtureScene(), { dimension: 2 });
+    const { errors } = await fixture(page, fixtureScene(), { dimension: 2 });
     await page.goto("/vault/fixture/graph");
     await graphReady(page, 30);
     await frames(page);
@@ -944,7 +944,17 @@ test.describe("flat map (the default view)", () => {
     expect(Math.max(...others)).toBeLessThan(2);
     // A drag is not a click: nothing became selected.
     await expect(page.getByRole("complementary", { name: /^Inspector for / })).toHaveCount(0);
-    await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+    // The drag completes without a page error and the map stays usable for another drag.
+    expect(errors).toEqual([]);
+    await page.mouse.move(dot.x - 90, dot.y + 70);
+    await page.mouse.down();
+    await page.mouse.move(dot.x - 30, dot.y + 110, { steps: 8 });
+    await page.mouse.up();
+    await frames(page);
+    const again = (await labelPositions(page)).find(label => label.uri === target.uri)!;
+    expect(again.x - target.x).toBeCloseTo(-30, -1);
+    expect(again.y - target.y).toBeCloseTo(110, -1);
+    expect(errors).toEqual([]);
     await page.getByRole("button", { name: "Fit graph", exact: true }).click();
     await frames(page);
     await expect(page.getByText(/Arranging.*map/)).toBeHidden();
