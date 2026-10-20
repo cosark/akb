@@ -84,6 +84,7 @@ export function SkillSection({
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
+  const consumedEditRequest = useRef<string | null>(null);
   const previewId = useId();
   const previewHref = vaultGuideHref(vault);
   const previewState = documentPreviewState(location, previewId);
@@ -156,6 +157,11 @@ export function SkillSection({
     const params = new URLSearchParams(location.search);
     if (params.get("edit") !== "guide" || location.hash !== "#skill" ||
         !canManage || checking || loading || busy || !doc) return;
+    const request = JSON.stringify([ownerScope, location.key, location.pathname, location.search, location.hash]);
+    if (consumedEditRequest.current === request) return;
+    // History replacement can precede the router's location-context commit.
+    // Claim this entry before updating the draft so Cancel cannot replay it.
+    consumedEditRequest.current = request;
     // Consume the explicit edit request once. Returning from a reading preview
     // resumes an existing draft and its OCC pin instead of reseeding it.
     if (baseBody === null) {
