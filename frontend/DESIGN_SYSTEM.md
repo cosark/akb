@@ -641,8 +641,10 @@ an `sr-only` summary, never the only signal.
   Vault Settings uses the Members/Public links workspace family: the same
   `WorkspaceSectionHeader`, route-owned gutters and one bounded workspace Panel.
   The visible Settings heading is 16px with its quiet tonal icon; an archived
-  badge appears only when applicable. Inside the ledger: General, Access, Vault guide,
-  then owner-only Danger zone. Do not add category tabs, another navigation
+  badge appears only when applicable. General and Access share the first row
+  at 64rem of actual ledger width, separated by one vertical hairline. Below
+  that width they stack in the same DOM order. Vault guide and owner-only
+  Danger zone each span the full ledger. Do not add category tabs, another navigation
   sidebar, a permanent context column, repeated title/description blocks or
   explanatory filler cards. Existing `#general`, `#access`, `#skill`, and
   `#danger` links scroll only the active content scroll surface to their section;
@@ -653,10 +655,11 @@ an `sr-only` summary, never the only signal.
   subsection strips, hairline row dividers and plain label/control columns.
   Label cells have no separate background fill or vertical border, and sections
   add no nested cards. Danger uses a restrained red title and explicit action,
-  with the same neutral group boundaries. At 48rem of actual
-  sheet width, align each setting's label in an 11rem column and its value in a
-  shrinkable column; keep the value/editor at no more than 48rem, with related
-  actions nearby. Stack labels above controls on narrow screens.
+  with the same neutral group boundaries. Each section owns its width query:
+  at 48rem align labels in an 11rem column and controls in the remaining space;
+  narrower sections stack labels over controls, even in a wide two-column ledger.
+  Controls fill their allocated column without a shared fixed-width cap. Danger
+  action buttons align to its far edge. Keep related save/discard actions nearby.
   General has a labelled three-line description input and a copyable permanent
   address row. Ownership, dates and inventory belong to Overview. Access uses
   native radio rows under Who can access, labelled Invited members only /
@@ -674,8 +677,10 @@ an `sr-only` summary, never the only signal.
   by a polite saved status; do not reserve disabled action footers. Serialize
   Description, Access and Guide writes. Saving must not overwrite another scope's
   saved snapshot or pull focus away from another field on completion.
-  Guide starts as a two-line excerpt within its plain row, visually separate
-  from Preview guide and owner-only Edit guide. Preview guide opens the same
+  Guide starts as a two-line excerpt within its plain row. At 56rem of section
+  width the excerpt stays left and Preview guide / owner-only Edit guide / options
+  align right; narrower sections stack them. Expanded editor and Agent view
+  remain full-width below this toolbar. Preview guide opens the same
   route-backed document reader as Overview and preserves this Settings entry,
   all draft scopes, their revision pins and return focus. Only an exact retained
   guide preview bypasses departure confirmation; full-page promotion or another

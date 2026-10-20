@@ -391,6 +391,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
           {loading && <div className="p-4 sm:p-5"><SettingsLoadingState /></div>}
           {info && (
             <div className="divide-y divide-border">
+              <div className="grid min-w-0 divide-y divide-border @[64rem]/vault-settings:grid-cols-2 @[64rem]/vault-settings:divide-y-0">
               <SettingsSection id="general" title="General">
                 <SettingRow label={<Label htmlFor="vault-description">Description</Label>}>
                   <div data-testid="settings-general-editor">
@@ -425,10 +426,10 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                 </SettingRow>
               </SettingsSection>
 
-              <SettingsSection id="access" title="Access">
+              <SettingsSection id="access" title="Access" className="@[64rem]/vault-settings:border-l @[64rem]/vault-settings:border-border">
                 <SettingRow label={<>Who can access<p className="mt-1 text-xs font-normal text-foreground-muted">Sign-in required</p></>}>
                   <div data-testid="settings-access-editor">
-                    <fieldset role="radiogroup" aria-label="Who can access" aria-describedby="vault-access-help" disabled={!canEdit || busy} className="grid max-w-2xl divide-y divide-border overflow-hidden rounded-[var(--radius-md)] border border-border">
+                    <fieldset role="radiogroup" aria-label="Who can access" aria-describedby="vault-access-help" disabled={!canEdit || busy} className="grid divide-y divide-border overflow-hidden rounded-[var(--radius-md)] border border-border">
                       {PUBLIC_ORDER.map(value => {
                         return (
                           <label key={value} className={`flex min-h-11 items-center gap-3 px-3 py-2 text-sm ${publicAccess === value ? "bg-surface-selected text-surface-selected-foreground" : "bg-surface text-foreground hover:bg-surface-hover"} ${canEdit && !busy ? "cursor-pointer" : ""}`}>
@@ -468,6 +469,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                   </div>
                 </SettingRow>
               </SettingsSection>
+              </div>
 
               <SkillSection
                 vault={name} doc={skillDoc} loading={skillQuery.isLoading || (!info && !loadError)}

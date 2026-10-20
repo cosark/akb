@@ -297,14 +297,15 @@ export function SkillSection({
             <Alert variant="warning">The vault guide is missing. It is restored automatically by the system backfill; contact an administrator if this persists.</Alert>
           ) : (
             <>
+              <div className="flex min-w-0 flex-col gap-3 @[56rem]/settings-section:flex-row @[56rem]/settings-section:items-start">
               {!expanded && (
-                <div className="mb-3">
+                <div className="min-w-0 flex-1">
                   <p className="line-clamp-2 text-sm leading-relaxed text-foreground-muted">
                     {guideExcerpt(doc.content) || "No instructions yet."}
                   </p>
                 </div>
               )}
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 @[56rem]/settings-section:ml-auto @[56rem]/settings-section:shrink-0">
                 <Button asChild variant="ghost" size="sm" className="min-h-11 text-link sm:min-h-8">
                   <Link id={previewId} to={previewHref} state={previewState} onClick={event => {
                     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -347,6 +348,7 @@ export function SkillSection({
                 </DropdownMenu.Root>
                 {dirty && <span role="status" className="text-xs text-foreground-muted">Unsaved guide changes</span>}
                 {saved && !dirty && <span role="status" className="text-xs text-success">Guide saved</span>}
+              </div>
               </div>
 
               {expanded && tab === "agent" && (
