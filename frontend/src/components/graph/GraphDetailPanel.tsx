@@ -14,7 +14,7 @@ import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-c
 import { getDocument, getRelations, type RelationRow } from "@/lib/api";
 import { parseUri } from "@/lib/uri";
 import {
-  ALL_NODE_KINDS, ALL_RELATIONS, RELATION_LABEL, kindToSegment,
+  ALL_NODE_KINDS, ALL_RELATIONS, RELATION_LABEL, edgeStrength, kindToSegment,
   type NodeKind, type RelatedRef, type RelationKind,
 } from "./graph-types";
 
@@ -207,8 +207,12 @@ export function GraphDetailPanel({
 
 function normalizeRelations(rows: RelationRow[]): { incoming: RelatedRef[]; outgoing: RelatedRef[] } {
   const groups: { incoming: RelatedRef[]; outgoing: RelatedRef[] } = { incoming: [], outgoing: [] };
+  // A body link that repeats a strong relation with the same resource (either direction) is listed once, as the relation.
+  const strength = (row: RelationRow) => edgeStrength({ kind: row.kind, edge_type: (row as { edge_type?: "strong" | "weak" }).edge_type });
+  const strongWith = new Set(rows.filter(row => strength(row) === "strong").map(row => row.uri));
   for (const row of rows) {
     if (!RELATION_SET.has(row.relation)) continue;
+    if (strength(row) === "weak" && strongWith.has(row.uri)) continue;
     const parsedKind = parseUri(row.uri)?.kind;
     const inferredKind = parsedKind === "file" || parsedKind === "table" ? parsedKind : "document";
     groups[row.direction].push({

@@ -11,6 +11,7 @@ import { groupOf } from "./cluster";
 import {
   ALL_NODE_KINDS,
   RELATION_CLASS,
+  edgeStrength,
   type GraphEdge,
   type GraphNode,
   type GraphView,
@@ -74,7 +75,11 @@ export function apiToPayload(resp: GraphOverviewResponse): GraphPayload {
   const edges: GraphEdge[] = resp.edges
     .map((e): GraphEdge | null => {
       const rel = normalizeRelation(e.relation);
-      return rel ? { source: endpointUri(e.source), target: endpointUri(e.target), relation: rel, kind: e.kind } : null;
+      const edgeType = (e as { edge_type?: unknown }).edge_type;
+      return rel ? {
+        source: endpointUri(e.source), target: endpointUri(e.target), relation: rel, kind: e.kind,
+        ...(edgeType === "strong" || edgeType === "weak" ? { edge_type: edgeType } : {}),
+      } : null;
     })
     .filter((e): e is GraphEdge => e !== null);
   const meta: GraphMeta = {
@@ -139,7 +144,7 @@ export function strongNeighborhood(
   /** Resources the reader asked to see (loaded connections, a followed relationship, the selection): always kept. */
   revealed: Iterable<string> = [],
 ): GraphPayload & { weak: Set<string>; strong: boolean } {
-  const explicit = p.edges.filter(e => e.kind === "explicit" && e.source !== e.target);
+  const explicit = p.edges.filter(e => edgeStrength(e) === "strong" && e.source !== e.target);
   if (!focus || explicit.length === 0) return { ...p, weak: new Set(), strong: false };
   const reach = new Map<string, number>([[focus, 0]]);
   const queue = [focus];
@@ -154,7 +159,7 @@ export function strongNeighborhood(
   }
   const weak = new Set<string>();
   for (const e of p.edges) {
-    if (e.kind === "explicit") continue;
+    if (edgeStrength(e) === "strong") continue;
     const other = e.source === focus ? e.target : e.target === focus ? e.source : undefined;
     if (other !== undefined && !reach.has(other)) weak.add(other);
   }
@@ -163,7 +168,7 @@ export function strongNeighborhood(
   const edges = p.edges.filter(e => {
     if (!keep.has(e.source) || !keep.has(e.target)) return false;
     if (extra.has(e.source) || extra.has(e.target)) return true;
-    if (e.kind === "explicit") return reach.has(e.source) && reach.has(e.target);
+    if (edgeStrength(e) === "strong") return reach.has(e.source) && reach.has(e.target);
     return e.source === focus || e.target === focus;
   });
   return { nodes: p.nodes.filter(n => keep.has(n.uri)), edges, meta: p.meta, weak, strong: true };
@@ -274,7 +279,15 @@ export function visibleGraph(
       source: endpointUri(e.source),
       target: endpointUri(e.target),
     }));
-  return { nodes, edges, meta: p.meta };
+  return { nodes, edges: strongerOnly(edges), meta: p.meta };
+}
+
+/** One connection per pair of resources: where a strong connection joins two resources, weak ones between the same
+ *  two (in either direction) are dropped, so a relation and the body link that repeats it draw one line. */
+export function strongerOnly(edges: GraphEdge[]): GraphEdge[] {
+  const pair = (e: GraphEdge) => [e.source, e.target].sort().join("\u0000");
+  const strong = new Set(edges.filter(e => edgeStrength(e) === "strong").map(pair));
+  return edges.filter(e => edgeStrength(e) === "strong" || !strong.has(pair(e)));
 }
 
 // Extract the doc / table / file id from an `akb://{vault}/{kind}/{path}` URI.

@@ -42,6 +42,15 @@ export interface GraphEdge {
   relation: RelationKind;
   /** Server-reported provenance. Never infer it from the relation label. */
   kind?: "implicit" | "explicit";
+  /** Server-reported strength: an explicit relation is strong unless made weak; a body link is always weak. */
+  edge_type?: "strong" | "weak";
+}
+
+/** The strength of a connection: the server's ``edge_type``; from a server that does not report it, an explicit
+ *  relation is strong and anything else weak. Never inferred from the relation label. */
+export function edgeStrength(edge: Pick<GraphEdge, "kind" | "edge_type">): "strong" | "weak" {
+  if (edge.edge_type === "strong" || edge.edge_type === "weak") return edge.edge_type;
+  return edge.kind === "explicit" ? "strong" : "weak";
 }
 
 /** A related-resource reference from the detail panel's RELATIONS list —

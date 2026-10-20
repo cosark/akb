@@ -6,7 +6,7 @@ import {
   type Material, type Object3D,
 } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { HOP_TOKENS, type GraphEdge, type GraphNode } from "./graph-types";
+import { HOP_TOKENS, edgeStrength, type GraphEdge, type GraphNode } from "./graph-types";
 import type { GraphDimension, SpatialPoint } from "./graph-spatial-layout";
 import { CORNER_VIEW, TOP_VIEW, cameraForPoints, edgeCurvePoints, focusSpatialCamera, visibleLabels, type ProjectedLabel } from "./graph-spatial-view";
 
@@ -258,10 +258,11 @@ export class SpatialGraphRenderer {
       const key = JSON.stringify([edge.source, edge.target].sort());
       pairs.set(key, [...(pairs.get(key) ?? []), i]);
     });
+    // Weak connections (body links, or a relation made weak) are dashed; strong ones solid.
     for (const implicit of [false, true]) {
       const vertices: number[] = [], colors: number[] = [], indices: number[] = [];
       this.edges.forEach((edge, edgeIndex) => {
-        if ((edge.kind === "implicit") !== implicit) return;
+        if ((edgeStrength(edge) === "weak") !== implicit) return;
         const a = this.positions.get(edge.source), b = this.positions.get(edge.target);
         if (!a || !b) return;
         const parallel = pairs.get(JSON.stringify([edge.source, edge.target].sort()))!;

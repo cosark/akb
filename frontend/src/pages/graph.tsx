@@ -10,7 +10,7 @@ import { GraphListView } from "@/components/graph/GraphListView";
 import { GraphToolbar, type GraphDisplayMode } from "@/components/graph/GraphToolbar";
 import { queryToView, viewToQuery } from "@/components/graph/graph-state";
 import { graphCoverage } from "@/components/graph/graph-scene";
-import { ALL_NODE_KINDS, ALL_RELATIONS, RELATION_LABEL, kindToSegment, type GraphEdge, type GraphNode, type GraphView, type RelatedRef } from "@/components/graph/graph-types";
+import { ALL_NODE_KINDS, ALL_RELATIONS, RELATION_LABEL, edgeStrength, kindToSegment, type GraphEdge, type GraphNode, type GraphView, type RelatedRef } from "@/components/graph/graph-types";
 import { degreeMap, docIdFromUri, fetchNeighbors, hopDistances, mergeGraph, strongNeighborhood, useFullGraph, useNeighborhood, visibleGraph, type GraphPayload } from "@/components/graph/use-graph-data";
 import type { GraphDimension } from "@/components/graph/graph-spatial-layout";
 import { Button } from "@/components/ui/button";
@@ -232,7 +232,7 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
       {edge && <aside aria-label="Relationship details" tabIndex={-1} ref={focusRelationshipPanel} onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); setEdge(null); document.getElementById("graph-workspace")?.focus({ preventScroll: true }); } }} className="absolute right-3 top-[var(--graph-tools-bottom)] z-[var(--z-overlay)] max-h-[calc(100%-var(--graph-tools-bottom)-1rem)] w-80 max-w-[calc(100%-1.5rem)] overflow-y-auto rounded-[var(--radius-md)] border border-border bg-surface p-4 shadow-md focus:outline-none">
         <div className="flex items-center justify-between"><h2 className="text-sm font-semibold">Relationship</h2><Button variant="ghost" size="icon" aria-label="Close relationship details" onClick={() => setEdge(null)}><X className="h-4 w-4" /></Button></div>
         <p className="mt-2 break-words text-sm">{displayed.nodes.find(n => n.uri === edge.source)?.name} <span className="text-link">→ {RELATION_LABEL[edge.relation]} →</span> {displayed.nodes.find(n => n.uri === edge.target)?.name}</p>
-        <p className="mt-3 text-xs text-foreground-muted">{edge.kind === "implicit" ? "Body link" : edge.kind === "explicit" ? "Explicit relationship" : "Relationship source not provided"}</p>
+        <p className="mt-3 text-xs text-foreground-muted">{edgeStrength(edge) === "strong" ? "Strong" : "Weak"} · {edge.kind === "implicit" ? "Body link" : edge.kind === "explicit" ? "Explicit relationship" : "Relationship source not provided"}</p>
       </aside>}
 
       {mode === "graph" && <CanvasControls canvas={canvas} dimension={dimension} onDimension={setDimension} />}
