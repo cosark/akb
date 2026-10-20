@@ -42,19 +42,20 @@ export function focusSpatialCamera(camera: PerspectiveCamera, target: Vector3, p
   camera.position.add(offset); target.add(offset); camera.updateMatrixWorld();
 }
 
-export function edgeCurvePoints(start: SpatialPoint, end: SpatialPoint, index: number, count: number): SpatialPoint[] {
+/** ``flat`` bends parallel relationships within the z = 0 plane, so a top-down camera still sees them apart. */
+export function edgeCurvePoints(start: SpatialPoint, end: SpatialPoint, index: number, count: number, flat = false): SpatialPoint[] {
   const a = new Vector3(start.x, start.y, start.z), b = new Vector3(end.x, end.y, end.z);
   if (a.distanceToSquared(b) < 0.001) {
     return Array.from({ length: 25 }, (_, i) => {
       const angle = i / 24 * Math.PI * 2, radius = 14 + index * 6;
-      return { x: a.x + Math.sin(angle) * radius, y: a.y + (1 - Math.cos(angle)) * radius, z: a.z + Math.sin(angle) * radius * 0.4 };
+      return { x: a.x + Math.sin(angle) * radius, y: a.y + (1 - Math.cos(angle)) * radius, z: a.z + (flat ? 0 : Math.sin(angle) * radius * 0.4) };
     });
   }
   const direction = b.clone().sub(a);
   // Use one orientation for a pair, even when its relationships run both ways.
   const sign = direction.x || direction.y || direction.z;
   if (sign < 0) direction.negate();
-  const normal = direction.clone().cross(new Vector3(0, 1, 0));
+  const normal = direction.clone().cross(flat ? new Vector3(0, 0, 1) : new Vector3(0, 1, 0));
   if (normal.lengthSq() < 0.001) normal.copy(direction).cross(new Vector3(1, 0, 0));
   normal.normalize();
   const bend = (index - (count - 1) / 2) * 22;

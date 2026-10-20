@@ -136,6 +136,8 @@ export function strongNeighborhood(
   p: GraphPayload,
   focus: string | undefined,
   hops: number,
+  /** Resources the reader asked to see (loaded connections, a followed relationship, the selection): always kept. */
+  revealed: Iterable<string> = [],
 ): GraphPayload & { weak: Set<string>; strong: boolean } {
   const explicit = p.edges.filter(e => e.kind === "explicit" && e.source !== e.target);
   if (!focus || explicit.length === 0) return { ...p, weak: new Set(), strong: false };
@@ -156,9 +158,11 @@ export function strongNeighborhood(
     const other = e.source === focus ? e.target : e.target === focus ? e.source : undefined;
     if (other !== undefined && !reach.has(other)) weak.add(other);
   }
-  const keep = new Set([...reach.keys(), ...weak]);
+  const extra = new Set([...revealed].filter(uri => !reach.has(uri) && !weak.has(uri)));
+  const keep = new Set([...reach.keys(), ...weak, ...extra]);
   const edges = p.edges.filter(e => {
     if (!keep.has(e.source) || !keep.has(e.target)) return false;
+    if (extra.has(e.source) || extra.has(e.target)) return true;
     if (e.kind === "explicit") return reach.has(e.source) && reach.has(e.target);
     return e.source === focus || e.target === focus;
   });

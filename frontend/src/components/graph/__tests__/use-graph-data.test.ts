@@ -467,6 +467,12 @@ describe("strongNeighborhood", () => {
     expect(new Set(strongNeighborhood(payload, "pm", 2).nodes.map(n => n.uri))).toEqual(new Set(["pm", "inc", "service", "cluster", "node", "owner"]));
   });
 
+  it("always keeps what the reader revealed, with its edges to the scene", () => {
+    const scene = strongNeighborhood(payload, "inc", 2, ["inc2"]);
+    expect(scene.nodes.map(n => n.uri)).toContain("inc2");
+    expect(scene.edges.some(e => e.source === "inc2" && e.target === "cluster")).toBe(true);
+  });
+
   it("leaves a map without explicit relations unchanged", () => {
     const plain = { nodes: payload.nodes, edges: payload.edges.filter(e => e.kind !== "explicit") };
     const scene = strongNeighborhood(plain, "inc", 2);

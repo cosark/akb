@@ -51,3 +51,13 @@ describe("flat map camera", () => {
     expect(view.target).toEqual({ x: 0, y: 10, z: 0 });
   });
 });
+
+describe("flat map edge curves", () => {
+  it("bend parallel relationships within the plane so a top-down camera sees them apart", () => {
+    const a = { x: -50, y: 0, z: 0 }, b = { x: 50, y: 0, z: 0 };
+    const first = edgeCurvePoints(a, b, 0, 2, true), second = edgeCurvePoints(a, b, 1, 2, true);
+    expect([...first, ...second].every(point => point.z === 0)).toBe(true);
+    expect(Math.abs(first[8].y - second[8].y)).toBeGreaterThan(5);
+    expect(edgeCurvePoints(a, a, 0, 1, true).every(point => point.z === 0)).toBe(true);
+  });
+});
