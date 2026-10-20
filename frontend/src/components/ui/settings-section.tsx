@@ -1,5 +1,6 @@
 import { forwardRef, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { TonalIcon, type TonalIconTone } from "./tonal-icon";
 
 /** Section dividers inside the Vault settings ledger. The parent owns its panel. */
 export const SettingsSection = forwardRef<HTMLElement, {
@@ -7,13 +8,32 @@ export const SettingsSection = forwardRef<HTMLElement, {
   title: string;
   children: ReactNode;
   className?: string;
-}>(({ id, title, children, className }, ref) => (
-  <section ref={ref} id={id} role="region" aria-labelledby={`settings-${id}-heading`} className={cn("@container/settings-section min-w-0 scroll-mt-4", className)}>
+  layout?: "ledger" | "form";
+  description?: string;
+  icon?: ReactNode;
+  tone?: TonalIconTone;
+}>(({ id, title, children, className, layout = "ledger", description, icon, tone = "neutral" }, ref) => (
+  <section ref={ref} id={id} role="region" aria-labelledby={`settings-${id}-heading`} className={cn(
+    "@container/settings-section min-w-0 scroll-mt-4",
+    layout === "form" && "grid gap-5 px-4 py-5 sm:px-5 @[64rem]/vault-settings:grid-cols-[13rem_minmax(0,1fr)] @[64rem]/vault-settings:gap-8",
+    className,
+  )}>
+    {layout === "form" ? <>
+      <div className="flex items-start gap-3">
+        {icon && <TonalIcon tone={tone}>{icon}</TonalIcon>}
+        <div className="min-w-0">
+          <h3 id={`settings-${id}-heading`} className="text-base font-semibold leading-6 text-foreground">{title}</h3>
+          {description && <p className="mt-1 text-sm leading-relaxed text-foreground-muted">{description}</p>}
+        </div>
+      </div>
+      <div data-slot="settings-group" className="@container/settings-values min-w-0">{children}</div>
+    </> : <>
     <h3 id={`settings-${id}-heading`} className={cn(
       "border-b border-border bg-background/60 px-4 py-2.5 text-sm font-semibold sm:px-5",
       id === "danger" ? "text-destructive" : "text-foreground",
     )}>{title}</h3>
     <div data-slot="settings-group" className="divide-y divide-border">{children}</div>
+    </>}
   </section>
 ));
 SettingsSection.displayName = "SettingsSection";

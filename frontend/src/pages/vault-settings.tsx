@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { Link, useLocation, useNavigate, useParams, type NavigateOptions } from "react-router-dom";
+import { useLocation, useNavigate, useParams, type NavigateOptions } from "react-router-dom";
 import {
   AlertTriangle,
   Archive,
   CheckCircle2,
-  Globe,
+  FileText,
   Lock,
   RotateCcw,
   Save,
   Settings,
   Trash2,
-  Users,
+  ShieldCheck,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -73,8 +73,8 @@ type SaveScope = "general" | "access";
 type SettingsSection = SaveScope | "skill" | "danger";
 type PendingExit = { kind: "navigation"; href: string; options?: NavigateOptions } | { kind: "history"; proceed: () => void };
 const SETTINGS_SECTIONS: Array<{ value: SettingsSection; label: string }> = [
-  { value: "general", label: "General" },
-  { value: "access", label: "Access" },
+  { value: "general", label: "Vault details" },
+  { value: "access", label: "Access permissions" },
   { value: "skill", label: "Vault guide" },
   { value: "danger", label: "Advanced" },
 ];
@@ -391,10 +391,11 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
           {loading && <div className="p-4 sm:p-5"><SettingsLoadingState /></div>}
           {info && (
             <div className="divide-y divide-border">
-              <div className="grid min-w-0 divide-y divide-border @[64rem]/vault-settings:grid-cols-2 @[64rem]/vault-settings:divide-y-0">
-              <SettingsSection id="general" title="General">
-                <SettingRow label={<Label htmlFor="vault-description">Description</Label>}>
-                  <div data-testid="settings-general-editor">
+              <SettingsSection id="general" title="Vault details" layout="form"
+                icon={<FileText aria-hidden />} description="Describe this vault and copy its address.">
+                <div className="grid min-w-0 gap-5 @[44rem]/settings-values:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+                  <div className="min-w-0" data-testid="settings-general-editor">
+                    <Label htmlFor="vault-description" className="mb-2 block leading-5">Description</Label>
                     <Textarea
                       id="vault-description"
                       value={description}
@@ -416,18 +417,20 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                       onSave={() => requestSave("general")} onDiscard={() => handleDiscard("general")}
                     />}
                   </div>
-                </SettingRow>
-                <SettingRow label="Vault address">
-                  <div className="flex min-h-10 min-w-0 items-center gap-2">
-                    <code className="min-w-0 text-sm text-foreground [overflow-wrap:anywhere]">akb://{name}</code>
-                    <CopyButton value={`akb://${name}`} label="Copy vault address" />
-                    <span className="ml-1 text-xs text-foreground-muted">Permanent</span>
+                  <div className="min-w-0">
+                    <p id="vault-address-label" className="mb-2 text-sm font-medium leading-5">Vault address</p>
+                    <div role="group" aria-labelledby="vault-address-label" className="flex min-h-12 min-w-0 items-center gap-2 rounded-[var(--radius-md)] border border-border bg-background pl-3 pr-1">
+                      <code className="min-w-0 flex-1 text-sm text-foreground [overflow-wrap:anywhere]">akb://{name}</code>
+                      <CopyButton className="h-11 w-11 hover:bg-surface-hover" value={`akb://${name}`} label="Copy vault address" />
+                    </div>
+                    <p className="mt-2 text-xs text-foreground-muted">Permanent</p>
                   </div>
-                </SettingRow>
+                </div>
               </SettingsSection>
 
-              <SettingsSection id="access" title="Access" className="@[64rem]/vault-settings:border-l @[64rem]/vault-settings:border-border">
-                <div className="px-4 py-4 sm:px-5" data-testid="settings-access-editor">
+              <SettingsSection id="access" title="Access permissions" layout="form" tone="people"
+                icon={<ShieldCheck aria-hidden />} description="Choose who can open this vault and what they can do.">
+                <div data-testid="settings-access-editor">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <p id="vault-access-label" className="text-sm font-medium">Who can access</p>
                     <span className="inline-flex items-center gap-1.5 text-xs text-foreground-muted">
@@ -435,7 +438,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                     </span>
                   </div>
                   <fieldset role="radiogroup" aria-labelledby="vault-access-label" aria-describedby="vault-access-help"
-                    disabled={!canEdit || busy} className="grid divide-y divide-border overflow-hidden rounded-[var(--radius-md)] border border-border">
+                    disabled={!canEdit || busy} className="grid divide-y divide-border overflow-hidden rounded-[var(--radius-md)] border border-border @[44rem]/settings-values:grid-cols-3 @[44rem]/settings-values:divide-x @[44rem]/settings-values:divide-y-0">
                     {PUBLIC_ORDER.map(value => {
                       const selected = publicAccess === value;
                       const helpId = selected ? "vault-access-help" : `vault-access-${value}-help`;
@@ -470,23 +473,8 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                     saved={savedScope === "access" && !accessDirty} statusRef={accessStatusRef}
                     onSave={() => requestSave("access")} onDiscard={() => handleDiscard("access")}
                   />}
-                  <div className="mt-4 grid gap-x-6 gap-y-2 border-t border-border pt-2 @[24rem]/settings-section:grid-cols-2">
-                    <div>
-                      <Link className="inline-flex min-h-11 items-center gap-1.5 rounded-[var(--radius-sm)] text-sm text-link hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" to={`/vault/${encodeURIComponent(name)}/members`}>
-                        <Users className="h-3.5 w-3.5" aria-hidden />Manage members
-                      </Link>
-                      <p className="text-xs leading-5 text-foreground-muted">People and roles in this vault.</p>
-                    </div>
-                    <div>
-                      <Link className="inline-flex min-h-11 items-center gap-1.5 rounded-[var(--radius-sm)] text-sm text-link hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" to={`/vault/${encodeURIComponent(name)}/publications`}>
-                        <Globe className="h-3.5 w-3.5" aria-hidden />Public links
-                      </Link>
-                      <p className="text-xs leading-5 text-foreground-muted">Share selected content without sign-in.</p>
-                    </div>
-                  </div>
                 </div>
               </SettingsSection>
-              </div>
 
               <SkillSection
                 vault={name} doc={skillDoc} loading={skillQuery.isLoading || (!info && !loadError)}

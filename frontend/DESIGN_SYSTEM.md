@@ -641,41 +641,36 @@ an `sr-only` summary, never the only signal.
   Vault Settings uses the Members/Public links workspace family: the same
   `WorkspaceSectionHeader`, route-owned gutters and one bounded workspace Panel.
   The visible Settings heading is 16px with its quiet tonal icon; an archived
-  badge appears only when applicable. General and Access share the first row
-  at 64rem of actual ledger width, separated by one vertical hairline. Below
-  that width they stack in the same DOM order. Vault guide and owner-only
-  Danger zone each span the full ledger. Do not add category tabs, another navigation
-  sidebar, a permanent context column, repeated title/description blocks or
-  explanatory filler cards. Existing `#general`, `#access`, `#skill`, and
-  `#danger` links scroll only the active content scroll surface to their section;
-  they never hide or remount other forms. Use the same 12/16/20px responsive
-  side padding and 20/24px top padding as the roster and publication ledger.
-  One route viewport scrolls the whole page; Settings owns no nested scroller.
-  The shared SettingsSection/SettingRow primitives provide small semibold
-  subsection strips, hairline row dividers and plain label/control columns.
-  Label cells have no separate background fill or vertical border, and sections
-  add no nested cards. Danger uses a restrained red title and explicit action,
-  with the same neutral group boundaries. Each section owns its width query:
-  at 48rem align labels in an 11rem column and controls in the remaining space;
-  narrower sections stack labels over controls, even in a wide two-column ledger.
-  Controls fill their allocated column without a shared fixed-width cap. Danger
-  action buttons align to its far edge. Keep related save/discard actions nearby.
-  General has a labelled three-line description input and a copyable permanent
-  address row. Ownership, dates and inventory belong to Overview. Access fills
-  its section width, without the general setting-label column. Who can access
-  and a quiet Sign-in required cue share its first line. The three native radio
-  rows use Invited members only / Everyone can view / Everyone can edit, with
-  the actual audience and permissions inside each row. Keep accessible radio
-  names separate from those descriptions. Current marks the saved policy;
-  Not saved marks a different selected draft, so a selection never claims to
-  have changed live access. The choices share one bordered, divided list;
-  selection adds teal emphasis without removing the native radio indicator.
-  Public writing explicitly includes deletion and uses a warning glyph/text
-  when selected. Preserve owner-only writes and public-write confirmation.
-  The divided footer gives Members and Public links their own short purpose;
-  only Public links share selected content without sign-in. Shortcuts remain
-  guarded links, with two columns when the section has room and stacked rows
-  on mobile. Do not describe workspace-wide access as anonymous access.
+  badge appears only when applicable. Vault details (`#general`) and Access
+  permissions (`#access`) are full-width, purpose-led form sections. Each has a
+  16px semibold H3, a meaningful small tonal icon and one short explanation;
+  they do not use the small ledger header strip. At 64rem of actual workspace
+  width the intent occupies a 13rem left column and controls fill the right;
+  below that width the intent sits above the controls. Sections share neutral
+  hairline separators, with no nested card shells or category tabs. Preserve
+  one mounted form per scope, all deep-link IDs and one route scroll surface.
+  Use the same route-owned gutters as Members/Public links.
+  Vault details places the labelled description field and permanent copyable
+  Vault address side by side at 44rem of actual controls width, otherwise
+  stacked. The address has a quiet read-only field surface and a 44px copy
+  target; metadata about ownership, dates and inventory belongs to Overview.
+  Access permissions starts with Who can access and a Sign-in required cue.
+  The three native choices retain their explicit audience and permission
+  descriptions. At 44rem of controls width they share one horizontal comparison
+  group with vertical dividers; narrower groups use divided vertical rows.
+  Never remove native radio semantics or keyboard arrow selection. Keep radio
+  names distinct from descriptions and status. Current marks the applied policy;
+  Not saved marks a different selected draft. Teal marks selection; public
+  writing also shows a warning glyph and explicitly includes deletion.
+  Preserve owner-only writes, save/discard feedback and public-write confirmation.
+  Do not repeat Members or Public links navigation inside Settings; those tasks
+  remain in the Vault Overview. Workspace-wide access always requires AKB
+  sign-in and must not be described as anonymous sharing.
+  Vault guide and owner-only Danger zone retain full-width ledger sections.
+  Their shared SettingRow primitive puts labels in an 11rem column at 48rem
+  of section width; smaller rows stack labels over controls. Danger actions
+  align to the far edge. Do not add a permanent context sidebar, repeated
+  page headings, filler cards or a separate Settings scroll surface.
   Each editable scope shows Save/Discard only while changed or saving, followed
   by a polite saved status; do not reserve disabled action footers. Serialize
   Description, Access and Guide writes. Saving must not overwrite another scope's
