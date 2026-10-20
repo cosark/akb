@@ -264,9 +264,9 @@ an `sr-only` summary, never the only signal.
   changes density. The desktop header's left side holds a compact 14px current
   page label on ordinary routes. Named Vault routes instead show the Vault /
   current-page breadcrumb; resources use the resolved Vault / Collection /
-  human-title trail. Every named Vault route begins with the same independent
-  `Navigate ▾` button before the breadcrumb, separated by one quiet hairline.
-  Its name, position and treatment never change with the destination. The
+  human-title trail. Every named Vault route places the same quiet page-menu
+  chevron immediately after the breadcrumb's Vault link. There is no separate
+  Navigate button or divider. Its position never changes with the destination. The
   nonmodal menu uses real links for Overview, Graph, Public links, Members and
   Settings; a divider separates content destinations from Members / Settings.
   Only the actual current destination is checked inside the menu. Document,
@@ -511,7 +511,13 @@ an `sr-only` summary, never the only signal.
   the `h-10` management row below; existing list filters follow independently.
   The full Vault list remains visible, and no new API is needed for switching.
   The app header begins after the combined
-  navigation width and tracks both resize handles and collapsed states. The
+  navigation width and tracks both resize handles and collapsed states. Expanded
+  desktop Vault lists retain their saved width and resize handle in both inline
+  and overlay navigation, independently of Collections visibility. A captured
+  drag retains its layout mode until release. Focusable separators expose bounds,
+  current width and controlled pane; arrows resize, Shift accelerates, Home/End
+  reach bounds and double-click restores default. Pointer cancel/lost capture,
+  blur and unmount restore cursor/selection. Mobile drawers remain fixed-width. The
   resource command row remains below it; desktop reading controls remain `h-8`.
   Overview, Search, Activity, File and Table readers share the same header-level
   Vault menu as documents and focused tasks. No second navigation row consumes
@@ -546,9 +552,9 @@ an `sr-only` summary, never the only signal.
   query and resource kind to the existing full search route. Document results keep
   the preview-and-return flow; the app-level resource navigation guard protects
   unsaved edits for both scoped and all-Vault results.
-  The independent `Navigate` trigger is non-shrinking, uses 14px medium text,
-  a quiet outline and a chevron, and retains its label on narrow screens.
-  Its height is 36px on desktop and 44px on mobile. Location text yields space
+  The Vault page-menu chevron is non-shrinking and borderless, with a Vault pages
+  tooltip on hover/focus and an explicit accessible name. Its target is 32px
+  on desktop and 44px on mobile or coarse pointers. Location text yields space
   before the trigger or account tools. The bounded menu uses neutral hover,
   explicit current-page check/text and visible keyboard focus in both themes.
   Overview is current only at the exact Vault root (including a trailing slash),
@@ -677,8 +683,11 @@ an `sr-only` summary, never the only signal.
   requires confirmation. Preserve Guide drafts and their original OCC revision
   across reading modes and failed writes. The danger area has two compact action
   rows with short visible consequences, not a large red-filled banner.
-  Indexing observations remain available through Indexing details beside the
-  Overview queue badge; they are not editable settings. Unverified/stale/missing
+  Indexing observations open from Overview's single current-Vault status trigger,
+  with a short hover/focus explanation and click/tap details. Verified idle status
+  is absent; queue, paused, failed and unavailable states remain distinct. No
+  separate Indexing details button or global queue badge repeats on Overview.
+  They are not editable settings. Unverified/stale/missing
   status must never read as healthy. Keep one desktop sheet scroll surface, no
   forced viewport-height cards or filler information, and match loading geometry.
   All scopes share one workspace-level leave confirmation. Same-path hash history
@@ -772,10 +781,13 @@ an `sr-only` summary, never the only signal.
   collection validation, and submission contracts.
 - **Vault Overview workspace**: Overview is a full-height Vault workspace rather
   than a stack of dashboard cards. Its identity is a cardless page-level anchor:
-  Vault icon, H1, copyable address, role, applicable public/read-only/mirror state,
-  pending-indexing badge, and optional wrapping description. Immediately below,
-  passive content-sized totals sit on the left and existing creation buttons on
-  the right in one wrapping row above a neutral hairline. Give totals the same
+  Vault icon, H1, one address-copy icon, role, applicable public/read-only/mirror
+  state, current-Vault search-update status, and optional wrapping description.
+  The address appears on hover/focus; click/tap copies it with confirmation and
+  a selectable fallback when clipboard access is unavailable. One accent New
+  menu on the right opens Document / Table / Upload file choices; dialog dismissal
+  returns focus to that persistent trigger. Immediately below, passive
+  content-sized totals sit above a neutral hairline. Give totals the same
   compact 32px minimum height and 8px spacing as the buttons, without implying
   they are interactive. Preserve the 12px mobile, 16px intermediate, and 24px
   desktop route gutter; do not add an Inventory band, equal-width stat cells, or
@@ -792,7 +804,10 @@ an `sr-only` summary, never the only signal.
   H2: Vault guide (guide) and Access and ownership (people).
   Its body uses `surface` and a 16px reading inset. Guide status is a
   passive labelled badge associated with the separate outlined Open/Set up guide
-  link. Owner/visibility remain noninteractive; the visibility glyph and brief
+  link. Existing guides open in the route-backed document preview over Overview,
+  preserving the background, scroll and invoking focus. Only confirmed missing
+  guides use Settings#skill for setup. Owner/visibility remain noninteractive;
+  the visibility glyph and brief
   policy text distinguish signed-in public access from anonymous Public links.
   The Members shortcut uses a full-width hit area, a visible chevron, neutral
   hover and inset keyboard focus without moving their bounds. Do not tint entire
@@ -917,8 +932,8 @@ an `sr-only` summary, never the only signal.
   location trail (`Vault / Collection ancestry / human title (kind)`) and one
   `ResourceCommandRow`. Document metadata and reading tools share this row;
   all three readers use a flat full-width canvas. Desktop puts the
-  trail in the existing 56px app header. All readers use the same independent
-  `Navigate` before their breadcrumb, without a middle section-navigation row;
+  trail in the existing 56px app header. All readers place the same page-menu
+  chevron after the Vault link, without a middle section-navigation row;
   a separate command row owns resource
   actions and optional metadata. Do not add another Explore menu or menu on the title.
   Collections remains dedicated to browsing resources. The Vault crumb is a direct Overview

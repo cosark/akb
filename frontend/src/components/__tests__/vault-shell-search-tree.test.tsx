@@ -41,8 +41,11 @@ vi.mock("@/components/document-create-dialog", () => ({
 vi.mock("@/hooks/use-column-resize", () => ({
   useColumnResize: ({ default: width }: { default: number }) => ({
     width,
+    settledWidth: width,
+    isResizing: false,
     setWidth: vi.fn(),
     reset: vi.fn(),
+    cancel: vi.fn(),
     handlers: {},
   }),
 }));
@@ -197,7 +200,7 @@ describe("VaultShell focused task presentation", () => {
     expect(screen.getByRole("navigation", { name: "Vaults" })).toBeInTheDocument();
     expect(screen.queryByText("Collection tree content")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Expand collections" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Navigate in demo" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pages in demo" })).toBeInTheDocument();
     expect(localStorage.getItem("akb.treeVisible")).toBe("1");
   });
 });
@@ -227,7 +230,7 @@ describe("VaultShell resource navigation", () => {
       expect(screen.getByText("Collection tree content")).toBeInTheDocument();
     } else {
       expect(screen.getByRole("navigation", { name: "Resource location" })).toHaveTextContent("Resolved resource title");
-      expect(screen.getByRole("button", { name: "Navigate in demo" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Pages in demo" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Open vault navigation" })).toBeInTheDocument();
       expect(screen.queryByText("a-private-url-ref")).not.toBeInTheDocument();
     }

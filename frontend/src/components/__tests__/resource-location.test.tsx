@@ -73,6 +73,7 @@ describe("Resource location", () => {
     expect(kindIcon?.closest("button, a")).toBeNull();
     expect(within(trail).getByText(`(${kind})`)).toHaveClass("sr-only");
     expect(within(trail).queryByRole("img")).not.toBeInTheDocument();
+    expect(within(trail).queryByRole("button", { name: /Pages in/ })).not.toBeInTheDocument();
   });
 
   it("uses one directory query for shared desktop/mobile ancestry and links to real collection destinations", async () => {
@@ -164,6 +165,9 @@ describe("Resource location", () => {
     expect(screen.getByTestId("published")).toHaveTextContent("Human document name");
     expect(screen.getByRole("navigation", { name: "Resource location" })).toHaveTextContent("Human document name");
     expect(screen.queryByText("Preview title")).not.toBeInTheDocument();
+    const trail = screen.getByRole("navigation", { name: "Resource location" });
+    const menu = within(trail).getByRole("button", { name: "Pages in 팀 Vault" });
+    expect(within(trail).getByRole("link", { name: "팀 Vault" }).closest("li")).toContainElement(menu);
   });
 
   it("clears resource metadata when navigating to an unresolved or denied resource", async () => {

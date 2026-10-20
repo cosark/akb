@@ -1,19 +1,22 @@
 import { Fragment, useRef, useState } from "react";
 import { Link, matchRoutes, useLocation } from "react-router-dom";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { Portal as TooltipPortal } from "@radix-ui/react-tooltip";
 import { Check, ChevronDown } from "lucide-react";
 import { getVaultPageActions } from "@/components/title-bar";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { vaultMenuPageForComponent } from "@/lib/vault-workspace";
 import { appRouteContract } from "@/app-route-contract";
 import { cn } from "@/lib/utils";
 import { useResourceNavigation } from "@/contexts/resource-navigation-context";
 
-/** One stable entry point, separate from location, on every named Vault route. */
+/** Quiet page menu placed beside the Vault's direct Overview link. */
 export function VaultPageSwitcher({ vault, onNavigateIntent }: { vault: string; onNavigateIntent?: () => void }) {
   const { pathname } = useLocation();
   const { requestNavigation } = useResourceNavigation();
   const [open, setOpen] = useState(false);
+  const [tooltipOpen, setTooltipOpen] = useState(false);
   const followedLink = useRef(false);
   const match = matchRoutes([...appRouteContract], pathname)?.at(-1);
   if (match?.route.boundary !== "vault-shell" || match.params.name !== vault) return null;
@@ -22,15 +25,22 @@ export function VaultPageSwitcher({ vault, onNavigateIntent }: { vault: string; 
   const labelFor = (action: (typeof actions)[number]) => action.key === "publish" ? "Public links" : action.label;
   return <DropdownMenu.Root modal={false} open={open} onOpenChange={value => {
     if (value) followedLink.current = false;
+    setTooltipOpen(false);
     setOpen(value);
   }}>
-    <DropdownMenu.Trigger asChild>
-      <Button type="button" variant="ghost" data-slot="vault-page-switcher" aria-label={`Navigate in ${vault}`}
-        className="h-9 shrink-0 gap-1.5 rounded-[var(--radius-sm)] border border-border px-2.5 text-sm font-medium text-foreground focus-visible:ring-inset focus-visible:ring-offset-0 data-[state=open]:bg-surface-selected data-[state=open]:text-surface-selected-foreground max-lg:h-11">
-        <span>Navigate</span>
-        <ChevronDown className="h-4 w-4 shrink-0 text-foreground-muted" aria-hidden />
-      </Button>
-    </DropdownMenu.Trigger>
+    <TooltipProvider delayDuration={300}>
+      <Tooltip open={open ? false : tooltipOpen} onOpenChange={setTooltipOpen}>
+        <TooltipTrigger asChild>
+          <DropdownMenu.Trigger asChild>
+            <Button type="button" variant="ghost" size="icon" data-slot="vault-page-switcher" aria-label={`Pages in ${vault}`}
+              className="h-11 w-11 shrink-0 rounded-[var(--radius-sm)] p-0 text-foreground-muted hover:text-link focus-visible:ring-inset focus-visible:ring-offset-0 data-[state=open]:bg-surface-selected data-[state=open]:text-surface-selected-foreground lg:h-8 lg:w-8 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11">
+              <ChevronDown className="h-4 w-4 shrink-0" aria-hidden />
+            </Button>
+          </DropdownMenu.Trigger>
+        </TooltipTrigger>
+        <TooltipPortal><TooltipContent side="bottom">Vault pages</TooltipContent></TooltipPortal>
+      </Tooltip>
+    </TooltipProvider>
     <DropdownMenu.Portal>
       <DropdownMenu.Content align="start" sideOffset={8} collisionPadding={12} aria-label="Vault pages" aria-labelledby={undefined}
         onCloseAutoFocus={event => { if (followedLink.current) event.preventDefault(); }}
@@ -39,7 +49,7 @@ export function VaultPageSwitcher({ vault, onNavigateIntent }: { vault: string; 
         {actions.map(action => <Fragment key={action.key}>
           {action.key === "members" && <DropdownMenu.Separator className="my-1 h-px bg-border" />}
           <DropdownMenu.Item asChild>
-          <Link to={action.href} aria-current={action.key === page ? "page" : undefined}
+          <Link to={action.href} data-slot="vault-page-link" aria-current={action.key === page ? "page" : undefined}
             onClick={event => {
               if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !event.defaultPrevented) {
                 // Page navigation is always independent of the breadcrumb's

@@ -198,6 +198,8 @@ export function Layout({ routeOverlay }: { routeOverlay?: ReactNode }) {
   const isSearchWorkspace = Boolean(matchPath("/search", location.pathname));
   const isSearchRoute = isSearchWorkspace || Boolean(matchPath("/vault/:name/search", location.pathname));
   const isSettingsWorkspace = Boolean(matchPath("/settings", location.pathname));
+  const overviewMatch = matchPath("/vault/:name", location.pathname);
+  const isVaultOverview = !!overviewMatch && overviewMatch.params.name !== "new";
   const viewportLocked = wide || isSearchWorkspace;
   const sidebarCompact = wide ? vaultSidebar.compact : sidebarCollapsed;
   const surface: AppSurface = location.pathname === "/" || wide || isSearchRoute || isSettingsWorkspace ? "paper" : "workspace";
@@ -210,8 +212,8 @@ export function Layout({ routeOverlay }: { routeOverlay?: ReactNode }) {
     const measure = () => {
       const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
       // Compare layout CSS pixels with the rail widths, not zoomed visual rects.
-      // Reserve the independent menu in addition to a readable trail, search /
-      // identity controls, insets, divider and optional navigator trigger.
+      // Reserve the breadcrumb's page disclosure along with a readable trail,
+      // search/identity controls, insets and optional navigator trigger.
       setMinimumVaultWorkspaceWidth(search.offsetWidth + account.offsetWidth + (vaultMenu?.offsetWidth ?? 0) + 22.25 * rem);
     };
     measure();
@@ -311,7 +313,7 @@ export function Layout({ routeOverlay }: { routeOverlay?: ReactNode }) {
             </Button>}
             <AppPageLocation isAdmin={session.user.is_admin} />
             <div ref={searchControlsRef} className="ml-auto flex min-w-0 flex-1 items-center gap-2 lg:flex-none lg:pl-3">
-              <HeaderIndexingStatus />
+              {!isVaultOverview && <HeaderIndexingStatus />}
               {/* Quick search stays available on every route. The full Search
                   page owns its separate, URL-backed query below this header. */}
               <CurrentUserProvider user={session.user}>

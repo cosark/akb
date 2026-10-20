@@ -46,20 +46,17 @@ export function AppPageLocation({ isAdmin = false, mobile = false }: { isAdmin?:
   const [label, Icon] = section ? [section.label, section.icon] : PAGE_IDENTITY[match?.route.component ?? ""] ?? ["Page not found", CircleHelp];
   const vault = match?.route.boundary === "vault-shell" ? match.params.name : undefined;
   const className = `${mobile ? "flex lg:hidden" : "hidden lg:flex"} min-w-0 flex-1 items-center gap-2 overflow-hidden ${mobile ? "" : "pr-4"} text-sm`;
-  const vaultMenu = vault ? <>
+  const vaultMenu = vault ?
     <VaultPageSwitcher vault={vault} onNavigateIntent={() => { focusPageAfterNavigation.current = true; }} />
-    <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
-  </> : null;
+    : null;
   if (vault && resource?.vault === vault) return <div ref={locationElement} data-slot="app-page-location" className={className}>
-    {vaultMenu}
-    <ResourceBreadcrumb location={resource} className="flex-1" />
+    <ResourceBreadcrumb location={resource} vaultAction={vaultMenu} className="flex-1" />
   </div>;
   if (vault) {
     const isResource = ["DocumentPage", "FilePage", "TablePage"].includes(match?.route.component ?? "");
     return <div ref={locationElement} data-slot="app-page-location" className={className}>
-      {vaultMenu}
       <VaultBreadcrumb vault={vault} title={label} className="flex-1"
-        icon={isResource ? Icon : undefined} kind={isResource ? label : undefined} />
+        icon={isResource ? Icon : undefined} kind={isResource ? label : undefined} vaultAction={vaultMenu} />
     </div>;
   }
 

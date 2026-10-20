@@ -1,5 +1,5 @@
 import { Activity, useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { SettingsLink } from "@/contexts/settings-dialog-context";
 import {
   AlertTriangle,
@@ -43,7 +43,6 @@ import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
 import { EmptyState } from "@/components/empty-state";
 import { RoleBadge, VaultStateBadge } from "@/components/status-badge";
-import { VaultIndexingStatus } from "@/components/pending-indexing-badge";
 import { VaultProcessingDetails } from "@/components/vault-processing-details";
 import { VAULT_SKILL_PATH } from "@/lib/skill";
 import { TooltipText } from "@/components/ui/tooltip-text";
@@ -51,7 +50,9 @@ import { cn } from "@/lib/utils";
 import { useVaultRefresh } from "@/contexts/vault-refresh-context";
 import { useOpenDocumentCreateDialog } from "@/contexts/document-create-dialog-context";
 import { WorkspacePageHeader } from "@/components/ui/workspace-page-header";
-import { VaultContextBadge } from "@/components/ui/vault-context-badge";
+import { VaultAddressAction } from "@/components/vault-address-action";
+import { VaultCreateMenu } from "@/components/vault-create-menu";
+import { documentPreviewState } from "@/lib/document-preview-navigation";
 import { TonalIcon, type TonalIconTone } from "@/components/ui/tonal-icon";
 import { FileUploadDialog } from "@/components/file-upload-dialog";
 import { TableCreateDialog } from "@/components/table-create-dialog";
@@ -209,8 +210,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
   const navigate = useNavigate();
   const { refetchTree } = useVaultRefresh();
   const openCreateDocument = useOpenDocumentCreateDialog();
-  const uploadButtonRef = useRef<HTMLButtonElement>(null);
-  const tableButtonRef = useRef<HTMLButtonElement>(null);
+  const createButtonRef = useRef<HTMLButtonElement>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [tableCreateOpen, setTableCreateOpen] = useState(false);
   const [info, setInfo] = useState<VaultInfo | null>(null);
@@ -411,51 +411,24 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
           }
           meta={
             <>
-              <VaultContextBadge name={name!} address copyable />
+              <VaultAddressAction name={name!} />
               {info?.role && <RoleBadge role={info.role} />}
               <VaultStateBadge
                 archived={info?.is_archived}
                 externalGit={info?.is_external_git}
                 publicAccess={info?.public_access}
               />
-              <VaultIndexingStatus vaultName={name!} />
               <VaultProcessingDetails vaultName={name!} />
             </>
           }
+          actions={canCreateContent ? <div role="group" aria-label="Create content">
+            <VaultCreateMenu triggerRef={createButtonRef} onDocument={() => openCreateDocument()}
+              onTable={() => setTableCreateOpen(true)} onUpload={() => setUploadOpen(true)} />
+          </div> : undefined}
           className="min-h-0 rounded-none border-0 bg-transparent p-0 shadow-none [&>div:first-child]:max-w-full [&_h1]:whitespace-normal [&_h1]:break-words [&_h1]:[overflow-wrap:anywhere]"
         />
         <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-6 gap-y-3">
           {!infoError && <VaultContentSummary info={info} />}
-          {canCreateContent && (
-            <div role="group" aria-label="Create content" className="flex max-w-full flex-wrap items-center gap-2">
-              <Button
-                ref={uploadButtonRef}
-                variant="outline"
-                size="sm"
-                onClick={() => setUploadOpen(true)}
-              >
-                <Upload className="h-4 w-4" aria-hidden />
-                Upload file
-              </Button>
-              <Button
-                ref={tableButtonRef}
-                variant="outline"
-                size="sm"
-                onClick={() => setTableCreateOpen(true)}
-              >
-                <TableIcon className="h-4 w-4" aria-hidden />
-                New table
-              </Button>
-              <Button
-                variant="accent"
-                size="sm"
-                onClick={() => openCreateDocument()}
-              >
-                <FilePlus className="h-4 w-4" aria-hidden />
-                New document
-              </Button>
-            </div>
-          )}
         </div>
       </section>
 
@@ -538,7 +511,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
             visible={!checking && loadedScope === scope && canCreateContent}
             onOpenChange={setUploadOpen}
             vault={name}
-            returnFocusRef={uploadButtonRef}
+            returnFocusRef={createButtonRef}
             onUploaded={(file) => {
               if (!mounted.current || scope !== latestScope.current || latestChecking.current) return;
               refetchTree();
@@ -556,7 +529,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
             visible={!checking && loadedScope === scope && canCreateContent}
             onOpenChange={setTableCreateOpen}
             vault={name}
-            returnFocusRef={tableButtonRef}
+            returnFocusRef={createButtonRef}
             onCreated={(tableName) => {
               if (!mounted.current || scope !== latestScope.current || latestChecking.current) return;
               refetchTree();
@@ -888,6 +861,7 @@ function VaultOverviewAside({
   guideRetrying: boolean;
   onGuideRetry: () => void;
 }) {
+  const location = useLocation();
   const guideStatus = guideLoading
     ? "Checking…"
     : guideError
@@ -955,7 +929,9 @@ function VaultOverviewAside({
             ) : !info.is_external_git && !guideLoading && (
               <Button asChild variant="outline" size="sm" className="h-9 rounded-[var(--radius-sm)] text-link">
                 <Link
-                  to={`/vault/${name}/settings#skill`}
+                  id="vault-overview-guide"
+                  to={guideDefined ? `/vault/${encodeURIComponent(name)}/doc/${encodeURIComponent(VAULT_SKILL_PATH)}` : `/vault/${encodeURIComponent(name)}/settings#skill`}
+                  state={guideDefined ? documentPreviewState(location, "vault-overview-guide") : undefined}
                   aria-label={guideDefined ? "Open vault guide" : "Set up vault guide"}
                   aria-describedby="vault-guide-status"
                 >
