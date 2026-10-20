@@ -134,7 +134,12 @@ export function SkillSection({
   const [loadingComparison, setLoadingComparison] = useState(false);
   const comparisonGeneration = useRef(0);
   const comparisonController = useRef<AbortController | null>(null);
-  const [guideUnavailable, setGuideUnavailable] = useState<{ scope: string; error: ApiError } | null>(null);
+  const [guideUnavailable, setGuideUnavailable] = useState<{
+    scope: string;
+    verificationScope: string;
+    operation: "read" | "write";
+    error: ApiError;
+  } | null>(null);
   // A static parent snapshot can lag behind the server snapshot the user just
   // reviewed. Ignore that exact old prop revision after applying the result.
   const [comparedBase, setComparedBase] = useState<{ priorCommit: string | null; commit: string } | null>(null);
@@ -149,25 +154,33 @@ export function SkillSection({
     enabled: expanded && tab === "edit" && canManage && !checking && !busy && !saving,
   });
   const unavailable = terminalFailure(observedHead.error) ? observedHead.error
-    : guideUnavailable?.scope === comparisonScope ? guideUnavailable.error : null;
+    : guideUnavailable?.scope === ownerScope ? guideUnavailable.error : null;
   const propCommit = doc?.current_commit || null;
   const documentCommit = comparedBase?.priorCommit === propCommit ? comparedBase.commit : propCommit;
   const remoteCommit = observedHead.head?.current_commit && observedHead.head.current_commit !== baseCommit
     ? observedHead.head.current_commit : documentCommit;
   const changedElsewhere = saveConflict || (baseBody !== null && validRevision(baseCommit) && validRevision(remoteCommit) && baseCommit !== remoteCommit);
-  const activeComparison = comparison?.scope === comparisonScope ? comparison : null;
+  const activeComparison = comparison?.scope === ownerScope ? comparison : null;
 
   useEffect(() => {
     comparisonGeneration.current += 1;
     comparisonController.current?.abort();
     comparisonController.current = null;
-    setComparison(null);
     setLoadingComparison(false);
     return () => { comparisonController.current?.abort(); };
   }, [comparisonScope, checking, canManage]);
+  useEffect(() => { setComparison(null); }, [ownerScope]);
   useEffect(() => {
-    if (observedHead.head && !observedHead.error && !observedHead.checking) setGuideUnavailable(null);
+    if (observedHead.head && !observedHead.error && !observedHead.checking) {
+      // A reader-authorized head proves availability, never owner capability.
+      setGuideUnavailable(current => current?.operation === "write" ? current : null);
+    }
   }, [observedHead.head, observedHead.error, observedHead.checking]);
+  useEffect(() => {
+    if (checking || !canManage) return;
+    setGuideUnavailable(current => current?.scope === ownerScope && current.operation === "write" &&
+      current.verificationScope !== comparisonScope ? null : current);
+  }, [ownerScope, comparisonScope, checking, canManage]);
   const guardNavigation = useCallback((href: string, options?: NavigateOptions) => {
     // Settings anchors retain this mounted editor and its draft.
     if (new URL(href, window.location.origin).pathname === location.pathname) return true;
@@ -254,7 +267,7 @@ export function SkillSection({
       const latest = await getDocument(vault, VAULT_SKILL_PATH, undefined, { preserveSession: true, signal: controller.signal });
       if (!currentOperation()) return;
       if (!validRevision(latest.current_commit)) throw new Error("The latest guide has no valid revision. Reload it before saving.");
-      setGuideUnavailable(null);
+      setGuideUnavailable(current => current?.operation === "write" ? current : null);
       setComparison(current => current ? {
         ...current,
         latest: guideSnapshot("Latest server version", latest.current_commit, latest.content || ""),
@@ -264,7 +277,7 @@ export function SkillSection({
       } : null);
     } catch (caught) {
       if (!currentOperation()) return;
-      if (terminalFailure(caught)) setGuideUnavailable({ scope, error: caught });
+      if (terminalFailure(caught)) setGuideUnavailable({ scope: ownerScope, verificationScope: scope, operation: "read", error: caught });
       setComparison(current => current ? {
         ...current, latest: null,
         latestError: "The latest guide could not be loaded. Your draft is preserved; try loading it again.",
@@ -278,7 +291,7 @@ export function SkillSection({
   async function openComparison() {
     if (!canManage || checking || latestChecking.current || busy || saving || unavailable) return;
     setComparison({
-      scope: comparisonScope,
+      scope: ownerScope,
       base: guideSnapshot("Original base", baseCommit, baseBody ?? ""),
       local: guideSnapshot("Your draft", baseCommit, draft),
       latest: null,
@@ -345,7 +358,13 @@ export function SkillSection({
         setSaveConflict(true);
         void openComparison();
       } else {
-        if (terminalFailure(e)) setGuideUnavailable({ scope: comparisonScope, error: e });
+        if (terminalFailure(e)) {
+          const writeDenied = e.status === 403;
+          setGuideUnavailable({ scope, verificationScope: latestComparisonScope.current, operation: writeDenied ? "write" : "read", error: e });
+          // Reuse the foreground proof flow: identity, then the parent's fresh
+          // vault-role read. A successful Head alone cannot restore writing.
+          if (writeDenied) window.dispatchEvent(new Event("akb:revalidate-access"));
+        }
         setSaveError(message);
       }
     } finally {

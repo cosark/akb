@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import {
   ApiError,
+  authSessionSnapshot,
   browseVault,
   discardAsset,
   deleteDocument,
@@ -28,6 +29,7 @@ import {
   getDocumentHistoryWithFallback,
   getRelations,
   getVaultInfo,
+  isCurrentAuthSession,
   type DocumentUpdateInput,
   type DocumentHistoryEntry,
   unpublishDoc,
@@ -165,7 +167,12 @@ function DocumentPageContent({
   const { name, id } = useParams<{ name: string; id: string }>();
   const currentUser = useCurrentUser();
   const { checking: accessChecking, revision: accessRevision } = useAccessVerification();
+  const ownerScope = JSON.stringify([name, id, currentUser?.user_id]);
   const resourceScope = JSON.stringify([name, id, currentUser?.user_id, accessRevision]);
+  const liveEditor = useRef({ ownerScope, resourceScope, accessRevision, checking: accessChecking });
+  liveEditor.current = { ownerScope, resourceScope, accessRevision, checking: accessChecking };
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const viewId = useId();
   // The preview already bounds the reading canvas. Avoid nesting the full-page
   // reading measure inside it, which creates large empty columns on desktop.
@@ -251,6 +258,7 @@ function DocumentPageContent({
   const [serverTitleConflict, setServerTitleConflict] = useState<DocumentTitleConflict | null>(null);
   const [editorKey, setEditorKey] = useState(0);
   const [savingBody, setSavingBody] = useState(false);
+  useEffect(() => { setSavingBody(false); }, [ownerScope]);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [claimedAssetIds, setClaimedAssetIds] = useState<readonly string[] | null>(null);
   const [bodyError, setBodyError] = useState("");
@@ -743,6 +751,9 @@ function DocumentPageContent({
     // Effect replay must not replace a recovered draft with the same cached
     // server snapshot before the restored state has committed.
     hydratedDocumentSnapshotRef.current = d;
+    // The override bridges a write response to its next full read. It must
+    // never hide an authorized newer read of the same document indefinitely.
+    setOverride(current => current?.scope === resourceScope ? null : current);
 
     const identity = documentIdentity(name, d);
     const identityChanged = documentIdentityRef.current !== identity;
@@ -1042,6 +1053,8 @@ function DocumentPageContent({
   }
 
   async function showTitleConflict(conflict: DocumentTitleConflict) {
+    const owner = ownerScope;
+    const session = authSessionSnapshot();
     let exactContent = false;
     try {
       const existing = await getDocument(name!, conflict.existingPath);
@@ -1051,6 +1064,7 @@ function DocumentPageContent({
     } catch {
       // The structured conflict still gives enough information to recover.
     }
+    if (!mounted.current || liveEditor.current.ownerScope !== owner || !isCurrentAuthSession(session)) return;
     setServerTitleConflict({ ...conflict, exactContent });
     window.requestAnimationFrame(() => titleConflictRef.current?.focus());
   }
@@ -1067,17 +1081,22 @@ function DocumentPageContent({
 
   async function readLatestForConflict(): Promise<any | null> {
     const generation = ++latestReadGeneration.current;
-    const scope = resourceScope;
+    const scope = liveEditor.current.resourceScope;
     latestReadController.current?.abort();
+    if (liveEditor.current.checking) {
+      setLatestServer(null, "Wait for access verification before loading the latest document. Your draft remains available.");
+      return null;
+    }
+    const session = authSessionSnapshot();
     const controller = new AbortController();
     latestReadController.current = controller;
     try {
       const latest = await getDocument(name!, docId, undefined, { signal: controller.signal, preserveSession: true });
-      if (generation !== latestReadGeneration.current || liveResourceScope.current !== scope) return null;
+      if (generation !== latestReadGeneration.current || liveResourceScope.current !== scope || !isCurrentAuthSession(session)) return null;
       setLatestServer(latest);
       return latest;
     } catch (error) {
-      if (generation !== latestReadGeneration.current || liveResourceScope.current !== scope) return null;
+      if (generation !== latestReadGeneration.current || liveResourceScope.current !== scope || !isCurrentAuthSession(session)) return null;
       setLatestServer(
         null,
         error instanceof ApiError && error.status === 401
@@ -1218,16 +1237,22 @@ function DocumentPageContent({
     payload.expected_commit = baseCommit;
 
     const saveRevision = draftRevisionRef.current;
-    const saveScope = resourceScope;
+    const saveScope = ownerScope;
+    const session = authSessionSnapshot();
+    const currentOperation = () => mounted.current && liveEditor.current.ownerScope === saveScope && isCurrentAuthSession(session);
     setSavingBody(true);
     setBodyError("");
     try {
       const saved = await updateDocument(name, docId, payload);
-      if (liveResourceScope.current !== saveScope) return;
+      if (!currentOperation()) return;
       const savedCommit = saved.current_commit ?? saved.commit_hash ?? null;
       if (!validRevision(savedCommit)) {
         throw new Error("The server did not return a document revision after saving.");
       }
+      // Discard pre-save reads before reconciling the acknowledged snapshot.
+      // Cancellation can yield: account/session ownership must still match.
+      await queryClient.cancelQueries({ queryKey: ["document", name, docId] });
+      if (!currentOperation()) return;
       const titleToSave = titleChanged ? normalizedEditingTitle : originalTitle;
       const hasFollowupEdits = draftRevisionRef.current !== saveRevision;
       const followup = editingSnapshotRef.current;
@@ -1243,14 +1268,14 @@ function DocumentPageContent({
         current_commit: savedCommit,
       };
       setBaseCommit(savedCommit);
-      setDocOverride(nextDoc);
-      queryClient.setQueryData(
-        ["document", name, docId, undefined, currentUser?.user_id, accessRevision],
-        (cached: Record<string, unknown> | undefined) => ({
-          ...(cached || {}),
-          ...nextDoc,
-        }),
-      );
+      const currentProof = liveEditor.current;
+      const currentQueryKey = ["document", name, docId, undefined, currentUser?.user_id, currentProof.accessRevision];
+      // A successful write acknowledges this owner's buffer, not permission
+      // to seed a new, still-unverified read scope with private content.
+      if (!currentProof.checking && queryClient.getQueryState(currentQueryKey)?.status === "success") {
+        setOverride({ scope: currentProof.resourceScope, value: nextDoc });
+        queryClient.setQueryData(currentQueryKey, (cached: Record<string, unknown> | undefined) => ({ ...cached, ...nextDoc }));
+      }
       setOriginalContent(contentToSave);
       setOriginalTitle(titleToSave);
       const savedDetails = documentDetailsFrom(nextDoc);
@@ -1315,6 +1340,7 @@ function DocumentPageContent({
       void queryClient.invalidateQueries({ queryKey: ["document", name, docId] });
       void queryClient.invalidateQueries({ queryKey: ["document-history", name] });
     } catch (e: unknown) {
+      if (!currentOperation()) return;
       const conflict = documentTitleConflictFromError(e);
       if (conflict) {
         await showTitleConflict(conflict);
@@ -1322,7 +1348,7 @@ function DocumentPageContent({
       }
       if (isRevisionConflict(e)) {
         const latest = await readLatestForConflict();
-        if (liveResourceScope.current !== saveScope) return;
+        if (!currentOperation()) return;
         setSaveConflict({
           base: makeConflictSnapshot(
             "Original base",
@@ -1368,7 +1394,7 @@ function DocumentPageContent({
     } finally {
       // Always clear the spinner — a post-await setState throwing must not
       // leave the editor stuck on "Saving…".
-      setSavingBody(false);
+      if (mounted.current && liveEditor.current.ownerScope === saveScope) setSavingBody(false);
     }
   }
 

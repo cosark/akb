@@ -1065,6 +1065,11 @@ an `sr-only` summary, never the only signal.
   scoped check restores those actions. An explicitly confirmed comparison reload
   disables result inputs and field choices until its read finishes, so edits
   cannot race with replacement of the reviewed snapshot.
+  Same-owner foreground access checks hide or disable recovery, never delete
+  its composition. Reader availability is not proof of Guide owner capability;
+  a rejected write stays blocked until fresh role verification succeeds. Save
+  acknowledgments belong to the document/account/session rather than a read
+  verification counter; never populate an unverified private read cache.
   Full-viewer Vault links ask before leaving unsaved edits and keep the existing
   local-draft recovery behavior. Keep editing is always available; navigation
   cannot abandon an active save or image upload. Modified/new-tab link gestures

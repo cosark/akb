@@ -31,6 +31,143 @@ test.describe("document concurrency against the real API", () => {
     return { headers, name, document, path, source };
   }
 
+  async function reverifyAccess(page: Page, vault: string) {
+    const identity = page.waitForResponse(response => response.url().endsWith("/api/v1/auth/me") && response.ok());
+    const role = page.waitForResponse(response => new URL(response.url()).pathname === "/api/v1/vaults/" + vault + "/info" && response.ok());
+    await page.evaluate(() => window.dispatchEvent(new Event("akb:revalidate-access")));
+    await Promise.all([identity, role]);
+  }
+
+  async function mcpClient(request: APIRequestContext, sessionHeaders: Record<string, string>) {
+    const minted = await request.post("/api/v1/auth/tokens", { headers: sessionHeaders, data: { name: "guide-concurrency-test" } });
+    expect(minted.ok()).toBeTruthy();
+    const { token } = await minted.json();
+    const headers = { Authorization: "Bearer " + token, Accept: "application/json, text/event-stream", "MCP-Protocol-Version": "2025-03-26" };
+    const initialized = await request.post("/mcp/", { headers, data: { jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "guide-concurrency-test", version: "1.0" },
+    } } });
+    expect(initialized.ok()).toBeTruthy();
+    let id = 1;
+    return async (name: string, args: Record<string, unknown>) => {
+      const response = await request.post("/mcp/", { headers, data: { jsonrpc: "2.0", id: ++id, method: "tools/call", params: { name, arguments: args } } });
+      expect(response.ok()).toBeTruthy();
+      const result = (await response.json()).result;
+      return JSON.parse(result.content[0].text);
+    };
+  }
+
+  test("allows owner MCP Guide updates but rejects stale writes and ordinary writers", async ({ page, request }) => {
+    const fixture = await setup(page, request);
+    const owner = await mcpClient(request, fixture.headers);
+    const uri = "akb://" + fixture.name + "/doc/overview/vault-skill.md";
+    const initial = await owner("akb_get", { uri });
+    expect(initial.type).toBe("skill");
+    const updated = await owner("akb_update", { uri, content: "Owner MCP guide update\n", expected_commit: initial.current_commit });
+    expect(updated.current_commit).toBeTruthy();
+    const stale = await owner("akb_update", { uri, content: "Stale overwrite\n", expected_commit: initial.current_commit });
+    expect(stale.code).toBe("conflict");
+    const writerName = "guide-writer-" + randomUUID().slice(0, 12);
+    const password = randomUUID() + "Aa!";
+    expect((await request.post("/api/v1/auth/register", { data: { username: writerName, email: writerName + "@example.test", password } })).ok()).toBeTruthy();
+    const login = await request.post("/api/v1/auth/login", { data: { username: writerName, password } });
+    const writerHeaders = { Authorization: "Bearer " + (await login.json()).token };
+    expect((await request.post("/api/v1/vaults/" + fixture.name + "/grant", { headers: fixture.headers, data: { user: writerName, role: "writer" } })).ok()).toBeTruthy();
+    const writer = await mcpClient(request, writerHeaders);
+    const readable = await writer("akb_get", { uri });
+    expect(readable.content).toContain("Owner MCP guide update");
+    const denied = await writer("akb_update", { uri, content: "Writer must not change trusted guide\n", expected_commit: readable.current_commit });
+    expect(denied.code).toBe("permission_denied");
+    const final = await owner("akb_get", { uri });
+    expect(final.current_commit).toBe(updated.current_commit);
+    expect(final.content).toContain("Owner MCP guide update");
+  });
+
+  test("acknowledges a delayed save after a real same-account access refresh", async ({ page, request }) => {
+    const fixture = await setup(page, request);
+    await fixture.source.fill("Saved across access verification\n");
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let started!: () => void;
+    const pending = new Promise<void>(resolve => { started = resolve; });
+    await page.route("**/api/v1/documents/**", async route => {
+      if (route.request().method() === "PATCH") { started(); await gate; }
+      await route.continue();
+    });
+    const receipt = page.waitForResponse(response => response.request().method() === "PATCH" && response.url().includes("/api/v1/documents/"));
+    try {
+      await page.getByRole("button", { name: "Save changes" }).click();
+      await pending;
+      await reverifyAccess(page, fixture.name);
+    } finally { release(); }
+    expect((await receipt).ok()).toBeTruthy();
+    await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+    const final = await request.get(fixture.path, { headers: fixture.headers });
+    expect((await final.json()).content).toContain("Saved across access verification");
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await expect(page.getByText(/A newer version is available/)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+
+  test("preserves a reviewed Vault Guide through real foreground access verification", async ({ page, request }) => {
+    const fixture = await setup(page, request);
+    const path = "/api/v1/documents/" + fixture.name + "/" + encodeURIComponent("overview/vault-skill.md");
+    const original = await request.get(path, { headers: fixture.headers });
+    const guide = await original.json();
+    await page.goto("/vault/" + fixture.name + "/settings#skill");
+    await page.getByRole("button", { name: "Edit guide" }).click();
+    await page.getByRole("textbox", { name: "Vault guide body" }).fill("My local guide\n");
+    const changed = await request.patch(path, { headers: fixture.headers, data: { content: "Remote guide\n", expected_commit: guide.current_commit } });
+    expect(changed.ok()).toBeTruthy();
+    const remote = await changed.json();
+    await page.getByRole("button", { name: "Check for changes" }).click();
+    await page.getByRole("button", { name: "Compare changes" }).click();
+    const combined = page.getByRole("textbox", { name: "Combined document body" });
+    await expect(combined).toHaveValue("Remote guide");
+    await combined.fill("Remote guide\nMy manually combined guide\n");
+    await reverifyAccess(page, fixture.name);
+    await expect(combined).toHaveValue("Remote guide\nMy manually combined guide\n");
+    await page.getByRole("button", { name: "Apply combined changes" }).click();
+    const receipt = page.waitForResponse(response => response.request().method() === "PATCH" && new URL(response.url()).pathname === path);
+    await page.getByRole("button", { name: "Save guide" }).click();
+    expect((await receipt).request().postDataJSON().expected_commit).toBe(remote.current_commit);
+    await expect(page.getByText("Guide saved", { exact: true })).toBeVisible();
+    const final = await request.get(path, { headers: fixture.headers });
+    expect((await final.json()).content).toContain("My manually combined guide");
+  });
+
+  test("rechecks real owner capability after a Vault Guide write is rejected", async ({ page, request }) => {
+    const fixture = await setup(page, request);
+    const successor = "successor-" + randomUUID().slice(0, 12);
+    const password = randomUUID() + "Aa!";
+    expect((await request.post("/api/v1/auth/register", { data: { username: successor, email: successor + "@example.test", password } })).ok()).toBeTruthy();
+    const login = await request.post("/api/v1/auth/login", { data: { username: successor, password } });
+    const successorHeaders = { Authorization: "Bearer " + (await login.json()).token };
+    await page.goto("/vault/" + fixture.name + "/settings#skill");
+    await page.getByRole("button", { name: "Edit guide" }).click();
+    const body = page.getByRole("textbox", { name: "Vault guide body" });
+    await body.fill("Preserved owner-only guide draft\n");
+    const writes: unknown[] = [];
+    page.on("request", req => { if (req.method() === "PATCH" && req.url().includes("/api/v1/documents/")) writes.push(req.postDataJSON()); });
+    // Transfer only this disposable vault. The former owner keeps admin/read
+    // access but no longer has the guide's owner-only write capability.
+    const transferred = await request.post("/api/v1/vaults/" + fixture.name + "/transfer", { headers: fixture.headers, data: { new_owner: successor } });
+    expect(transferred.ok()).toBeTruthy();
+    const denied = page.waitForResponse(response => response.request().method() === "PATCH" && response.url().includes("/api/v1/documents/") && response.status() === 403);
+    await page.getByRole("button", { name: "Save guide" }).click();
+    await denied;
+    await expect(page.getByRole("button", { name: "Save guide" })).toHaveCount(0);
+    const head = await request.get("/api/v1/document-head/" + fixture.name + "/" + encodeURIComponent("overview/vault-skill.md"), { headers: fixture.headers });
+    expect(head.ok()).toBeTruthy();
+    expect((await request.post("/api/v1/vaults/" + fixture.name + "/transfer", { headers: successorHeaders, data: { new_owner: fixture.name } })).ok()).toBeTruthy();
+    await reverifyAccess(page, fixture.name);
+    await expect(body).toHaveValue("Preserved owner-only guide draft\n");
+    await expect(page.getByRole("button", { name: "Save guide" })).toBeEnabled();
+    expect(writes).toHaveLength(1);
+    await page.getByRole("button", { name: "Save guide" }).click();
+    await expect(page.getByText("Guide saved", { exact: true })).toBeVisible();
+    expect(writes).toHaveLength(2);
+  });
+
   test("polls only the head, preserves the draft and saves a reviewed combined result", async ({ page, request }) => {
     const fixture = await setup(page, request);
     await fixture.source.fill("Base line\nMy addition\n");

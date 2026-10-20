@@ -86,6 +86,27 @@ stay disabled during the comparison read. This prevents new edits from being
 silently replaced by the arriving snapshot; cancellation still keeps the
 original editor draft.
 
+Draft ownership and read verification have different lifetimes. A foreground
+access check cancels outdated reads, but does not discard the same user's
+reviewed comparison. The Vault Guide comparison is hidden while ownership is
+being verified and restored, unchanged, when the same owner is authorized.
+Changing the account or Vault does not carry that comparison into the new
+workspace.
+
+A successful write is acknowledged against its document, account and auth
+session, not an access-check counter. An intervening same-session access check
+must not discard that success. Pre-save reads are canceled before reconciling
+the receipt; private data is not inserted into an unverified read scope. A
+subsequent authorized full read replaces the temporary saved display snapshot.
+
+The Vault Guide is the reserved `overview/vault-skill.md` document. Owners can
+read it with MCP `akb_get` and edit its body with `akb_update`, using the same
+original-read precondition as other documents. Ordinary Writers can read it
+but cannot edit it. Head reads require only Reader access: they do not prove
+owner-only write capability. A Guide write rejected with 403 therefore requests
+foreground identity and Vault-role revalidation; only a new proof confirming
+owner capability clears that write denial. No write is retried automatically.
+
 ## Existing integrations
 
 The web document editor and skill editor already send the edit-start revision.
