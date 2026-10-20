@@ -45,6 +45,29 @@ async function openGuideOption(user: ReturnType<typeof userEvent.setup>, name: s
 }
 
 describe("SkillSection", () => {
+  it("previews the introductory paragraph without metadata, headings or fenced examples", () => {
+    const content = "\uFEFF---\r\ntitle: Private guide metadata\r\n---\r\n# Guide heading\r\n\r\n````md\r\nakb://hidden-example\r\n```\r\nstill inside the example\r\n````\r\n\r\nRead the [writing guide](https://example.test/guide) before **editing**.\r\nKeep `document IDs` unchanged.\r\n\r\n## Later heading\r\nLater paragraph should not be in the preview.";
+    render(wrap(<SkillSection vault="my-v" doc={{ ...DOC, content }} canManage />));
+    const guide = screen.getByRole("region", { name: "Vault guide" });
+    expect(within(guide).getByText("Read the writing guide before editing. Keep document IDs unchanged.")).toBeVisible();
+    expect(guide).not.toHaveTextContent(/Private guide metadata|Guide heading|hidden-example|Later paragraph|https:/);
+    expect(guide.querySelector("time")).toHaveAttribute("datetime", DOC.updated_at);
+  });
+
+  it.each(["Vault guide", "Vault operating\nconventions"])("omits the Setext title %j and keeps the first paragraph", title => {
+    render(wrap(<SkillSection vault="my-v" doc={{ ...DOC, content: `${title}\n===========\n\nFirst paragraph.\n\nSecond paragraph.` }} canManage />));
+    const guide = screen.getByRole("region", { name: "Vault guide" });
+    expect(within(guide).getByText("First paragraph.")).toBeVisible();
+    expect(guide).not.toHaveTextContent("Second paragraph.");
+    expect(guide).not.toHaveTextContent("===========");
+  });
+
+  it("describes a non-prose guide without claiming it is empty", () => {
+    render(wrap(<SkillSection vault="my-v" doc={{ ...DOC, content: "# Guide\n\n~~~md\nakb://example\n~~~" }} canManage />));
+    expect(screen.getByText("Instructions for people and agents using this vault.")).toBeVisible();
+    expect(screen.queryByText("No instructions yet.")).not.toBeInTheDocument();
+  });
+
   it.each(["success", "failure"])("accepts the same-account save %s across access proof revisions", async result => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const account = { user_id: "a", username: "a", email: "a@x.test", display_name: null, is_admin: false, auth_method: "local", key_class: null };

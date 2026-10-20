@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, type NavigateOptions } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { History, MoreHorizontal, RotateCcw, Save } from "lucide-react";
+import { BookOpen, History, MoreHorizontal, RotateCcw, Save } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { AgentPreview } from "./agent-preview";
 import { Alert } from "@/components/ui/alert";
@@ -10,8 +10,10 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Textarea } from "@/components/ui/textarea";
-import { SettingRow, SettingsSection } from "@/components/ui/settings-section";
+import { TonalIcon } from "@/components/ui/tonal-icon";
+import { SettingsSection } from "@/components/ui/settings-section";
 import { authSessionSnapshot, getSkillTemplate, isCurrentAuthSession, updateDocument } from "@/lib/api";
+import { stripFrontmatter } from "@/lib/markdown";
 import { VAULT_SKILL_PATH } from "@/lib/skill";
 import { documentPreviewState } from "@/lib/document-preview-navigation";
 import { retainsGuideSettings, vaultGuideHref } from "@/lib/vault-guide-navigation";
@@ -26,11 +28,45 @@ interface SkillDoc {
   current_commit?: string | null;
 }
 
+/** A short introductory paragraph, not a flattened copy of the whole guide. */
 function guideExcerpt(content = "") {
-  return content.slice(0, 2000)
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/[#>*_`]/g, "")
-    .replace(/\s+/g, " ").trim().slice(0, 240);
+  const lines = stripFrontmatter(content).slice(0, 4000).split(/\r?\n/);
+  const paragraph: string[] = [];
+  let fence: string | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      if (marker?.[0] === fence[0] && marker.length >= fence.length &&
+          line.trim() === marker) fence = null;
+      continue;
+    }
+    if (marker) {
+      if (paragraph.length) break;
+      fence = marker;
+      continue;
+    }
+    const text = line.trim();
+    const setext = text && /^ {0,3}(?:=+|-+)\s*$/.test(lines[i + 1] ?? "");
+    if (setext) {
+      // A Setext heading may occupy several lines before its underline.
+      paragraph.length = 0;
+      i++;
+      continue;
+    }
+    if (!text || /^(?:#{1,6}\s|>|[-*_]{3,}$|\|)/.test(text) || /^(?: {4}|\t)/.test(line)) {
+      if (paragraph.length) break;
+      continue;
+    }
+    const plain = text
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/^([-*+] |\d+[.)] )/, "")
+      .replace(/[`*_~]/g, "")
+      .trim();
+    if (plain) paragraph.push(plain);
+  }
+  return paragraph.join(" ").replace(/\s+/g, " ").slice(0, 240);
 }
 
 interface Props {
@@ -279,10 +315,7 @@ export function SkillSection({
 
   return (
     <SettingsSection ref={sectionRef} id="skill" title="Vault guide">
-      <SettingRow label={<>
-          Instructions
-          {doc?.updated_at && <p className="mt-1 text-xs font-normal text-foreground-muted">Updated {timeAgo(doc.updated_at)}</p>}
-        </>}>
+      <div className="px-4 py-4 sm:px-5">
           {error && !isMirror && (
             <Alert variant="destructive" title="Couldn't load the vault guide">
               <p>{error}</p>
@@ -297,15 +330,23 @@ export function SkillSection({
             <Alert variant="warning">The vault guide is missing. It is restored automatically by the system backfill; contact an administrator if this persists.</Alert>
           ) : (
             <>
-              <div className="flex min-w-0 flex-col gap-3 @[56rem]/settings-section:flex-row @[56rem]/settings-section:items-start">
-              {!expanded && (
-                <div className="min-w-0 flex-1">
-                  <p className="line-clamp-2 text-sm leading-relaxed text-foreground-muted">
-                    {guideExcerpt(doc.content) || "No instructions yet."}
-                  </p>
+              <div className="flex min-w-0 flex-col gap-3 @[48rem]/settings-section:flex-row @[48rem]/settings-section:items-start">
+                <div className="flex min-w-0 flex-1 items-start gap-3">
+                  <TonalIcon tone="guide"><BookOpen aria-hidden /></TonalIcon>
+                  <div className="min-w-0 space-y-1">
+                    <p className="line-clamp-2 text-sm leading-relaxed text-foreground">
+                      {expanded
+                        ? tab === "edit" ? "Editing guide" : "Agent view"
+                        : guideExcerpt(doc.content) || (doc.content?.trim() ? "Instructions for people and agents using this vault." : "No instructions yet.")}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-foreground-muted">
+                      {doc.updated_at && <time dateTime={doc.updated_at}>Updated {timeAgo(doc.updated_at)}</time>}
+                      {dirty && <span role="status">Unsaved guide changes</span>}
+                      {saved && !dirty && <span role="status" className="text-success">Guide saved</span>}
+                    </div>
+                  </div>
                 </div>
-              )}
-              <div className="flex flex-wrap items-center gap-2 @[56rem]/settings-section:ml-auto @[56rem]/settings-section:shrink-0">
+              <div className="flex flex-wrap items-center gap-2 pl-11 @[48rem]/settings-section:shrink-0 @[48rem]/settings-section:pl-0">
                 <Button asChild variant="ghost" size="sm" className="min-h-11 text-link sm:min-h-8">
                   <Link id={previewId} to={previewHref} state={previewState} onClick={event => {
                     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -313,12 +354,12 @@ export function SkillSection({
                   }}>Preview guide</Link>
                 </Button>
                 {canManage && (
-                  <Button ref={editButtonRef} variant="outline" size="sm" className="min-h-10 sm:min-h-8"
+                  <Button ref={editButtonRef} variant="outline" size="sm" className="min-h-11 sm:min-h-8"
                     disabled={busy || (expanded && tab === "edit")} onClick={() => selectTab("edit")}>Edit guide</Button>
                 )}
                 <DropdownMenu.Root modal={false}>
                   <DropdownMenu.Trigger asChild>
-                    <Button variant="ghost" size="icon" aria-label="Guide options" className="h-10 w-10 sm:h-8 sm:w-8" disabled={busy || saving}>
+                    <Button variant="ghost" size="icon" aria-label="Guide options" className="h-11 w-11 sm:h-8 sm:w-8" disabled={busy || saving}>
                       <MoreHorizontal className="h-4 w-4" aria-hidden />
                     </Button>
                   </DropdownMenu.Trigger>
@@ -346,8 +387,6 @@ export function SkillSection({
                     </DropdownMenu.Content>
                   </DropdownMenu.Portal>
                 </DropdownMenu.Root>
-                {dirty && <span role="status" className="text-xs text-foreground-muted">Unsaved guide changes</span>}
-                {saved && !dirty && <span role="status" className="text-xs text-success">Guide saved</span>}
               </div>
               </div>
 
@@ -383,7 +422,7 @@ export function SkillSection({
               )}
             </>
           )}
-      </SettingRow>
+      </div>
 
       <ConfirmDialog
         open={!checking && pendingExit !== null}

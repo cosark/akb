@@ -677,10 +677,15 @@ an `sr-only` summary, never the only signal.
   by a polite saved status; do not reserve disabled action footers. Serialize
   Description, Access and Guide writes. Saving must not overwrite another scope's
   saved snapshot or pull focus away from another field on completion.
-  Guide starts as a two-line excerpt within its plain row. At 56rem of section
-  width the excerpt stays left and Preview guide / owner-only Edit guide / options
-  align right; narrower sections stack them. Expanded editor and Agent view
-  remain full-width below this toolbar. Preview guide opens the same
+  Guide uses a document row with a small guide TonalIcon, a two-line introductory
+  paragraph and an Updated time beneath it, without another Instructions label
+  or the general setting-label column. The excerpt omits frontmatter, headings
+  and code fences; it never flattens the whole document into one sentence.
+  At 48rem of section width the document information stays left and Preview guide /
+  owner-only Edit guide / options align right; narrower sections stack the tools
+  under the text. Draft/saved status belongs beside the update time, not among
+  actions. This single toolbar remains mounted across reading/editing modes.
+  Expanded editor and Agent view remain full-width below this document row. Preview guide opens the same
   route-backed document reader as Overview and preserves this Settings entry,
   all draft scopes, their revision pins and return focus. Only an exact retained
   guide preview bypasses departure confirmation; full-page promotion or another
