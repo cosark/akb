@@ -1012,96 +1012,51 @@ an `sr-only` summary, never the only signal.
   Document info also wraps the full title for touch access.
   Preserve the parent and resource title before secondary ancestry.
 - **Document workspace**: the location trail is the sole visible document
-  identity. Keep one semantic `h1#doc-title` without a second title card, and
-  preserve authored body headings and their anchors. One full-width white/slate
-  command row owns Draft, Last edited, line/byte statistics and an optional
-  labelled `Summary ⌄` with an optional one-line excerpt on the left; Preview / Raw, Copy / Edit,
-  Publish / Public link and overflow follow on the right in that order.
-  The full-page reader has no second Vault section row. Preview dialogs place
-  Publish / Public link in their own breadcrumb header,
-  not in the background page. No extra title band is introduced. The document
-  owns publication state and permissions; leaving the reader removes its action.
-  Reserve the publication label's natural width in the reading toolbar so a
-  successful Publish does not reflow the canvas. Below 32rem of command width,
-  retain its text label but omit the decorative globe; keep touch targets intact.
-  Read modes are
-  compact segmented tabs on a neutral inset with a token-selected surface, not
-  a second underline navigation row or solid primary button slabs. Copy/Edit
-  share the same labelled ghost-icon treatment and keyboard/hover tooltips.
-  Separate selection and action groups spatially rather than adding another
-  title, commit band, or context menu. Publish keeps a
-  visible text label and opens options before any public write. All commands share 14px medium type, small token
-  radius and the same height: 32px above 48rem of available command space, 44px
-  below. At less than 32rem, statistics yield their space. Summary uses the
-  remaining metadata width: below 16rem it keeps only its label, and below
-  5.5rem it yields entirely (the full summary remains in Info).
-  Above 48rem, context and tools share
-  one line; below it metadata and action groups wrap within the same surface.
-  Groups remain intact, labels and touch targets are never squeezed to force
-  one line. Open overflow uses selected-state tokens.
-  Preview promotion sits beside navigation, not among read-mode commands.
-  Last edited, statistics and the optional one-line summary yield before
-  primary actions; all remain available in Info. Last edited uses the API's
-  `updated_at`, with an exact localized date and timezone on hover/focus. Missing
-  or invalid dates remain absent in the toolbar and say Not available in Info.
-  Historical/diff views instead show Version saved from the matching history
-  entry; the live metadata timestamp must never be presented as the version date.
-  The summary excerpt fades at its right edge when it overflows. Intentional
-  hover or keyboard focus scans it once after 650ms, at 32px/s with a 10s minimum;
-  reduced motion keeps it static. Clicking opens a full-text anchored popover
-  without moving the article. Escape/outside click dismiss it; Escape returns
-  focus to Summary. Failed clipboard access offers manual copying rather than silence.
-  Watch, Pin and Standard / Wide reading-width choices share a named
-  group in overflow above the existing location/lifecycle actions. Keep exact
-  permission reasons and archived/historical/diff notices visible.
-  The working area runs edge to edge, with no outer gutter, card border, radius
-  or shadow. Toolbar, article and context rail share `surface` in both themes;
-  a single hairline separates the tools from the body. Do not frame the title
-  or add a duplicate context band. Loading reserves the same unified toolbar
-  and full-width canvas without an extra metadata strip.
-  The shared reader is an inline-size query container. Its horizontal inset is
-  `clamp(1rem, 2cqi, 2rem)` (16–32px), based on actual content width rather than
-  the browser width, so opening/collapsing navigation also reflows the gutters.
-  Preview, Raw and the loading body use the same inset and 20px block padding.
-  This edge spacing is separate from the user's Standard / Wide reading measure.
-  Its first
-  authored block has no additional top margin. Rendered body text uses 16px /
-  1.65. Headings, paragraphs, lists, quotes, code blocks and ordinary tables share
-  a centered 64rem measure. Short code blocks retain that same outer width;
-  long code scrolls inside it rather than expanding past the prose edges.
-  Raw uses the same measure and alignment, rather than jumping sideways on a
-  mode change. Wide removes the measure for all these blocks together. Target the actual
-  `.ProseMirror` / `.tableWrapper` DOM, not legacy direct-child selectors.
-  Code and wide tables scroll inside their own labelled, keyboard-focusable
-  regions. Image-containing paragraphs and their loading/unavailable frames
-  share the same reading measure as prose; images never escape to the full
-  canvas independently. Small images retain natural dimensions and aspect
-  ratio; larger images shrink to their parent without stretching or cropping.
-  Context has one entry per view in a 3rem right-edge icon rail: Document info,
-  Table of contents, Relations and Version history. Do not duplicate these entries
-  in overflow or add another header Info button. Each control has a tooltip,
-  accessible name, 44px target and expanded state; pressing the selected control
-  closes its panel. With at least 48rem of actual reading width and 20rem of
-  height, context floats immediately left of the rail in a 24rem, content-sized
-  panel with a bounded independently scrolling body. Opening it never changes
-  article width, line wrapping or scroll position. Use opaque surface, a quiet
-  border, small radius and soft shadow, without a backdrop or scroll lock.
-  Outside click and keyboard focus leaving for the article close it without
-  swallowing the outside action or restoring focus away from its target.
-  Otherwise it opens as a modal right overlay (max 24rem) with backdrop, focus
-  containment and its own context controls while the background rail is
-  inaccessible. Each view owns the available panel height, without nested tabs.
-  Close/Escape restore the selected edge control. Child editing dialogs and
-  their portalled menus must not dismiss the inspector or lose drafts when the
-  viewport changes. Following an outline link keeps either panel mode open and
-  focus on that link for continuous navigation. Only the document canvas scrolls
-  to the authored heading (never the app shell or sidebars, including when a
-  short article needs no scrolling); the current section remains highlighted.
-  Close/Escape or an outside interaction dismiss the panel, not heading selection.
-  Raw and diff modes explain why heading navigation is
-  unavailable instead of exposing inactive links. Edit hides the rail. Author,
-  full timestamps and tags live in Info, not a new band. Omit the Technical
-  details disclosure and its filename/path/URI rows from Info.
+  identity. Keep one semantic `h1#doc-title` and preserve authored headings.
+  One flat command row groups icon-only Preview / Raw selection and the optional
+  summary icon on the left, quiet Last edited metadata in the middle, and Edit,
+  Document details and overflow on the right. Read modes use a radiogroup with
+  a sliding surface thumb, accessible names, arrow/Home/End keyboard selection
+  and one tab stop. They are not navigation tabs. Reduce motion on request.
+  Summary never displays an inline excerpt or marquee: its labelled icon opens
+  a full-text, scrollable nonmodal popover. Tooltip and popover do not overlap.
+  Escape restores its trigger; outside interaction retains the outside target.
+  Controls use 14px medium type, small token radii and 32px targets above 48rem
+  of available command space, 44px below. Below 40rem, timestamp/status form a
+  quiet second line while reading controls and actions remain intact above.
+  At 22rem or less, Edit keeps its labelled icon and 44px target while its
+  visible text yields, so the complete toolbar fits a 320px screen.
+  Missing or invalid dates remain absent in the toolbar and say Not available
+  in Properties. Last edited uses `updated_at` with exact localized time and
+  timezone on hover/focus. Historical/diff views instead use Version saved
+  from the matching history entry, never the current metadata timestamp.
+  Copy document link, Copy markdown, Publish / Public link, Watch, Pin and
+  Version history live in overflow before location/lifecycle actions. Publication
+  still opens options before any public write and preserves permission reasons.
+  Keep publication and clipboard fallback controllers mounted when menus close.
+  Failed clipboard access offers manual copying and returns to the invoking
+  control. Raw also exposes a contextual labelled Copy markdown action.
+  Reading width has no user-facing control. Preview, Raw and loading use one
+  automatic centered 52rem measure with container-responsive 16–32px side insets
+  and 20px block padding. The first authored block has no extra top margin.
+  Body text uses 16px / 1.65. Prose, headings, tables, images and code share the
+  same measure; wide code/tables scroll in their own keyboard-accessible regions.
+  Target the actual `.ProseMirror` / `.tableWrapper` DOM. Images retain aspect
+  and natural size and shrink within the reading measure without stretching.
+  Toolbar and canvas share `surface` without outer cards or duplicate title bands.
+  Document details has one labelled icon entry in the toolbar; there is no
+  permanent edge rail. It contains On this page followed by native Properties,
+  Version history and Related documents disclosures. Only the expanded section
+  mounts its interactive content. Overflow Version history opens that disclosure
+  and focuses its heading. With at least 48rem of actual reading width and
+  20rem of height, the 19rem pane docks beside the article and remains open while
+  reading. Otherwise it is a modal right sheet, max 24rem, with focus containment.
+  Close/Escape returns focus to the toolbar trigger. Child dialogs retain their
+  drafts and opener focus across resizing; defer presentation changes until the
+  child dialog closes. Following an outline link keeps the pane open and only
+  scrolls the document canvas, preserving route and link focus. Raw/diff explain
+  why headings are unavailable. Editing hides the pane. Full timestamps, size,
+  author and tags live in Properties; omit duplicate Summary and technical URI rows.
   Publication management uses its own verified writer-or-higher policy, rejects
   read-only Vaults and historical/diff views, and preserves exact server errors.
   Existing links use a Public link label, not a claim of live availability:
@@ -1109,7 +1064,7 @@ an `sr-only` summary, never the only signal.
   URL, honest copy feedback/manual recovery, Open link, the publication registry,
   and an explicit confirmation before removing all document public links.
   Publishing and existing-link disclosure share a nonmodal, 340px popover anchored 8px below the
-  header button's right edge. Constrain and reposition it at viewport boundaries;
+  overflow button's right edge. Constrain and reposition it at viewport boundaries;
   use internal scrolling on short screens. No backdrop, body scroll lock or
   article reflow. Outside actions remain usable on the first click; Escape,
   Close and the same trigger dismiss it. Within a document preview, portal it
@@ -1120,9 +1075,8 @@ an `sr-only` summary, never the only signal.
   entered options and scroll only the publication surface into view. Success
   changes this same popover to the ready URL and copy actions. Destructive
   unpublishing keeps its confirmation dialog; cancelling returns to the
-  popover's Unpublish action. Publication retains its explicit text label;
-  the narrow full-page toolbar omits only its decorative globe, while previews
-  retain their existing header treatment. Edit hides publishing until the draft
+  popover's Unpublish action. Publication retains its explicit text label in
+  overflow on full pages and previews. Edit hides publishing until the draft
   is saved or cancelled.
   Edit uses the context command row for visible draft/upload state and Cancel /
   Save changes. It never adds another `Editing document` band. Clean Cancel exits;
@@ -1202,12 +1156,8 @@ an `sr-only` summary, never the only signal.
   The launching query, filters, scroll position, browser Back behavior and
   result focus remain preserved. Clicking the backdrop closes a reading preview;
   editing ignores backdrop/focus-outside events (including native file pickers).
-  Inside the dialog, rendered content defaults to Wide with the shared reader's
-  container-responsive 16–32px side insets:
-  the modal already provides the reading boundary, so do not add a second
-  centered 64rem measure. Prose, headings, tables and code share those edges;
-  long code and wide tables still scroll locally. Standard remains available
-  in overflow, and full-page reading keeps its Standard default. The compact file
+  Inside the dialog, Preview and Raw use the same automatic reading measure and
+  container-responsive insets as the full page. The compact file
   identity line exposes the current Vault as a labelled link, deliberately
   leaving the preview for that Vault Overview when selected. Its URL is still the canonical
   document route; clearing the preview history state promotes it to the normal

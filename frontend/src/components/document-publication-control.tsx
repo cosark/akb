@@ -1,4 +1,4 @@
-import { useEffect, useId, useImperativeHandle, useRef, useState, type Ref } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type Ref, type RefObject } from "react";
 import { Link } from "react-router-dom";
 import { Copy, ExternalLink, Globe2, X } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PublishOptionsForm } from "@/components/publish-options-dialog";
 import type { Publication } from "@/lib/api";
-import { Popover, PopoverClose, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverAnchor, PopoverClose, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -19,6 +19,8 @@ interface DocumentPublicationControlProps {
   onPublished: (slug: string, publication?: Publication) => void;
   onUnpublish: () => Promise<void>;
   triggerRef?: Ref<HTMLButtonElement>;
+  /** Keep this controller mounted while an overflow item opens it. */
+  menuAnchorRef?: RefObject<HTMLButtonElement | null>;
 }
 
 export function DocumentPublicationControl({
@@ -29,6 +31,7 @@ export function DocumentPublicationControl({
   onPublished,
   onUnpublish,
   triggerRef,
+  menuAnchorRef,
 }: DocumentPublicationControlProps) {
   const [open, setOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -41,16 +44,26 @@ export function DocumentPublicationControl({
   const confirmReturnFocusRef = useRef<HTMLElement | null>(null);
   const urlRef = useRef<HTMLTextAreaElement>(null);
   const publishedRef = useRef(false);
+  const restoreMenuFocus = useRef(true);
   const urlId = useId();
   const reasonId = useId();
   const titleId = useId();
   const descriptionId = useId();
+  const menuAnchor = useMemo(() => ({
+    current: { getBoundingClientRect: () => menuAnchorRef?.current?.getBoundingClientRect() ?? new DOMRect() },
+  }), [menuAnchorRef]);
   const publishDisabled = !publicSlug && Boolean(disabledReason);
   const publicUrl = publicSlug
     ? `${window.location.origin}/p/${encodeURIComponent(publicSlug)}`
     : "";
 
-  useImperativeHandle(triggerRef, () => buttonRef.current!, []);
+  // Register the live node: a custom Radix anchor can replace the initial
+  // trigger, so a one-time imperative handle would retain a detached button.
+  const setTriggerRef = useCallback((element: HTMLButtonElement | null) => {
+    buttonRef.current = element;
+    if (typeof triggerRef === "function") triggerRef(element);
+    else if (triggerRef) triggerRef.current = element;
+  }, [triggerRef]);
 
   useEffect(() => {
     if (publishDisabled) setOpen(false);
@@ -83,7 +96,7 @@ export function DocumentPublicationControl({
     // Recheck the current permission if access changes while confirming.
     if (disabledReason) throw new Error(disabledReason);
     await onUnpublish();
-    confirmReturnFocusRef.current = buttonRef.current;
+    confirmReturnFocusRef.current = menuAnchorRef?.current ?? buttonRef.current;
     setOpen(false);
   }
 
@@ -113,19 +126,22 @@ export function DocumentPublicationControl({
         onOpenChange={(nextOpen) => {
           if (confirmOpen || publishing || (nextOpen && publishDisabled)) return;
           if (nextOpen) {
+            restoreMenuFocus.current = true;
             setCopyResult(null);
             // Keep the popover inside a preview dialog's focus boundary.
-            setPortalContainer(buttonRef.current?.closest<HTMLElement>('[role="dialog"]') ?? null);
+            setPortalContainer((menuAnchorRef?.current ?? buttonRef.current)?.closest<HTMLElement>('[role="dialog"]') ?? null);
           }
           setOpen(nextOpen);
         }}
       >
+        {menuAnchorRef && <PopoverAnchor virtualRef={menuAnchor} />}
         <TooltipProvider delayDuration={300}>
           <Tooltip>
             <TooltipTrigger asChild>
               <PopoverTrigger asChild>
                 <Button
-                  ref={buttonRef}
+                  ref={setTriggerRef}
+                  hidden={Boolean(menuAnchorRef)}
                   type="button"
                   variant="outline"
                   size="sm"
@@ -166,7 +182,12 @@ export function DocumentPublicationControl({
             // The confirmation is a separate portal; retain this panel so
             // cancelling can return to the action that opened it.
             if (confirmOpen || publishing) event.preventDefault();
+            else restoreMenuFocus.current = false;
           }}
+          onCloseAutoFocus={menuAnchorRef ? event => {
+            event.preventDefault();
+            if (restoreMenuFocus.current) menuAnchorRef.current?.focus({ preventScroll: true });
+          } : undefined}
         >
           {publicSlug && header}
           {!publicSlug ? <PublishOptionsForm

@@ -92,7 +92,7 @@ describe("one read-first Vault guide flow", () => {
     expect(within(preview).getByRole("link", { name: "Edit guide" })).toBeVisible();
     expect(within(preview).queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: /Discard unsaved/ })).not.toBeInTheDocument();
-    await user.click(within(preview).getByRole("tab", { name: "Raw" }));
+    await user.click(within(preview).getByRole("radio", { name: "Raw markdown" }));
     await act(async () => window.history.back());
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Document preview" })).not.toBeInTheDocument());
     expect(screen.getByLabelText("Vault guide body")).toHaveValue("Unsaved instructions");

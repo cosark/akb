@@ -6,17 +6,24 @@ import { DocumentSummary } from "../document-summary";
 describe("DocumentSummary", () => {
   it("opens the full summary from the keyboard and restores focus on Escape", async () => {
     const user = userEvent.setup();
-    const summary = "A long summary that stays readable in full.\nIt also preserves paragraph breaks.";
+    const summary = `${"A long summary that stays readable in full. ".repeat(25)}\nIt also preserves paragraph breaks.`;
     render(<DocumentSummary summary={summary} />);
     await user.tab();
     const trigger = screen.getByRole("button", { name: "Read document summary" });
     expect(trigger).toHaveFocus();
+    expect(trigger.textContent).toBe("");
+    expect(screen.queryByText(summary)).not.toBeInTheDocument();
     await user.keyboard("{Enter}");
     const popup = screen.getByRole("dialog", { name: "Document summary" });
-    expect(popup).toHaveAccessibleDescription(summary);
+    expect(popup).toHaveAccessibleDescription(summary.replace(/\s+/g, " "));
+    expect(popup.querySelector("p")?.textContent).toBe(summary);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(trigger).toHaveAttribute("data-summary-open", "true");
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveAttribute("data-summary-open", "false");
   });
 
   it("dismisses on outside click and does not retain an old document's open summary", async () => {

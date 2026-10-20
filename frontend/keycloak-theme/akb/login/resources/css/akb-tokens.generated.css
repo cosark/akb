@@ -101,9 +101,6 @@
   --akb-duration-fast: 120ms;
   --akb-duration-base: 220ms;
   --akb-duration-slow: 420ms;
-  --akb-duration-summary-delay: 650ms;
-  --akb-duration-summary-min: 10s;
-  --akb-duration-summary-per-pixel: 31.25ms;
   --akb-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --akb-ease-in: cubic-bezier(0.4, 0, 1, 1);
   --akb-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
