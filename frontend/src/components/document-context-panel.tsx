@@ -1,5 +1,6 @@
 import { useCallback, useId, useLayoutEffect, useRef, useState, type FocusEventHandler, type MouseEventHandler, type ReactNode, type RefObject } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { DismissableLayer } from "@radix-ui/react-dismissable-layer";
 import { ChevronDown, X } from "lucide-react";
 import { Dialog, DialogOverlay, DialogPortal, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -10,10 +11,12 @@ export type DocumentContextView = "info" | "outline" | "relations" | "history";
 const sections = [{ id: "info", label: "Properties" }, { id: "history", label: "Version history" }, { id: "relations", label: "Related documents" }] as const;
 
 /** One inspector beside a wide article, or a modal sheet in a constrained reader. */
-export function DocumentContextPanel({ id: suppliedId, open, onOpenChange, view, onViewChange, triggerRef, outline, info, history, relations, focusRequest = 0 }: {
+export function DocumentContextPanel({ id: suppliedId, open, onOpenChange, view, onViewChange, triggerRef, outline, info, history, relations, focusRequest = 0, focusTargetRef, onFocusTarget }: {
   id?: string; open: boolean; onOpenChange: (open: boolean) => void;
   view: DocumentContextView; onViewChange: (view: DocumentContextView) => void;
   triggerRef: RefObject<HTMLButtonElement | null>; outline: ReactNode; info: ReactNode; history: ReactNode; relations: ReactNode; focusRequest?: number;
+  /** An explicit return target takes precedence over opening/disclosure focus. */
+  focusTargetRef?: RefObject<HTMLElement | null>; onFocusTarget?: () => void;
 }) {
   const generatedId = useId();
   const id = suppliedId ?? generatedId;
@@ -35,6 +38,14 @@ export function DocumentContextPanel({ id: suppliedId, open, onOpenChange, view,
       .some(dialog => dialog.id !== id && dialog.getAttribute("data-state") !== "closed" && dialog.getAttribute("aria-hidden") !== "true" && !dialog.contains(marker)));
   }, [id]);
   const restoreTrigger = useCallback(() => triggerRef.current?.focus({ preventScroll: true }), [triggerRef]);
+  const focusRequestedTarget = useCallback(() => {
+    const target = focusTargetRef?.current;
+    if (!open || !target?.isConnected || !panelRef.current?.contains(target)) return false;
+    target.focus({ preventScroll: true });
+    if (target.ownerDocument.activeElement !== target) return false;
+    onFocusTarget?.();
+    return true;
+  }, [focusTargetRef, onFocusTarget, open]);
   const restoreInsideFocus = useCallback(() => {
     // A presentation change remounts the panel. Its autofocus must not replace
     // the supporting dialog's opener before we can find its new DOM instance.
@@ -47,13 +58,13 @@ export function DocumentContextPanel({ id: suppliedId, open, onOpenChange, view,
   useLayoutEffect(() => {
     latestOpen.current = open;
     const dockedOpen = open && docked;
-    if (dockedOpen && !previousDockedOpen.current) {
+    if (dockedOpen && !previousDockedOpen.current && !focusRequestedTarget()) {
       if (pendingInsideFocus.current) restoreInsideFocus();
       else closeRef.current?.focus({ preventScroll: true });
     }
     if (!open && previousDockedOpen.current) restoreTrigger();
     previousDockedOpen.current = dockedOpen;
-  }, [open, docked, restoreInsideFocus, restoreTrigger]);
+  }, [open, docked, focusRequestedTarget, restoreInsideFocus, restoreTrigger]);
   useLayoutEffect(() => {
     const layout = markerRef.current?.parentElement;
     if (!layout) return;
@@ -75,8 +86,13 @@ export function DocumentContextPanel({ id: suppliedId, open, onOpenChange, view,
     return () => { observer?.disconnect(); layout.ownerDocument.removeEventListener("focusin", measure); };
   }, [hasForegroundDialog, modalCount, restoreInsideFocus]);
   useLayoutEffect(() => {
-    if (!open) {
-      // Closing cancels this opening's deferred focus as well as its frame.
+    // History can arrive after the panel opens. Keep the request in its caller
+    // until the requested control is mounted and successfully receives focus.
+    focusRequestedTarget();
+  }, [focusRequestedTarget, docked, history]);
+  useLayoutEffect(() => {
+    if (!open || focusTargetRef) {
+      // Closing or an explicit return target cancels deferred section focus.
       // Reopening after a comparison must respect the caller's focus restore;
       // only a newly incremented request should focus a disclosure again.
       previousRequest.current = focusRequest;
@@ -94,7 +110,7 @@ export function DocumentContextPanel({ id: suppliedId, open, onOpenChange, view,
     };
     frame = requestAnimationFrame(() => focusSection());
     return () => cancelAnimationFrame(frame);
-  }, [focusRequest, open, view, docked]);
+  }, [focusRequest, focusTargetRef, open, view, docked]);
   const onPanelClick: MouseEventHandler<HTMLElement> = event => {
     if (!(event.target instanceof Element)) return;
     const href = event.target.closest("a")?.getAttribute("href");
@@ -121,12 +137,21 @@ export function DocumentContextPanel({ id: suppliedId, open, onOpenChange, view,
     </div>
   </>;
   return <><span ref={markerRef} hidden /><Dialog open={open} onOpenChange={onOpenChange} modal={!docked}>
-    {docked ? open && <aside ref={panelRef} id={id} tabIndex={-1} aria-labelledby={`${id}-heading`} data-slot="document-context-panel" data-mode="docked"
+    {docked ? open && <DismissableLayer asChild
+      onEscapeKeyDown={event => {
+        // Register above an enclosing preview's capture listener so Escape
+        // closes this inspector before it can dismiss the document route.
+        event.preventDefault();
+        if (!hasForegroundDialog()) onOpenChange(false);
+      }}
+      onInteractOutside={event => event.preventDefault()}>
+      <aside ref={panelRef} id={id} tabIndex={-1} aria-labelledby={`${id}-heading`} data-slot="document-context-panel" data-mode="docked"
       className="document-details-panel document-details-docked" onFocusCapture={rememberFocus} onClickCapture={onPanelClick}
-      onKeyDown={event => { if (event.key === "Escape" && !hasForegroundDialog()) { event.stopPropagation(); onOpenChange(false); } }}>{body}</aside>
+      >{body}</aside>
+    </DismissableLayer>
       : <DialogPortal><DialogOverlay /><DialogPrimitive.Content ref={element => { panelRef.current = element; }} id={id}
         data-slot="document-context-panel" data-mode="overlay" aria-modal="true" aria-describedby={undefined} className={cn("document-details-panel", "document-details-overlay")}
-        onOpenAutoFocus={event => { event.preventDefault(); if (pendingInsideFocus.current) restoreInsideFocus(); else closeRef.current?.focus({ preventScroll: true }); }}
+        onOpenAutoFocus={event => { event.preventDefault(); if (focusRequestedTarget()) return; if (pendingInsideFocus.current) restoreInsideFocus(); else if (!panelRef.current?.contains(document.activeElement)) closeRef.current?.focus({ preventScroll: true }); }}
         onCloseAutoFocus={event => { event.preventDefault(); requestAnimationFrame(() => { if (latestOpen.current) restoreInsideFocus(); else restoreTrigger(); }); }}
         onFocusCapture={rememberFocus} onClickCapture={onPanelClick}>{body}</DialogPrimitive.Content></DialogPortal>}
   </Dialog></>;

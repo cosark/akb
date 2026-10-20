@@ -430,6 +430,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -1456,8 +1457,16 @@ describe("DocumentPage view toggle", () => {
     );
   });
 
-  it("opens a History revision as a full-canvas Diff and restores History focus", async () => {
+  it.each([600, 1200])("opens a History revision as a full-canvas Diff and restores History focus after a delayed read at %ipx", async width => {
     const user = userEvent.setup();
+    const originalBounds = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (!this.querySelector(":scope > #document-reading-canvas")) return originalBounds.call(this);
+      return { width, height: 800, x: 0, y: 0, top: 0, bottom: 800, left: 0, right: width, toJSON: () => ({}) };
+    });
+    let resolveVersion!: (value: ReturnType<typeof makeDoc>) => void;
+    const versionRead = new Promise<ReturnType<typeof makeDoc>>(resolve => { resolveVersion = resolve; });
+    getDocumentMock.mockImplementation((_vault, _ref, version) => version ? versionRead : Promise.resolve(makeDoc()));
     getDocumentHistoryMock.mockResolvedValue({
       kind: "document_history",
       uri: "akb://v/coll/notes/doc/hello.md",
@@ -1481,7 +1490,10 @@ describe("DocumentPage view toggle", () => {
     });
     renderAt("/vault/v/doc/notes%2Fhello.md");
 
-    await openVersionHistory(user);
+    await user.click(await screen.findByRole("button", { name: "Actions for DocTitle" }));
+    await user.click(screen.getByRole("menuitem", { name: "Version history" }));
+    const panelRole = width >= 768 ? "complementary" : "dialog";
+    expect(await screen.findByRole(panelRole, { name: "Document details" })).toBeVisible();
     const changes = await screen.findByRole("button", {
       name: "View changes in version abcdef1",
     });
@@ -1491,21 +1503,39 @@ describe("DocumentPage view toggle", () => {
     expect(screen.getByTestId("location-search")).toHaveTextContent(
       "commit=abcdef1234567&view=diff",
     );
-    expect(screen.queryByRole("dialog", { name: "Document details" })).not.toBeInTheDocument();
+    expect(screen.queryByRole(panelRole, { name: "Document details" })).not.toBeInTheDocument();
     expect(screen.queryByRole("radiogroup", { name: "Document view mode" })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Back to version" }));
+    await waitFor(() => expect(getDocumentMock).toHaveBeenCalledWith("v", "notes/hello.md", "abcdef1234567"));
+    // Keep the document (and inspector) unmounted beyond the old double-frame
+    // restore, then allow the historical response to mount the History buttons.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 120)); });
+    expect(screen.queryByRole(panelRole, { name: "Document details" })).not.toBeInTheDocument();
+    await act(async () => { resolveVersion(makeDoc()); });
     await screen.findByRole("heading", { level: 2, name: "BodyHeading", hidden: true });
     expect(screen.getByTestId("location-search")).toHaveTextContent(
       "commit=abcdef1234567",
     );
     expect(screen.getByTestId("location-search")).not.toHaveTextContent("view=diff");
-    expect(screen.getByRole("dialog", { name: "Document details" })).toBeVisible();
+    expect(screen.getByRole(panelRole, { name: "Document details" })).toBeVisible();
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "View changes in version abcdef1" }),
       ).toHaveFocus(),
     );
+    // Focus must stay on Changes through the panel's own opening lifecycle.
+    await act(async () => { await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); });
+    expect(screen.getByRole("button", { name: "View changes in version abcdef1" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "View version 1234567: Create document" })).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: "View changes in version abcdef1" }));
+    await screen.findByRole("table", { name: /unified document changes/i });
+    await user.click(screen.getByRole("button", { name: "Back to latest" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "View changes in version abcdef1" })).toHaveFocus());
+    await act(async () => { await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); });
+    expect(screen.getByRole("button", { name: "View changes in version abcdef1" })).toHaveFocus();
   });
 
   it("keeps Search preview route state while entering Diff", async () => {

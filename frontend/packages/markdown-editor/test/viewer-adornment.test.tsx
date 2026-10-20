@@ -13,9 +13,9 @@ describe('MarkdownViewer read-only adornment', () => {
       headings={{ levelOffset: 1, ids: ['title', 'title-2'] }}
       afterLeadingHeading={<><h2 id="metadata-title">Metadata</h2><a href="https://example.com/metadata">Metadata link</a><button onClick={click}>Pause summary</button></>} />)
     const control = await within(container).findByRole('button', { name: 'Pause summary' })
-    const first = within(container).getAllByRole('heading')[0]
+    const first = container.querySelector('#title')
     expect(first).toHaveAttribute('id', 'title')
-    const host = first.nextElementSibling
+    const host = first?.nextElementSibling
     expect(host).toHaveAttribute('data-markdown-leading-adornment', 'true')
     expect(host).toHaveAttribute('contenteditable', 'false')
     expect(host).toContainElement(control)

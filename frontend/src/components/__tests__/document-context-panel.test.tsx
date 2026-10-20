@@ -61,6 +61,28 @@ afterEach(() => {
 });
 
 describe("DocumentContextPanel", () => {
+  it("closes a docked inspector before its enclosing document preview on Escape", async () => {
+    measureReader(1200);
+    const closePreview = vi.fn();
+    const user = userEvent.setup();
+    render(<Dialog open><DialogContent aria-describedby={undefined} onEscapeKeyDown={event => {
+      event.preventDefault();
+      closePreview();
+    }}><DialogTitle>Document preview</DialogTitle><ContextHarness /></DialogContent></Dialog>);
+    const trigger = screen.getByRole("button", { name: "Document details" });
+    await user.click(trigger);
+    expect(screen.getByRole("complementary", { name: "Document details" })).toHaveAttribute("data-mode", "docked");
+
+    await user.keyboard("{Escape}");
+    expect(closePreview).not.toHaveBeenCalled();
+    expect(screen.queryByRole("complementary", { name: "Document details" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Document preview" })).toBeVisible();
+    await waitFor(() => expect(trigger).toHaveFocus());
+
+    await user.keyboard("{Escape}");
+    expect(closePreview).toHaveBeenCalledOnce();
+  });
+
   it("does not replay a cancelled section-focus request after reopening and still handles a new request", () => {
     measureReader(1200);
     const frames = new Map<number, FrameRequestCallback>();

@@ -211,6 +211,9 @@ function DocumentPageContent({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsTab, setDetailsTab] = useState<"info" | "outline" | "relations" | "history">("outline");
   const [contextFocusRequest, setContextFocusRequest] = useState(0);
+  const [historyReturnFocus, setHistoryReturnFocus] = useState<string | null>(null);
+  const historyReturnFocusRef = useRef<HTMLButtonElement | null>(null);
+  const finishHistoryReturnFocus = useCallback(() => setHistoryReturnFocus(null), []);
   const [copyNotice, setCopyNotice] = useState<{ label: string } | null>(null);
   useEffect(() => {
     if (!copyNotice) return;
@@ -226,6 +229,7 @@ function DocumentPageContent({
     setDetailsOpen(false);
     setCopyNotice(null);
     setDetailsTab("outline");
+    setHistoryReturnFocus(null);
     menuHandoff.current = null;
   }, [resourceScope]);
   const actionsTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -508,6 +512,7 @@ function DocumentPageContent({
     returnReadModeRef.current = view === "raw" ? "raw" : "rendered";
     focusDetailsRef.current = details;
     setDetailsOpen(false);
+    setHistoryReturnFocus(null);
     setView("edit");
   }
 
@@ -697,20 +702,9 @@ function DocumentPageContent({
     }
     if (!wasDiffModeRef.current || !diffOriginHashRef.current) return;
     wasDiffModeRef.current = false;
-    const originHash = diffOriginHashRef.current;
+    setHistoryReturnFocus(diffOriginHashRef.current);
     setDetailsTab("history");
     setDetailsOpen(true);
-    const firstFrame = window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        const triggers = document.querySelectorAll<HTMLButtonElement>(
-          "[data-document-diff-trigger]",
-        );
-        Array.from(triggers).find(
-          (trigger) => trigger.dataset.documentDiffTrigger === originHash,
-        )?.focus();
-      });
-    });
-    return () => window.cancelAnimationFrame(firstFrame);
   }, [isDiffMode]);
 
   // Each response belongs to this resource/account/access revision. Old
@@ -1514,6 +1508,8 @@ function DocumentPageContent({
   const openDiff = (hash: string, trigger: HTMLButtonElement) => {
     diffOriginHashRef.current = hash;
     trigger.blur();
+    setContextFocusRequest(0);
+    setHistoryReturnFocus(null);
     setDetailsOpen(false);
     const params = new URLSearchParams(searchParams);
     params.set("commit", hash);
@@ -1584,7 +1580,7 @@ function DocumentPageContent({
               <Link to={vaultGuideEditHref(name!)}><Pencil className="h-4 w-4" aria-hidden /></Link>
             </DocumentIconButton>}
             <DocumentIconButton ref={detailsTriggerRef} label="Document details" aria-expanded={detailsOpen} aria-controls={`${viewId}-details`}
-              onClick={() => setDetailsOpen(open => !open)}>
+              onClick={() => { setHistoryReturnFocus(null); setDetailsOpen(open => !open); }}>
               <PanelRight className="h-4 w-4" aria-hidden />
             </DocumentIconButton>
             <ResourceActionsMenu
@@ -1597,6 +1593,7 @@ function DocumentPageContent({
                 requestAnimationFrame(() => {
                   if (action === "publication") publicationTriggerRef.current?.click();
                   else if (action === "history") {
+                    setHistoryReturnFocus(null);
                     setDetailsTab("history"); setDetailsOpen(true);
                     setContextFocusRequest(value => value + 1);
                   } else {
@@ -1946,8 +1943,11 @@ function DocumentPageContent({
           </main>
 
           {!inEditMode && (
-            <DocumentContextPanel id={`${viewId}-details`} open={detailsOpen} onOpenChange={setDetailsOpen} view={detailsTab} onViewChange={setDetailsTab}
+            <DocumentContextPanel id={`${viewId}-details`} open={detailsOpen}
+              onOpenChange={open => { setDetailsOpen(open); if (!open) setHistoryReturnFocus(null); }}
+              view={detailsTab} onViewChange={next => { setDetailsTab(next); setHistoryReturnFocus(null); }}
               triggerRef={detailsTriggerRef} focusRequest={contextFocusRequest}
+              focusTargetRef={historyReturnFocus ? historyReturnFocusRef : undefined} onFocusTarget={finishHistoryReturnFocus}
               info={<>
               <section aria-labelledby="document-properties-heading">
                 <h3 id="document-properties-heading" className="sr-only">Document properties</h3>
@@ -2057,6 +2057,8 @@ function DocumentPageContent({
                         diffHash={isDiffMode ? commitHash : undefined}
                         onSelect={(hash) => openVersion(hash)}
                         onCompare={openDiff}
+                        compareFocusHash={historyReturnFocus ?? undefined}
+                        compareFocusRef={historyReturnFocusRef}
                       />
                     </div>
                   )}
