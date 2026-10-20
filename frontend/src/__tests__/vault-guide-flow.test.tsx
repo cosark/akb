@@ -49,7 +49,14 @@ beforeEach(() => {
   vi.mocked(getDocument).mockResolvedValue(DOC);
   vi.mocked(updateDocument).mockResolvedValue({ current_commit: "saved-commit" });
 });
-afterEach(() => { cleanup(); stopHistory?.(); window.history.replaceState(null, "", "/"); });
+afterEach(async () => {
+  cleanup();
+  stopHistory?.();
+  window.history.replaceState(null, "", "/");
+  // The real guide preview uses Tiptap, which defers destruction by one tick
+  // to support StrictMode remounts. Finish it before jsdom removes window.
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 1)); });
+});
 
 describe("one read-first Vault guide flow", () => {
   it.each([vaultGuideHref("v"), "/vault/v/skill", `${vaultGuideHref("v")}?view=edit`, "/vault/v/doc/document-uuid?view=edit"])("opens %s in the reader and enters only the Settings editor", async url => {
@@ -65,7 +72,8 @@ describe("one read-first Vault guide flow", () => {
     await waitFor(() => expect(editor).toHaveFocus());
     expect(window.location.pathname + window.location.search + window.location.hash).toBe("/vault/v/settings#skill");
     await user.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByLabelText("Vault guide body")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByLabelText("Vault guide body")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Edit guide" })).toHaveFocus());
     expect(updateDocument).not.toHaveBeenCalled();
   });
 
