@@ -200,7 +200,7 @@ describe("VaultShell focused task presentation", () => {
     expect(screen.getByRole("navigation", { name: "Vaults" })).toBeInTheDocument();
     expect(screen.queryByText("Collection tree content")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Expand collections" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Pages in demo" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pages in demo" })).not.toBeInTheDocument();
     expect(localStorage.getItem("akb.treeVisible")).toBe("1");
   });
 });
@@ -211,7 +211,7 @@ function ResolvedResource() {
 }
 
 describe("VaultShell resource navigation", () => {
-  it.each([true, false])("keeps the document tree but replaces the section row with a mobile-only header menu (desktop=%s)", desktop => {
+  it.each([true, false])("keeps the document tree but keeps the location trail free of page-switching menus (desktop=%s)", desktop => {
     vi.spyOn(window, "matchMedia").mockImplementation(query => ({
       matches: desktop && query === "(min-width: 1024px)", media: query, onchange: null,
       addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
@@ -230,7 +230,7 @@ describe("VaultShell resource navigation", () => {
       expect(screen.getByText("Collection tree content")).toBeInTheDocument();
     } else {
       expect(screen.getByRole("navigation", { name: "Resource location" })).toHaveTextContent("Resolved resource title");
-      expect(screen.getByRole("button", { name: "Pages in demo" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Pages in demo" })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Open vault navigation" })).toBeInTheDocument();
       expect(screen.queryByText("a-private-url-ref")).not.toBeInTheDocument();
     }

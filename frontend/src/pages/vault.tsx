@@ -20,7 +20,6 @@ import {
   Shield,
   Table as TableIcon,
   Upload,
-  UsersRound,
   type LucideIcon,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -52,6 +51,7 @@ import { useOpenDocumentCreateDialog } from "@/contexts/document-create-dialog-c
 import { WorkspacePageHeader } from "@/components/ui/workspace-page-header";
 import { VaultAddressAction } from "@/components/vault-address-action";
 import { VaultCreateMenu } from "@/components/vault-create-menu";
+import { VaultOverviewNavigation } from "@/components/vault-overview-navigation";
 import { documentPreviewState } from "@/lib/document-preview-navigation";
 import { TonalIcon, type TonalIconTone } from "@/components/ui/tonal-icon";
 import { FileUploadDialog } from "@/components/file-upload-dialog";
@@ -118,7 +118,7 @@ function OverviewCount({ value }: { value?: number }) {
   );
 }
 
-/** Passive totals share the creation row, but are not unimplemented buttons. */
+/** Content inventory is passive text, separate from page navigation. */
 function VaultContentSummary({ info }: { info: VaultInfo | null }) {
   const contents = [
     { label: "Documents", value: info?.document_count, Icon: FileText },
@@ -133,7 +133,7 @@ function VaultContentSummary({ info }: { info: VaultInfo | null }) {
           <div
             key={label}
             title={info && !knownCount(value) ? `${label} count is unavailable on this server` : undefined}
-            className="inline-flex min-h-8 items-center gap-2 rounded-[var(--radius-md)] border border-border bg-surface px-2.5 py-1 text-xs"
+            className="inline-flex min-h-8 items-center gap-2 text-xs"
           >
             <dt className="inline-flex items-center gap-1.5 whitespace-nowrap text-foreground-muted">
               <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -427,8 +427,9 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
           </div> : undefined}
           className="min-h-0 rounded-none border-0 bg-transparent p-0 shadow-none [&>div:first-child]:max-w-full [&_h1]:whitespace-normal [&_h1]:break-words [&_h1]:[overflow-wrap:anywhere]"
         />
-        <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-6 gap-y-3">
+        <div className="flex min-w-0 flex-col gap-2 @[58rem]/vault-overview:flex-row @[58rem]/vault-overview:items-center @[58rem]/vault-overview:justify-between @[58rem]/vault-overview:gap-x-6">
           {!infoError && <VaultContentSummary info={info} />}
+          {name && <VaultOverviewNavigation vault={name} />}
         </div>
       </section>
 
@@ -957,17 +958,9 @@ function VaultOverviewAside({
                 {publicAccess}
               </Badge>
             } />
+            <OverviewContextRow label="Members" value={<OverviewCount value={info.member_count} />} />
           </dl>
           <p className="mt-1 max-w-md text-xs leading-relaxed text-foreground-muted">{visibilityDescription}</p>
-          <Link
-            to={`/vault/${name}/members`}
-            className="mt-3 flex min-h-10 max-w-md items-center gap-2 rounded-[var(--radius-sm)] border border-border bg-background px-3 py-2 text-sm font-medium text-link transition-token hover:border-border-strong hover:bg-surface-hover hover:text-link-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-          >
-            <UsersRound className="h-4 w-4 shrink-0" aria-hidden />
-            <span className="flex-1">Members</span>
-            <span className="text-xs tabular-nums text-foreground-muted"><OverviewCount value={info.member_count} /></span>
-            <ChevronRight className="h-4 w-4 shrink-0" aria-hidden />
-          </Link>
         </div>
       </Panel>
 

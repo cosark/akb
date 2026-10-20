@@ -166,8 +166,8 @@ describe("Resource location", () => {
     expect(screen.getByRole("navigation", { name: "Resource location" })).toHaveTextContent("Human document name");
     expect(screen.queryByText("Preview title")).not.toBeInTheDocument();
     const trail = screen.getByRole("navigation", { name: "Resource location" });
-    const menu = within(trail).getByRole("button", { name: "Pages in 팀 Vault" });
-    expect(within(trail).getByRole("link", { name: "팀 Vault" }).closest("li")).toContainElement(menu);
+    expect(within(trail).getByRole("link", { name: "팀 Vault" })).toHaveAttribute("href", "/vault/%ED%8C%80%20Vault");
+    expect(within(trail).queryByRole("button", { name: /Pages in/ })).not.toBeInTheDocument();
   });
 
   it("clears resource metadata when navigating to an unresolved or denied resource", async () => {

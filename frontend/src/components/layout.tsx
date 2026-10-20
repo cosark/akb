@@ -21,6 +21,7 @@ import { HeaderIndexingStatus } from "@/components/header-indexing-status";
 import { NotificationBell } from "@/components/notification-bell";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AppPageLocation } from "@/components/app-page-location";
+import { VaultOverviewNavigationFocus } from "@/components/vault-overview-navigation";
 import { appRouteBoundaryForPath } from "@/app-route-contract";
 import { Button } from "@/components/ui/button";
 import type { VaultNavigationControl } from "@/components/vault-shell";
@@ -208,19 +209,17 @@ export function Layout({ routeOverlay, protectBackgroundDrafts = false }: { rout
     const search = searchControlsRef.current;
     const account = accountControlsRef.current;
     if (!wide || !search || !account) return;
-    const vaultMenu = search.parentElement?.querySelector<HTMLElement>('[data-slot="vault-page-switcher"]');
     const measure = () => {
       const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
       // Compare layout CSS pixels with the rail widths, not zoomed visual rects.
-      // Reserve the breadcrumb's page disclosure along with a readable trail,
-      // search/identity controls, insets and optional navigator trigger.
-      setMinimumVaultWorkspaceWidth(search.offsetWidth + account.offsetWidth + (vaultMenu?.offsetWidth ?? 0) + 22.25 * rem);
+      // Reserve a readable breadcrumb, search/identity controls, insets and
+      // the optional navigator trigger. Vault page links belong to Overview.
+      setMinimumVaultWorkspaceWidth(search.offsetWidth + account.offsetWidth + 22.25 * rem);
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(search);
     observer.observe(account);
-    if (vaultMenu) observer.observe(vaultMenu);
     return () => observer.disconnect();
   }, [wide, session.status, location.pathname]);
 
@@ -369,6 +368,7 @@ export function Layout({ routeOverlay, protectBackgroundDrafts = false }: { rout
           }
         >
           {/* Content */}
+          <VaultOverviewNavigationFocus />
           <main
             id="main"
             tabIndex={-1}

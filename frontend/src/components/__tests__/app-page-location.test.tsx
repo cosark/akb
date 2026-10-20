@@ -37,13 +37,8 @@ describe("App page location", () => {
     const current = within(location).getByText(label);
     expect(current).toHaveAttribute("aria-current", "page");
     const resourceGlyph = ({ Document: ".lucide-file-text", File: ".lucide-file", Table: ".lucide-table-2" } as Record<string, string>)[label];
-    expect(location.querySelectorAll("svg")).toHaveLength(resourceGlyph ? 3 : 2);
-    const trigger = screen.getByRole("button", { name: "Pages in 팀 Vault" });
-    expect(trigger.textContent).toBe("");
-    expect(trigger).not.toHaveClass("border");
-    expect(location).toContainElement(trigger);
-    expect(vault.closest("li")).toContainElement(trigger);
-    expect(vault.compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(location.querySelectorAll("svg")).toHaveLength(resourceGlyph ? 2 : 1);
+    expect(within(location).queryByRole("button", { name: /Pages in/ })).not.toBeInTheDocument();
     expect(current.closest("button")).toBeNull();
     if (resourceGlyph) {
       expect(current.compareDocumentPosition(location.querySelector(resourceGlyph)!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
@@ -52,51 +47,7 @@ describe("App page location", () => {
     expect(screen.queryByRole("navigation", { name: "Vault sections" })).not.toBeInTheDocument();
   });
 
-  it("offers real scoped links in a nonmodal page menu and restores focus on Escape", async () => {
-    const user = userEvent.setup();
-    render(<MemoryRouter initialEntries={["/vault/engineering/settings"]}><AppPageLocation /></MemoryRouter>);
-    const trigger = screen.getByRole("button", { name: "Pages in engineering" });
-    await user.click(trigger);
-    const menu = screen.getByRole("menu", { name: "Vault pages" });
-    expect(within(menu).getAllByRole("menuitem")).toHaveLength(5);
-    expect(within(menu).getByRole("menuitem", { name: "Settings" })).toHaveAttribute("aria-current", "page");
-    expect(within(menu).getByRole("menuitem", { name: "Public links" })).toHaveAttribute("href", "/vault/engineering/publications");
-    expect(within(menu).getByRole("menuitem", { name: "Overview" })).toHaveAttribute("href", "/vault/engineering");
-    expect(document.body.style.overflow).not.toBe("hidden");
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    expect(trigger).toHaveFocus();
-    await user.click(trigger);
-    await user.click(screen.getByRole("menuitem", { name: "Members" }));
-    expect(await screen.findByRole("button", { name: "Pages in engineering" })).toHaveFocus();
-    expect(within(screen.getByRole("navigation", { name: "Current page" })).getByText("Members")).toHaveAttribute("aria-current", "page");
-  });
-
-  it("gives documents an independent Vault menu without selecting Overview or turning the title into a menu", async () => {
-    const user = userEvent.setup();
-    render(<MemoryRouter initialEntries={["/vault/%ED%8C%80%20Vault/doc/notes%2Fhello.md"]}><AppPageLocation /></MemoryRouter>);
-    const trigger = screen.getByRole("button", { name: "Pages in 팀 Vault" });
-    const trail = screen.getByRole("navigation", { name: "Current page" });
-    expect(trail).toContainElement(trigger);
-    expect(within(trail).getByRole("link", { name: "팀 Vault" })).toHaveAttribute("href", "/vault/%ED%8C%80%20Vault");
-    trigger.focus();
-    await user.keyboard("{Enter}");
-    const menu = screen.getByRole("menu", { name: "Vault pages" });
-    expect(within(menu).getAllByRole("menuitem").map(item => item.textContent)).toEqual([
-      "Overview", "Graph", "Public links", "Members", "Settings",
-    ]);
-    expect(menu.querySelector('[aria-current="page"]')).toBeNull();
-    expect(within(menu).getByRole("menuitem", { name: "Settings" })).toHaveAttribute("href", "/vault/%ED%8C%80%20Vault/settings");
-    expect(document.body.style.overflow).not.toBe("hidden");
-    await user.keyboard("{Escape}");
-    expect(trigger).toHaveFocus();
-    await user.click(trigger);
-    await user.click(screen.getByRole("menuitem", { name: "Settings" }));
-    expect(await screen.findByRole("button", { name: "Pages in 팀 Vault" })).toHaveFocus();
-    expect(within(screen.getByRole("navigation", { name: "Current page" })).getByText("Settings")).toHaveAttribute("aria-current", "page");
-  });
-
-  it.each([true, false])("does not duplicate the breadcrumb guard for a portalled page menu (navigation allowed: %s)", async allowed => {
+  it.each([true, false])("keeps the Vault name a guarded Overview link (allowed=%s)", async allowed => {
     const user = userEvent.setup();
     const guard = vi.fn(() => allowed);
     function GuardedLocation() {
@@ -104,31 +55,24 @@ describe("App page location", () => {
       return <AppPageLocation />;
     }
     render(<MemoryRouter initialEntries={["/vault/team/settings"]}><ResourceNavigationProvider><GuardedLocation /></ResourceNavigationProvider></MemoryRouter>);
-    await user.click(screen.getByRole("button", { name: "Pages in team" }));
-    await user.click(screen.getByRole("menuitem", { name: "Members" }));
-    expect(guard).toHaveBeenNthCalledWith(1, "/vault/team/members");
-    // An allowed link also passes through the provider's router-wide guard.
-    // The breadcrumb must not add a third check for this portalled menu.
+    await user.click(screen.getByRole("link", { name: "team" }));
+    expect(guard).toHaveBeenNthCalledWith(1, "/vault/team");
     expect(guard).toHaveBeenCalledTimes(allowed ? 2 : 1);
-    expect(within(screen.getByRole("navigation", { name: "Current page" })).getByText(allowed ? "Members" : "Settings")).toHaveAttribute("aria-current", "page");
+    expect(within(screen.getByRole("navigation", { name: "Current page" })).getByText(allowed ? "Overview" : "Settings")).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("button", { name: /Pages in/ })).not.toBeInTheDocument();
   });
 
-  it("keeps the adjacent Vault name a guarded Overview link and leaves modified menu clicks to the browser", async () => {
-    const user = userEvent.setup();
+  it("leaves modified Vault-link clicks to the browser", () => {
     const guard = vi.fn(() => false);
     function GuardedLocation() {
       useResourceNavigationGuard(guard);
       return <AppPageLocation />;
     }
     render(<MemoryRouter initialEntries={["/vault/team/settings"]}><ResourceNavigationProvider><GuardedLocation /></ResourceNavigationProvider></MemoryRouter>);
-    await user.click(screen.getByRole("link", { name: "team" }));
-    expect(guard).toHaveBeenCalledExactlyOnceWith("/vault/team");
-    guard.mockClear();
-    await user.click(screen.getByRole("button", { name: "Pages in team" }));
-    const members = screen.getByRole("menuitem", { name: "Members" });
-    expect(members).toHaveAttribute("href", "/vault/team/members");
-    fireEvent.click(members, { ctrlKey: true });
+    const vault = screen.getByRole("link", { name: "team" });
+    expect(vault).toHaveAttribute("href", "/vault/team");
+    fireEvent.click(vault, { ctrlKey: true });
     expect(guard).not.toHaveBeenCalled();
-    expect(within(screen.getByRole("navigation", { name: "Current page" })).getByText("Settings")).toHaveAttribute("aria-current", "page");
+    expect(screen.getByText("Settings")).toHaveAttribute("aria-current", "page");
   });
 });

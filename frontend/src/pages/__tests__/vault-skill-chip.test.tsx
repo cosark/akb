@@ -532,8 +532,9 @@ describe("vault overview content hierarchy", () => {
     const access = await screen.findByRole("region", { name: "Access and ownership" });
     expect(access).toHaveTextContent(label!);
     expect(access).toHaveTextContent(explanation!);
-    expect(within(access).getAllByRole("link")).toHaveLength(1);
-    expect(within(access).getByRole("link", { name: /Members.*5/ })).toHaveAttribute("href", "/vault/my-v/members");
+    expect(within(access).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(access).getByText("Members").closest("div")).toHaveTextContent("5");
+    expect(within(screen.getByRole("navigation", { name: "Vault pages" })).getByRole("link", { name: "Members" })).toHaveAttribute("href", "/vault/my-v/members");
     expect(within(access).queryByRole("button")).toBeNull();
   });
 
@@ -560,6 +561,9 @@ describe("vault overview content hierarchy", () => {
     const summary = screen.getByRole("region", { name: "Vault summary" });
     const details = screen.getByRole("complementary", { name: "Vault overview details" });
     expect(summary).toContainElement(contents);
+    const pages = within(summary).getByRole("navigation", { name: "Vault pages" });
+    expect(within(pages).getAllByRole("link").map(link => link.textContent)).toEqual(["Graph", "Public links", "Members", "Settings"]);
+    expect(within(pages).queryByRole("link", { name: "Overview" })).not.toBeInTheDocument();
     expect(details).not.toContainElement(contents);
     expect(within(summary).getByText("writer", { exact: true })).toBeInTheDocument();
     expect(within(summary).getByText("public:reader")).toBeInTheDocument();
@@ -571,7 +575,8 @@ describe("vault overview content hierarchy", () => {
     }
     expect(within(contents).queryByText("Members")).toBeNull();
     const access = screen.getByRole("region", { name: "Access and ownership" });
-    expect(within(access).getByRole("link", { name: /Members.*5/ })).toHaveAttribute("href", "/vault/my-v/members");
+    expect(within(access).getByText("Members").closest("div")).toHaveTextContent("5");
+    expect(within(screen.getByRole("navigation", { name: "Vault pages" })).getByRole("link", { name: "Members" })).toHaveAttribute("href", "/vault/my-v/members");
     expect(access).not.toHaveTextContent("Your role");
     expect(within(details).queryByRole("region", { name: "Tables" })).toBeNull();
     expect(screen.queryByRole("link", { name: /service_catalog/ })).toBeNull();

@@ -7,7 +7,7 @@ import { useResourceNavigation } from "@/contexts/resource-navigation-context";
 
 /** Shared location grammar for Vault pages and their resource readers. */
 export function VaultBreadcrumb({
-  vault, title, kind, icon: KindIcon, children, vaultAction, className, ariaLabel = "Current page",
+  vault, title, kind, icon: KindIcon, children, className, ariaLabel = "Current page",
 }: {
   vault: string;
   title: string;
@@ -15,8 +15,6 @@ export function VaultBreadcrumb({
   icon?: LucideIcon;
   /** Optional Collection list items between the Vault and current location. */
   children?: ReactNode;
-  /** Page-level controls only; standalone preview trails omit this slot. */
-  vaultAction?: ReactNode;
   className?: string;
   ariaLabel?: string;
 }) {
@@ -26,16 +24,14 @@ export function VaultBreadcrumb({
       onClickCapture={(event) => {
         if (event.button !== 0 || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
         const anchor = (event.target as HTMLElement).closest<HTMLAnchorElement>("a[href]");
-        // Menus can portal from the Vault action. Their own leave guard owns
-        // navigation, even though React events still bubble through this nav.
-        if (!anchor || anchor.dataset.slot === "vault-page-link" || anchor.target === "_blank" || anchor.origin !== window.location.origin) return;
+        if (!anchor || anchor.target === "_blank" || anchor.origin !== window.location.origin) return;
         if (!requestNavigation(`${anchor.pathname}${anchor.search}${anchor.hash}`)) {
           event.preventDefault();
           event.stopPropagation();
         }
       }}>
       <ol className="flex min-w-0 items-center gap-1.5">
-        <li className={cn("flex min-w-0 items-center", vaultAction ? "max-w-[40%]" : "max-w-[30%]", kind && "@max-xs/resource-location:max-w-none @max-xs/resource-location:shrink-0")}>
+        <li className={cn("flex min-w-0 max-w-[30%] items-center", kind && "@max-xs/resource-location:max-w-none @max-xs/resource-location:shrink-0")}>
           <Link
             to={`/vault/${encodeURIComponent(vault)}`}
             title={vault}
@@ -46,7 +42,6 @@ export function VaultBreadcrumb({
             <Box className="h-4 w-4 shrink-0" aria-hidden />
             <span className={cn("truncate", kind && "@max-xs/resource-location:sr-only")}>{vault}</span>
           </Link>
-          {vaultAction}
         </li>
         {children}
         <li className="flex min-w-0 flex-1 items-center gap-1.5">

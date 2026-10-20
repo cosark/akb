@@ -1,5 +1,4 @@
 import { Link } from "react-router-dom";
-import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { File, FileText, MoreHorizontal, Table2 } from "lucide-react";
@@ -14,7 +13,7 @@ const linkClass = "inline-flex min-w-0 items-center gap-1.5 rounded-[var(--radiu
 const controlClass = "inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-foreground-muted hover:bg-surface-hover hover:text-link focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:h-8 lg:w-8";
 
 /** Uses canonical page metadata and a single authorized directory snapshot. */
-export function ResourceBreadcrumb({ location, className, vaultAction }: { location: ResourceLocation; className?: string; vaultAction?: ReactNode }) {
+export function ResourceBreadcrumb({ location, className }: { location: ResourceLocation; className?: string }) {
   const user = useCurrentUser();
   const { checking, revision } = useAccessVerification();
   const directory = useQuery({
@@ -39,7 +38,7 @@ export function ResourceBreadcrumb({ location, className, vaultAction }: { locat
 
   return (
       <VaultBreadcrumb vault={location.vault} title={location.title} kind={location.kind}
-        icon={ResourceIcon} ariaLabel="Resource location" className={className} vaultAction={vaultAction}>
+        icon={ResourceIcon} ariaLabel="Resource location" className={className}>
           {parent && <li className={cn("flex shrink-0 items-center gap-1.5", !ancestors.length && "@xs/resource-location:hidden")}>
             <span aria-hidden className="text-subtle">/</span>
             <DropdownMenu.Root modal={false}>

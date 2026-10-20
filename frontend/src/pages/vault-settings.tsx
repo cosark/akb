@@ -121,7 +121,6 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
   const [guideDraft, setGuideDraft] = useState({ dirty: false, saving: false });
   const [pendingExit, setPendingExit] = useState<PendingExit | null>(null);
   const confirmExitFocus = useRef<HTMLElement | null>(null);
-  const exitFromMenu = useRef(false);
   const generalStatusRef = useRef<HTMLSpanElement>(null);
   const accessStatusRef = useRef<HTMLSpanElement>(null);
   const settingsMainRef = useRef<HTMLDivElement>(null);
@@ -234,8 +233,9 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
   function requestExit(exit: PendingExit) {
     if (busy || (pendingExit && exit.kind !== "history")) return;
     if (!pendingExit) {
-      confirmExitFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      exitFromMenu.current = !!confirmExitFocus.current?.closest('[role="menu"]');
+      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const triggerId = active?.closest('[role="menu"]')?.getAttribute("aria-labelledby");
+      confirmExitFocus.current = (triggerId ? document.getElementById(triggerId) : null) ?? active;
     }
     setPendingExit(exit);
   }
@@ -508,10 +508,6 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
         open={pendingExit !== null}
         onOpenChange={open => {
           if (open || !mountedRef.current) return;
-          if (exitFromMenu.current) {
-            confirmExitFocus.current = [...document.querySelectorAll<HTMLElement>('[data-slot="vault-page-switcher"]')]
-              .find(trigger => trigger.getClientRects().length > 0) ?? null;
-          }
           if (!confirmExitFocus.current?.isConnected) {
             confirmExitFocus.current = settingsMainRef.current?.querySelector<HTMLElement>("#vault-description") ?? null;
           }
