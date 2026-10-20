@@ -1122,7 +1122,7 @@ describe("DocumentPage view toggle", () => {
     expect(readingTools).toContainElement(mode);
     expect(readingTools).toContainElement(screen.getByRole("button", { name: "Actions for DocTitle" }));
     expect(screen.queryByLabelText("Document statistics: 3 lines, 20 Bytes")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Copy markdown" })).not.toBeInTheDocument();
+    expect(within(readingTools).getByRole("button", { name: "Copy markdown" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Publish" })).not.toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Vault sections" })).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Document context" })).not.toBeInTheDocument();
@@ -1228,7 +1228,7 @@ describe("DocumentPage view toggle", () => {
     renderAt("/vault/v/doc/notes%2Fhello.md");
 
     const edit = await screen.findByRole("button", { name: "Edit" });
-    expect(edit).toHaveTextContent("Edit");
+    expect(edit.textContent).toBe("");
     expect(edit).not.toHaveClass("bg-primary", "shadow-sm");
     expect(screen.getAllByRole("radio").map((radio) => radio.getAttribute("aria-label"))).toEqual([
       "Preview",
@@ -1312,27 +1312,25 @@ describe("DocumentPage view toggle", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps the summary accessible through an icon without duplicating text or properties in the toolbar", async () => {
+  it("keeps the summary in the rendered article without duplicating it in the toolbar or properties", async () => {
     const user = userEvent.setup();
     getDocumentMock.mockResolvedValue(
       makeDoc({ summary: "A concise orientation to the document before the full body begins." }),
     );
     renderAt("/vault/v/doc/notes%2Fhello.md");
 
-    const summary = await screen.findByRole("button", { name: "Read document summary" });
-    expect(summary.textContent).toBe("");
-    expect(summary.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    const summary = await screen.findByRole("region", { name: "Document summary" });
+    expect(summary).toHaveTextContent("A concise orientation to the document before the full body begins.");
     const readingTools = screen.getByRole("group", { name: "Document reading tools" });
     expect(within(readingTools).getByRole("radio", { name: "Preview" })).toHaveAttribute("aria-checked", "true");
-    expect(readingTools).toContainElement(summary);
+    expect(readingTools).not.toContainElement(summary);
+    expect(screen.getByRole("article")).toContainElement(summary);
+    const bodyHeading = screen.getByRole("heading", { name: "BodyHeading", level: 2 });
+    expect(bodyHeading.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(readingTools).queryByRole("button", { name: "Read document summary" })).not.toBeInTheDocument();
     expect(readingTools).toContainElement(screen.getByRole("button", { name: "Document details" }));
     expect(within(readingTools).queryByLabelText(/^Document statistics:/)).not.toBeInTheDocument();
-    expect(screen.queryByText("A concise orientation to the document before the full body begins.")).not.toBeInTheDocument();
     expect(document.querySelector('[data-slot="document-context-panel"]')).not.toBeInTheDocument();
-    await user.click(summary);
-    expect(await screen.findByRole("dialog", { name: "Document summary" })).toHaveTextContent("A concise orientation");
-    await user.keyboard("{Escape}");
-    await waitFor(() => expect(summary).toHaveFocus());
     const details = await openDocumentDetails(user, "Properties");
     expect(within(details).getByText("Size", { exact: true }).nextElementSibling).toHaveTextContent("3 lines · 20 Bytes");
     expect(within(details).queryByText("A concise orientation to the document before the full body begins.")).not.toBeInTheDocument();
@@ -1342,7 +1340,7 @@ describe("DocumentPage view toggle", () => {
     renderAt("/vault/v/doc/notes%2Fhello.md");
 
     await screen.findByRole("heading", { level: 2, name: "BodyHeading" });
-    expect(screen.queryByRole("note", { name: "Document summary" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Document summary" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Read document summary" })).not.toBeInTheDocument();
   });
 
@@ -1595,6 +1593,37 @@ describe("DocumentPage view toggle", () => {
     expect(screen.getByTestId("location-search")).toHaveTextContent("view=raw");
   });
 
+  it("keeps one accessible icon copy action before Edit across Preview and Raw, including manual recovery", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("Clipboard unavailable"));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    getVaultInfoMock.mockResolvedValue({ role: "writer" });
+    renderAt("/vault/v/doc/notes%2Fhello.md");
+    const edit = await screen.findByRole("button", { name: "Edit" });
+    const copy = screen.getByRole("button", { name: "Copy markdown" });
+    const tools = screen.getByRole("group", { name: "Document reading tools" });
+    expect(tools).toContainElement(copy);
+    expect(copy.textContent).toBe("");
+    expect(edit.textContent).toBe("");
+    expect(copy.compareDocumentPosition(edit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.click(copy);
+    await waitFor(() => expect(copy).toHaveAccessibleName("Markdown copied"));
+    expect(writeText).toHaveBeenCalledWith(SAMPLE_CONTENT);
+
+    await user.click(screen.getByRole("radio", { name: "Raw markdown" }));
+    await screen.findByTestId("doc-raw");
+    expect(within(tools).getByRole("button", { name: /^(Copy markdown|Markdown copied)$/ })).toBe(copy);
+    expect(screen.getAllByRole("button", { name: /^(Copy markdown|Markdown copied)$/ })).toHaveLength(1);
+    await user.click(copy);
+    const manual = await screen.findByRole("dialog", { name: "Copy markdown" });
+    expect(within(manual).getByRole("textbox", { name: "Markdown to copy" })).toHaveValue(SAMPLE_CONTENT);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(copy).toHaveFocus());
+    await user.click(screen.getByRole("radio", { name: "Preview" }));
+    expect(within(tools).getByRole("button", { name: /^(Copy markdown|Markdown copied)$/ })).toBe(copy);
+    expect(copy).toBeVisible();
+  });
+
   it("Copy button writes raw content to the clipboard and flips to COPIED", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
@@ -1633,7 +1662,8 @@ describe("DocumentPage view toggle", () => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     renderAt("/vault/v/doc/notes%2Fhello.md");
     const actions = await screen.findByRole("button", { name: "Actions for DocTitle" });
-    expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
+    if (label === "Copy document link") expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
+    else expect(screen.getByRole("button", { name: label })).toBeVisible();
     await user.click(actions);
     await user.click(screen.getByRole("menuitem", { name: label }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(expected));

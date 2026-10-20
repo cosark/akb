@@ -46,7 +46,7 @@ import { VAULT_SKILL_PATH } from "@/lib/skill";
 import { vaultGuideEditHref, vaultGuideHref } from "@/lib/vault-guide-navigation";
 import { DocumentOutline } from "@/components/doc-outline";
 import { DocumentView } from "@/components/document-view";
-import { DocumentCopyButton, DocumentIconButton, DocumentReadModes, DocumentStatistics, DocumentSummary, DocumentTimestamp, type DocumentCopyHandle } from "@/components/document-reading-controls";
+import { DocumentCopyButton, DocumentIconButton, DocumentReadModes, DocumentStatistics, DocumentTimestamp, type DocumentCopyHandle } from "@/components/document-reading-controls";
 import { DocumentContextPanel } from "@/components/document-context-panel";
 import { DocumentPublicationControl } from "@/components/document-publication-control";
 import { ResourceCommandRow } from "@/components/resource-command-row";
@@ -1561,7 +1561,6 @@ function DocumentPageContent({
             <>
               <div role="group" aria-label="Reading controls" className="document-reader-controls">
                 {!isDiffMode && <DocumentReadModes view={view === "raw" ? "raw" : "rendered"} onChange={setView} idPrefix={viewId} contentId="document-reading-canvas" />}
-                <DocumentSummary key={resourceScope} summary={doc.summary} />
               </div>
               <div className="document-reader-status">
                 {doc.status === "draft" && !isHistorical && !isDiffMode && <Badge variant="draft">Draft</Badge>}
@@ -1579,12 +1578,13 @@ function DocumentPageContent({
               {savingBody ? "Saving…" : "Save changes"}
             </Button>
           </> : <>
-            {canEdit && <Button ref={editButtonRef} type="button" variant="ghost" size="sm" data-reader-control aria-label="Edit" className="document-reader-edit text-link" onClick={() => requestEdit()}>
-              <Pencil className="h-4 w-4" aria-hidden /><span>Edit</span>
-            </Button>}
-            {canManageGuide && <Button asChild variant="ghost" size="sm" data-reader-control className="document-reader-edit text-link">
-              <Link to={vaultGuideEditHref(name!)} aria-label="Edit guide"><Pencil className="h-4 w-4" aria-hidden /><span>Edit guide</span></Link>
-            </Button>}
+            <DocumentCopyButton key={resourceScope} content={doc.content || ""} actionRef={copyActionRef} returnFocusRef={actionsTriggerRef} onCopied={label => setCopyNotice({ label })} />
+            {canEdit && <DocumentIconButton ref={editButtonRef} label="Edit" className="document-reader-edit text-link" onClick={() => requestEdit()}>
+              <Pencil className="h-4 w-4" aria-hidden />
+            </DocumentIconButton>}
+            {canManageGuide && <DocumentIconButton asChild label="Edit guide" className="document-reader-edit text-link">
+              <Link to={vaultGuideEditHref(name!)}><Pencil className="h-4 w-4" aria-hidden /></Link>
+            </DocumentIconButton>}
             <DocumentIconButton ref={detailsTriggerRef} label="Document details" aria-expanded={detailsOpen} aria-controls={`${viewId}-details`}
               onClick={() => setDetailsOpen(open => !open)}>
               <PanelRight className="h-4 w-4" aria-hidden />
@@ -1731,10 +1731,6 @@ function DocumentPageContent({
               )}
             >
 
-              <div className="document-raw-controls" hidden={view !== "raw"}>
-                <span className="text-xs text-foreground-muted">Markdown</span>
-                <DocumentCopyButton key={resourceScope} content={doc.content || ""} actionRef={copyActionRef} returnFocusRef={actionsTriggerRef} onCopied={label => setCopyNotice({ label })} hidden={view !== "raw"} labelled />
-              </div>
               {inEditMode ? (
                 <DocumentAuthoringLayout
                   detailsId="document-edit-details"

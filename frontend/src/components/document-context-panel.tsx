@@ -75,7 +75,14 @@ export function DocumentContextPanel({ id: suppliedId, open, onOpenChange, view,
     return () => { observer?.disconnect(); layout.ownerDocument.removeEventListener("focusin", measure); };
   }, [hasForegroundDialog, modalCount, restoreInsideFocus]);
   useLayoutEffect(() => {
-    if (!open || !focusRequest || previousRequest.current === focusRequest) return;
+    if (!open) {
+      // Closing cancels this opening's deferred focus as well as its frame.
+      // Reopening after a comparison must respect the caller's focus restore;
+      // only a newly incremented request should focus a disclosure again.
+      previousRequest.current = focusRequest;
+      return;
+    }
+    if (!focusRequest || previousRequest.current === focusRequest) return;
     let frame = 0;
     const focusSection = (attempt = 0) => {
       const target = sectionRefs.current[view];

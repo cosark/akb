@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getDocument } from "@/lib/api";
 import { MarkdownRender } from "@/components/markdown-render";
 import { Alert } from "@/components/ui/alert";
-import { DocumentCopyButton, DocumentReadModes, DocumentSummary, DocumentTimestamp } from "@/components/document-reading-controls";
+import { DocumentCopyButton, DocumentReadModes, DocumentTimestamp } from "@/components/document-reading-controls";
 import { ResourceCommandRow } from "@/components/resource-command-row";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -107,11 +107,10 @@ export function DocumentView({
       {!bodyOnly && <ResourceCommandRow appearance="reader" meta={
         <div role="group" aria-label="Document reading tools" className="flex shrink-0 items-center gap-2">
           <DocumentReadModes view={view} onChange={setView} idPrefix={idPrefix} contentId={`${idPrefix}-content`} />
-          <DocumentSummary summary={doc.summary} />
         </div>
       }>
         {!version && <DocumentTimestamp value={doc.updated_at} compact />}
-        <DocumentCopyButton key={`${vault}:${docId}:${version ?? "latest"}`} content={doc.content || ""} hidden={view !== "raw"} labelled />
+        <DocumentCopyButton key={`${vault}:${docId}:${version ?? "latest"}`} content={doc.content || ""} />
       </ResourceCommandRow>}
 
       {/* ── Doc body ──────────────────────────────────────────────── */}
@@ -125,6 +124,7 @@ export function DocumentView({
         >
           <MarkdownRender
             markdown={doc.content || ""}
+            summary={doc.summary}
             className="document-reading-flow"
             assetContext={{
               mode: "authenticated",

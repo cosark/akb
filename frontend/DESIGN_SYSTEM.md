@@ -1013,19 +1013,25 @@ an `sr-only` summary, never the only signal.
   Preserve the parent and resource title before secondary ancestry.
 - **Document workspace**: the location trail is the sole visible document
   identity. Keep one semantic `h1#doc-title` and preserve authored headings.
-  One flat command row groups icon-only Preview / Raw selection and the optional
-  summary icon on the left, quiet Last edited metadata in the middle, and Edit,
-  Document details and overflow on the right. Read modes use a radiogroup with
-  a sliding surface thumb, accessible names, arrow/Home/End keyboard selection
-  and one tab stop. They are not navigation tabs. Reduce motion on request.
-  Summary never displays an inline excerpt or marquee: its labelled icon opens
-  a full-text, scrollable nonmodal popover. Tooltip and popover do not overlap.
-  Escape restores its trigger; outside interaction retains the outside target.
-  Controls use 14px medium type, small token radii and 32px targets above 48rem
-  of available command space, 44px below. Below 40rem, timestamp/status form a
-  quiet second line while reading controls and actions remain intact above.
-  At 22rem or less, Edit keeps its labelled icon and 44px target while its
-  visible text yields, so the complete toolbar fits a 320px screen.
+  One flat command row groups icon-only Preview / Raw selection on the left,
+  quiet Last edited metadata in the middle, and Copy markdown, Edit, Document
+  details and overflow icons on the right. Edit and guide editing have named
+  tooltips and no visible text label. Read modes use a white/slate surface,
+  neutral outer stroke and sliding teal selection outline, without a gray inset
+  or shadow. Keep radiogroup semantics, arrow/Home/End selection and one tab stop.
+  Controls use 32px targets above 48rem of command space and 44px below. Below
+  40rem, timestamp/status form a quiet second line so the full toolbar fits 320px.
+  Summary is ordinary muted 14px text directly after the first authored heading,
+  or before a headingless body, with the same centered reading measure. Do not
+  add a Summary label, card, icon disclosure or duplicate title. Use the shared
+  viewer's presentation-only `afterLeadingHeading` slot: never split/rewrite
+  Markdown, alter heading anchors, or include metadata in copied source.
+  Only overflowing text moves slowly, with pauses at both ends and clearance
+  beyond the right fade so the final characters become completely readable.
+  Hover/focus pauses motion; an explicit Pause/Resume control remains available.
+  Focus allows native horizontal scrolling from the beginning. Reduced motion
+  wraps the full text and removes motion controls. Offscreen/hidden-document
+  summaries pause, and resource/summary changes reset local animation state.
   Missing or invalid dates remain absent in the toolbar and say Not available
   in Properties. Last edited uses `updated_at` with exact localized time and
   timezone on hover/focus. Historical/diff views instead use Version saved
@@ -1035,7 +1041,8 @@ an `sr-only` summary, never the only signal.
   still opens options before any public write and preserves permission reasons.
   Keep publication and clipboard fallback controllers mounted when menus close.
   Failed clipboard access offers manual copying and returns to the invoking
-  control. Raw also exposes a contextual labelled Copy markdown action.
+  control. Keep one persistent toolbar copy control across Preview / Raw so
+  failed clipboard access retains its manual-copy dialog and return focus.
   Reading width has no user-facing control. Preview, Raw and loading use one
   automatic centered 52rem measure with container-responsive 16–32px side insets
   and 20px block padding. The first authored block has no extra top margin.

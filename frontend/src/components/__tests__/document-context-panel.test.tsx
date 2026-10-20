@@ -61,6 +61,47 @@ afterEach(() => {
 });
 
 describe("DocumentContextPanel", () => {
+  it("does not replay a cancelled section-focus request after reopening and still handles a new request", () => {
+    measureReader(1200);
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      const id = ++nextFrame;
+      frames.set(id, callback);
+      return id;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    const flushFrames = () => act(() => {
+      const pending = [...frames.values()];
+      frames.clear();
+      pending.forEach(callback => callback(performance.now()));
+    });
+    function HistoryHarness({ open, focusRequest }: { open: boolean; focusRequest: number }) {
+      const triggerRef = useRef<HTMLButtonElement>(null);
+      return <div data-testid="reader-layout">
+        <button ref={triggerRef} type="button">Document details</button>
+        <DocumentContextPanel open={open} onOpenChange={() => {}} view="history" onViewChange={() => {}}
+          triggerRef={triggerRef} focusRequest={focusRequest} outline={<p>Outline</p>} info={null} relations={null}
+          history={<button type="button">View changes in selected version</button>} />
+      </div>;
+    }
+    const rendered = render(<HistoryHarness open={false} focusRequest={0} />);
+    rendered.rerender(<HistoryHarness open focusRequest={1} />);
+    expect(frames.size).toBeGreaterThan(0);
+    // Comparing a revision can close the panel before its first focus frame.
+    rendered.rerender(<HistoryHarness open={false} focusRequest={1} />);
+    rendered.rerender(<HistoryHarness open focusRequest={1} />);
+    const comparison = screen.getByRole("button", { name: "View changes in selected version" });
+    act(() => comparison.focus());
+    flushFrames();
+    expect(comparison).toHaveFocus();
+
+    rendered.rerender(<HistoryHarness open focusRequest={2} />);
+    flushFrames();
+    const panel = screen.getByRole("complementary", { name: "Document details" });
+    expect(disclosure(panel, "Version history")).toHaveFocus();
+  });
+
   it("uses one toolbar trigger and mutually exclusive native disclosures beside the persistent outline", async () => {
     const user = userEvent.setup();
     measureReader(1088);
