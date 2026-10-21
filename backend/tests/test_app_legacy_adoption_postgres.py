@@ -385,7 +385,7 @@ async def test_history_upgrade_preserves_rows_and_validates_new_live_references(
                 await append(fixture["vault_id"], iid)
 
 
-@pytest.mark.parametrize("operation", ["apply", "create_replay"])
+@pytest.mark.parametrize("operation", ["apply", "create_replay", "fresh_create"])
 async def test_vault_delete_serializes_with_adoption_writes(monkeypatch, operation):
     async with _fresh_database() as pool:
         monkeypatch.setattr(adoption, "get_pool", lambda: pool)
@@ -395,11 +395,14 @@ async def test_vault_delete_serializes_with_adoption_writes(monkeypatch, operati
             targets=[{"vault_id": str(fixture["vault_id"]), "table_allowlist": ["orders"]}],
             user=_admin(), correlation_id="delete-race",
         )
-        plan = await adoption.create_legacy_adoption(fixture["app_id"], **args)
+        plan = None if operation == "fresh_create" else await adoption.create_legacy_adoption(
+            fixture["app_id"], **args,
+        )
         async with pool.acquire() as deleting:
             async with deleting.transaction():
                 await deleting.execute("SELECT id FROM vaults WHERE id=$1 FOR UPDATE", fixture["vault_id"])
                 if operation == "apply":
+                    assert plan is not None
                     task = asyncio.create_task(adoption.apply_legacy_adoption(
                         fixture["app_id"], plan["adoption_id"], user=_admin(), correlation_id="race-apply",
                     ))
@@ -422,8 +425,122 @@ async def test_vault_delete_serializes_with_adoption_writes(monkeypatch, operati
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
                     raise
-            with pytest.raises(ConflictError, match="deleted.*new adoption plan"):
+            expected = NotFoundError if operation == "fresh_create" else ConflictError
+            with pytest.raises(expected):
                 await asyncio.wait_for(task, timeout=5)
+        async with pool.acquire() as conn:
+            assert await conn.fetchval("SELECT count(*) FROM vault_app_installations") == 0
+            assert await conn.fetchval("SELECT count(*) FROM app_legacy_adoption_plans") == (
+                0 if operation == "fresh_create" else 1
+            )
+
+
+@pytest.mark.parametrize("operation", ["apply", "create_replay", "fresh_create"])
+async def test_adoption_holds_parent_until_commit_then_allows_delete(monkeypatch, operation):
+    async with _fresh_database() as pool:
+        monkeypatch.setattr(adoption, "get_pool", lambda: pool)
+        fixture = await _fixture(pool, label="adopt-first")
+        user = _admin()
+        args = dict(
+            baseline_release_id=fixture["release_id"], idempotency_key=str(uuid.uuid4()),
+            targets=[{"vault_id": str(fixture["vault_id"]), "table_allowlist": ["orders"]}],
+            user=user, correlation_id="adopt-first",
+        )
+        plan = None if operation == "fresh_create" else await adoption.create_legacy_adoption(
+            fixture["app_id"], **args,
+        )
+        ready, release = asyncio.Event(), asyncio.Event()
+        writer_pid = None
+        record = adoption._record_ledger_audit
+
+        async def pause_before_commit(conn, **kwargs):
+            nonlocal writer_pid
+            await record(conn, **kwargs)
+            if kwargs["action"] in {"plan_created", "plan_replayed", "target_applied"}:
+                writer_pid = conn.get_server_pid()
+                ready.set()
+                await release.wait()
+
+        monkeypatch.setattr(adoption, "_record_ledger_audit", pause_before_commit)
+        if operation == "apply":
+            assert plan is not None
+            call = adoption.apply_legacy_adoption(
+                fixture["app_id"], plan["adoption_id"], user=user, correlation_id="adopt-first",
+            )
+        else:
+            call = adoption.create_legacy_adoption(fixture["app_id"], **args)
+        writing = asyncio.create_task(call)
+        deleting = None
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=5)
+            async with pool.acquire() as delete_conn:
+                deleting = asyncio.create_task(delete_conn.execute(
+                    "DELETE FROM vaults WHERE id=$1", fixture["vault_id"],
+                ))
+                async with asyncio.timeout(5):
+                    while True:
+                        async with pool.acquire() as observer:
+                            blocked = await observer.fetchval(
+                                "SELECT $1::int=ANY(pg_blocking_pids($2))",
+                                writer_pid, delete_conn.get_server_pid(),
+                            )
+                        if blocked:
+                            break
+                        await asyncio.sleep(0.01)
+                assert not deleting.done()
+                release.set()
+                result, _ = await asyncio.wait_for(asyncio.gather(writing, deleting), timeout=5)
+        finally:
+            release.set()
+            tasks = [task for task in (writing, deleting) if task is not None]
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        retained = await adoption.get_legacy_adoption(
+            fixture["app_id"], result["adoption_id"], user=user, correlation_id="after-delete",
+        )
+        assert retained["targets"][0]["vault_deleted"] is True
+        assert retained["input_digest"] == result["input_digest"]
+        async with pool.acquire() as conn:
+            assert await conn.fetchval("SELECT count(*) FROM vault_app_installations") == 0
+
+
+async def test_mixed_deleted_targets_preserve_per_target_progress(monkeypatch):
+    # Apply is deliberately resumable per target, not a whole-plan transaction.
+    async with _fresh_database() as pool:
+        monkeypatch.setattr(adoption, "get_pool", lambda: pool)
+        fixtures = [await _fixture(pool, label=label) for label in ("live", "deleted")]
+        user = _admin()
+        app = fixtures[0]
+        plan = await adoption.create_legacy_adoption(
+            app["app_id"], baseline_release_id=app["release_id"],
+            idempotency_key=str(uuid.uuid4()), user=user, correlation_id="mixed-plan",
+            targets=[{"vault_id": str(item["vault_id"]), "table_allowlist": ["orders"]}
+                     for item in fixtures],
+        )
+        live, deleted = plan["targets"]  # canonical Vault UUID order
+        async with pool.acquire() as conn:
+            before = await conn.fetch("SELECT * FROM app_legacy_adoption_audit ORDER BY id")
+            await conn.execute("DELETE FROM vaults WHERE id=$1", uuid.UUID(deleted["vault_id"]))
+        with pytest.raises(ConflictError, match="deleted.*new adoption plan"):
+            await adoption.apply_legacy_adoption(
+                app["app_id"], plan["adoption_id"], user=user, correlation_id="mixed-apply",
+            )
+        retained = await adoption.get_legacy_adoption(
+            app["app_id"], plan["adoption_id"], user=user, correlation_id="mixed-read",
+        )
+        assert retained["status"] == "partial"
+        assert retained["targets"][0]["state"] == "applied"
+        assert retained["targets"][1] == {**deleted, "vault_deleted": True}
+        async with pool.acquire() as conn:
+            assert await conn.fetchval(
+                "SELECT array_agg(vault_id) FROM vault_app_installations",
+            ) == [uuid.UUID(live["vault_id"])]
+            after = await conn.fetch("SELECT * FROM app_legacy_adoption_audit ORDER BY id")
+            assert all(row in after for row in before)
+            assert all(row["vault_id"] == uuid.UUID(live["vault_id"])
+                       for row in after if row not in before)
 
 
 async def test_migration_reapply_plan_read_only_apply_and_owned_table_protection(monkeypatch):

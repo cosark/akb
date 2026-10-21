@@ -78,6 +78,14 @@ concurrent edits and stable endpoint identity are additionally required in the
 live-PG lane via `test_graph_native_catalog_pg.py` and
 `test_native_graph_resource_identity_pg.py`.
 
+`test_adoption_vault_delete_e2e.py` requires planned, applied and blocked
+adoption deletion through HTTP, with a non-admin owner, Reader and system
+operator. It checks denied deletion, retained UUIDs, same-name recreation and
+rejected replay through the same reset/PAT fixtures. The live-PG adoption suite
+also checks upgrade retention and both deletion/adoption lock orders. Apply
+commits each target separately: a deleted later target returns 409 after earlier
+live targets may have committed; read the retained plan to inspect partial progress.
+
 The detailed security suite also covers declarative table constraints and
 indexes, stable permission envelopes, private-document and graph boundaries,
 SQL failure-state integrity, and PAT write scopes. The PG-native ACL backstops

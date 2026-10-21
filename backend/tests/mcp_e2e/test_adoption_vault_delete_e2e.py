@@ -1,21 +1,19 @@
-"""Opt-in real API proof for Vault deletion and immutable adoption history.
+"""Required HTTP proof of deletion, retained history and real actor boundaries.
 
-Set AKB_ADOPTION_TEST_URL, AKB_E2E_PAT (Vault owner), and AKB_E2E_ADMIN_PAT
-(registry/history operator). Only randomly named test Vaults are deleted.
-App registry and adoption history are intentionally retained, as in production.
+The repository runtime owns reset, credentials and disposable audit history.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
-import ssl
-import sys
 import uuid
 
 import httpx
 import pytest
+
+from .conftest import _prepare_secondary_user
+from .runtime import RuntimeContext
 
 
 def _digest(value):
@@ -41,22 +39,22 @@ def _release(app_key):
 
 
 @pytest.fixture
-def adoption_clients():
-    origin = os.getenv("AKB_ADOPTION_TEST_URL")
-    if not origin:
-        pytest.skip("set AKB_ADOPTION_TEST_URL for actual adoption/delete checks")
-    owner, admin = os.getenv("AKB_E2E_PAT"), os.getenv("AKB_E2E_ADMIN_PAT")
-    if not owner or not admin:
-        pytest.fail("supply owner and system-admin fixture PATs")
-    ca_file = os.getenv("AKB_E2E_CA_FILE")
-    verify = ssl.create_default_context(cafile=ca_file) if ca_file else True
+def adoption_clients(runtime_session: RuntimeContext):
+    origin = runtime_session.descriptor.app_origin
+    _name, owner, _secrets = _prepare_secondary_user(runtime_session)
+    _name, reader, _secrets = _prepare_secondary_user(runtime_session)
+    admin = runtime_session.pat
     with (
         httpx.Client(base_url=origin, headers={"Authorization": "Bearer " + owner},
-                     verify=verify, timeout=30) as member,
+                     trust_env=False, timeout=30) as member,
         httpx.Client(base_url=origin, headers={"Authorization": "Bearer " + admin},
-                     verify=verify, timeout=30) as operator,
+                     trust_env=False, timeout=30) as operator,
+        httpx.Client(base_url=origin, headers={"Authorization": "Bearer " + reader},
+                     trust_env=False, timeout=30) as viewer,
     ):
-        yield member, operator
+        assert _ok(member.get("/api/v1/auth/me"))["is_admin"] is False
+        assert _ok(operator.get("/api/v1/auth/me"))["is_admin"] is True
+        yield member, operator, viewer
 
 
 def _ok(response, status=200):
@@ -66,7 +64,7 @@ def _ok(response, status=200):
 
 @pytest.mark.parametrize("state", ["planned", "applied", "blocked"])
 def test_delete_retains_evidence_and_never_resurrects_vault(adoption_clients, state):
-    member, operator = adoption_clients
+    member, operator, viewer = adoption_clients
     vault = "adoption-delete-test-" + uuid.uuid4().hex[:12]
     vault_id = _ok(member.post("/api/v1/vaults", params={"name": vault}))["vault_id"]
     try:
@@ -88,12 +86,25 @@ def test_delete_retains_evidence_and_never_resurrects_vault(adoption_clients, st
             plan = _ok(member.post(item + "/apply"))
         assert plan["targets"][0]["state"] == state
         target = plan["targets"][0]
+        assert target["vault_deleted"] is False
+        reader_id = _ok(viewer.get("/api/v1/auth/me"))["user_id"]
+        _ok(member.post(f"/api/v1/vaults/{vault}/grant",
+                        json={"user_id": reader_id, "role": "reader"}))
+        assert viewer.delete("/api/v1/vaults/" + vault).status_code == 403
+        assert viewer.get(item).status_code == 404
+        assert viewer.post(item + "/apply").status_code == 404
+        assert viewer.post(path, json=body, headers=headers).status_code == 403
+        # A denied delete leaves the plan, schema and owner's authority intact.
+        assert _ok(member.get(item))["targets"] == plan["targets"]
+        _ok(member.get(f"/api/v1/tables/{vault}/orders/schema"))
         deleted = member.delete("/api/v1/vaults/" + vault)
         assert deleted.status_code == 200, f"{vault}: {deleted.text}"
         assert member.get(f"/api/v1/tables/{vault}/orders/schema").status_code in (403, 404)
         retained = _ok(operator.get(item))
         assert retained["targets"][0] == {**target, "vault_deleted": True}
         assert retained["input_digest"] == plan["input_digest"]
+        assert member.get(item).status_code == 404
+        assert member.post(item + "/apply").status_code == 404
         for _ in range(2):
             for response in (
                 operator.post(item + "/apply"),
@@ -104,14 +115,11 @@ def test_delete_retains_evidence_and_never_resurrects_vault(adoption_clients, st
         recreated = _ok(member.post("/api/v1/vaults", params={"name": vault}))
         assert recreated["vault_id"] != vault_id
         assert _ok(operator.get(item))["targets"] == retained["targets"]
-        me = _ok(member.get("/api/v1/auth/me"))
-        if not me.get("is_admin"):
-            # Recreating a name must not confer access to the old Vault's ledger.
-            assert member.get(item).status_code == 404
+        # Recreating a name must not confer access to the old Vault's ledger.
+        assert member.get(item).status_code == 404
+        assert member.post(item + "/apply").status_code == 404
         _ok(member.delete("/api/v1/vaults/" + vault))
     finally:
-        # Do not mask a failed request with another request on a connection
-        # the server closed. Leave that exact fixture for diagnosis/cleanup.
-        if sys.exception() is None:
-            cleanup = member.delete("/api/v1/vaults/" + vault)
-            assert cleanup.status_code in (200, 404), f"test cleanup retained {vault}: {cleanup.text}"
+        # The runtime reset also cleans fixtures after a failed assertion.
+        cleanup = member.delete("/api/v1/vaults/" + vault)
+        assert cleanup.status_code in (200, 404), f"test cleanup retained {vault}: {cleanup.text}"
