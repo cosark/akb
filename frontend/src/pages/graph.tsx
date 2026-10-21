@@ -137,7 +137,8 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
   const selected = view.selected ? displayed.nodes.find(n => n.uri === view.selected || n.doc_id === view.selected || docIdFromUri(n.uri) === view.selected) : undefined;
   const edge = displayed.edges.find(item => edgeSelection && item.source === edgeSelection.source && item.target === edgeSelection.target && item.relation === edgeSelection.relation && item.kind === edgeSelection.kind);
   const selectedId = selected && (selected.doc_id || docIdFromUri(selected.uri));
-  const coverage = graphCoverage(base?.meta);
+  // Missing weak links make the map partial only while weak links are shown.
+  const coverage = graphCoverage(base?.meta && weakShown && base.meta.weakTruncated ? { ...base.meta, truncated: true } : base?.meta);
   const orphanCount = merged.nodes.filter(n => n.degree === 0).length;
   const degree = useMemo(() => degreeMap(displayed.edges), [displayed.edges]);
   const hubs = useMemo(() => [...displayed.nodes].sort((a, b) => (degree.get(b.uri) ?? 0) - (degree.get(a.uri) ?? 0)).slice(0, 8), [displayed.nodes, degree]);

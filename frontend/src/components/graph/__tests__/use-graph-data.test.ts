@@ -567,9 +567,15 @@ describe("changedWithin", () => {
     expect(changedWithin(payload, "7", ["focus"], now).edges.map(e => e.target)).toEqual(["fresh"]);
   });
   it("caps map labels at fifteen characters", () => {
-    expect(shortName({ name: "x", title: "dino-shop/recommendationservice OOMKilled" })).toBe("dino-shop/recom…");
+    expect(shortName({ name: "x", title: "dino-shop/recommendationservice OOMKilled" })).toBe("recommendations…");
     expect(shortName({ name: "x", title: "조은우 (dino.jo.eunwoo)" })).toBe("조은우 (dino.jo.eu…");
     expect(shortName({ name: "x", title: "dino-dc1-poc01" })).toBe("dino-dc1-poc01");
+  });
+  it("spends the label on what tells resources apart, not their category or path", () => {
+    expect(shortName({ name: "x", title: "Service dino-shop/frontend", group: "service-catalog" })).toBe("frontend");
+    expect(shortName({ name: "x", title: "Service dino-shop/productcatalogservice", doc_type: "service" })).toBe("productcatalogs…");
+    expect(shortName({ name: "x", title: "Service dino-shop/frontend", group: "incidents" })).toBe("Service dino-sh…");
+    expect(shortName({ name: "x", title: "Runbook", group: "runbooks" })).toBe("Runbook");
   });
 });
 

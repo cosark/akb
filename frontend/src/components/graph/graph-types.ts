@@ -121,8 +121,15 @@ export const GRAPH_SINCE: GraphSince[] = ["1", "7", "30", "all"];
 
 /** Labels on the map are kept short; the inspector and tooltips carry the full title. */
 export const LABEL_MAX_CHARS = 15;
-export function shortName(node: Pick<GraphNode, "name" | "title">): string {
-  const full = displayName(node), chars = [...full];
+export function shortName(node: Pick<GraphNode, "name" | "title" | "doc_type" | "group">): string {
+  // Within 15 characters, spend them on what tells resources apart: drop a leading word that repeats the category
+  // ("Service dino-shop/frontend" under SERVICE) and the path in front of the first word ("dino-shop/frontend").
+  let full = displayName(node);
+  const category = categoryOf(node);
+  const lead = /^(\p{L}{3,})\s+(?=\S)/u.exec(full)?.[1];
+  if (lead && category.toLowerCase().startsWith(lead.toLowerCase())) full = full.slice(lead.length).trimStart();
+  full = full.replace(/^[^\s/]+(?:\/[^\s/]+)*\/(?=[^\s/])/, "");
+  const chars = [...full];
   return chars.length > LABEL_MAX_CHARS ? chars.slice(0, LABEL_MAX_CHARS).join("") + "…" : full;
 }
 

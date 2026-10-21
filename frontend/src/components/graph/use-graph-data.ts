@@ -31,6 +31,8 @@ export interface GraphMeta {
   truncated?: boolean;
   orphanReturned?: number;
   orphanTruncated?: boolean;
+  /** Some weak links around the strongly reached resources were not loaded (a failed or capped request). */
+  weakTruncated?: boolean;
 }
 
 export interface GraphPayload {
@@ -436,8 +438,10 @@ export async function fetchStrongNeighbors(vault: string, id: string, hops: 1 | 
   const settled = await Promise.allSettled(around.map(uri => getGraph(vault, uri, 1, 150, "weak")));
   const rings = settled.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
   const merged = rings.reduce((all, ring) => mergeGraph(all, apiToPayload(ring)), apiToPayload(strong));
-  const truncated = rings.length < settled.length || [strong, ...rings].some(response => (response as { truncated?: unknown }).truncated === true);
-  return truncated ? { ...merged, meta: { ...merged.meta, truncated: true } } : merged;
+  // The strong walk's completeness is the map's; a capped or failed weak ring only says some weak links are missing.
+  const truncated = (strong as { truncated?: unknown }).truncated === true;
+  const weakTruncated = rings.length < settled.length || rings.some(response => (response as { truncated?: unknown }).truncated === true);
+  return truncated || weakTruncated ? { ...merged, meta: { ...merged.meta, ...(truncated ? { truncated: true } : {}), ...(weakTruncated ? { weakTruncated: true } : {}) } } : merged;
 }
 
 /** How many strongly reached resources contribute their weak links to one neighbourhood. */
