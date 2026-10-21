@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.services.kg_service import DEFAULT_EDGE_TYPE, EdgeType, LinkRelationType
+from app.services.kg_service import EdgeType, LinkRelationType
 from app.util.text import NFCModel
 
 
@@ -29,10 +29,16 @@ class LinkRequest(NFCModel):
     target: str
     relation: LinkRelationType
     metadata: dict | None = None
-    edge_type: EdgeType = Field(
-        default=DEFAULT_EDGE_TYPE,
+    # No advertised default, and `null` is the same as leaving it out. A request
+    # that names no strength says nothing about it: a new edge is strong, an
+    # existing one keeps its strength. A default of `strong` here would turn every
+    # bare re-link (a client that predates the field, one updating only `metadata`)
+    # into a promotion, and a generator that fills defaults would do the same.
+    edge_type: EdgeType | None = Field(
+        default=None,
         description=(
-            "Connection strength: strong (default) or weak; body links are always weak. "
+            "Connection strength: strong or weak; body links are always weak. "
+            "Omit it to keep an existing link's strength (a new link is strong). "
             "Stored under the reserved `edge_type` key of `metadata`."
         ),
     )

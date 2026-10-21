@@ -647,6 +647,50 @@ def canonicalize_resource_uri(parsed) -> str | None:
     return None
 
 
+# The write behind `link_resources`: one atomic upsert, so two links of the same
+# edge cannot interleave a read of its strength with a write of it.
+#
+# `$12` is the strength the caller named, or NULL when it named none. NULL is not
+# "strong"; it is "said nothing about it", and what that means depends on the row:
+#
+#   - a new edge is strong;
+#   - an existing explicit edge keeps the strength it holds (a value outside the
+#     vocabulary, a missing key or a non-object `metadata` reads as strong, as
+#     `resolve_edge_type` serves it, and is written out as strong);
+#   - an existing implicit edge has no stored strength to keep: it is derived,
+#     always weak, and whatever its `metadata` says means nothing. Linking over it
+#     makes a new explicit edge, which is strong.
+#
+# A strength that was named always wins, up or down. The reserved key is written
+# last, so neither the caller's `metadata` (`$8`) nor the stored object can
+# override it. `RETURNING` hands back the strength now stored, which is what the
+# link answers with. Every fragment spliced in below is a module constant.
+_EDGE_TYPE_VOCABULARY_SQL = ", ".join(f"'{value}'" for value in EDGE_TYPES)
+_LINK_UPSERT_SQL = f"""
+    INSERT INTO edges (id, vault_id, source_uri, target_uri, relation_type,
+                       source_type, target_type, metadata, created_by, kind,
+                       source_resource_id, target_resource_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7,
+            $8::jsonb || jsonb_build_object(
+                '{EDGE_TYPE_METADATA_KEY}', COALESCE($12::text, '{DEFAULT_EDGE_TYPE}')),
+            $9, 'explicit', $10, $11)
+    ON CONFLICT (source_uri, target_uri, relation_type) DO UPDATE
+    SET metadata = (CASE WHEN jsonb_typeof(edges.metadata) = 'object'
+                         THEN edges.metadata ELSE '{{}}'::jsonb END)
+                   || $8::jsonb
+                   || jsonb_build_object('{EDGE_TYPE_METADATA_KEY}', COALESCE($12::text,
+                          CASE WHEN edges.kind = 'explicit'
+                                AND edges.metadata->>'{EDGE_TYPE_METADATA_KEY}'
+                                    IN ({_EDGE_TYPE_VOCABULARY_SQL})
+                               THEN edges.metadata->>'{EDGE_TYPE_METADATA_KEY}'
+                               ELSE '{DEFAULT_EDGE_TYPE}' END)),
+        created_by = $9, kind = 'explicit',
+        source_resource_id = EXCLUDED.source_resource_id,
+        target_resource_id = EXCLUDED.target_resource_id
+    RETURNING {_STORED_EDGE_TYPE_COLUMN}
+"""
+
+
 async def link_resources(
     vault_name: str,
     source_uri: str,
@@ -654,7 +698,7 @@ async def link_resources(
     relation_type: str,
     created_by: str | None = None,
     metadata: dict | None = None,
-    edge_type: str = DEFAULT_EDGE_TYPE,
+    edge_type: str | None = None,
 ) -> dict:
     """Create an explicit edge between any two resources.
 
@@ -664,14 +708,18 @@ async def link_resources(
     invariant at the DB layer; this surface-level reject gives the
     caller a clear error instead of a Postgres failure.
 
-    ``edge_type`` ("strong" by default, or "weak") is the connection's
-    strength. It is stored in ``edges.metadata`` under the reserved
-    ``edge_type`` key, merged with the caller's ``metadata`` so neither
-    replaces the other; a same-named key inside ``metadata`` is overridden by
-    this argument. Linking an edge that already exists is an update, and it
-    states the strength again — a bare re-link restores the default.
+    ``edge_type`` ("strong" or "weak") is the connection's strength. It is
+    stored in ``edges.metadata`` under the reserved ``edge_type`` key, merged
+    with the caller's ``metadata`` so neither replaces the other; a same-named
+    key inside ``metadata`` is ignored in favour of this argument.
+
+    ``None`` (the default) names no strength. A new edge is then strong, and
+    linking an edge that already exists leaves its strength as it is: a caller
+    that predates the attribute, or one that only updates ``metadata``, cannot
+    promote a weak edge by leaving the field out. A value that is given sets the
+    strength, up or down. The result's ``edge_type`` is the strength now stored.
     """
-    if edge_type not in EDGE_TYPES:
+    if edge_type is not None and edge_type not in EDGE_TYPES:
         return err(
             f"edge_type must be one of {list(EDGE_TYPES)}, got {edge_type!r}",
             code=INVALID_ARGUMENT,
@@ -775,38 +823,33 @@ async def link_resources(
             elif not await _resource_exists(conn, vault_id, target_type, target_id):
                 return err(f"Target resource not found: {target_uri}", code=NOT_FOUND)
 
-            # The strength is stored in `metadata` beside whatever the caller
-            # supplied. On a re-link the stored object and this call's object
-            # are merged key by key, this call winning a collision: changing
-            # `edge_type` keeps the caller's other keys, and the caller's keys
-            # cannot drop the strength.
-            edge_metadata = {**(metadata or {}), EDGE_TYPE_METADATA_KEY: edge_type}
-            await conn.execute(
-                """
-                INSERT INTO edges (id, vault_id, source_uri, target_uri, relation_type,
-                                   source_type, target_type, metadata, created_by, kind,
-                                   source_resource_id, target_resource_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'explicit', $10, $11)
-                ON CONFLICT (source_uri, target_uri, relation_type) DO UPDATE
-                SET metadata = CASE WHEN jsonb_typeof(edges.metadata) = 'object'
-                                    THEN edges.metadata ELSE '{}'::jsonb END
-                               || EXCLUDED.metadata,
-                    created_by = $9, kind = 'explicit',
-                    source_resource_id = EXCLUDED.source_resource_id,
-                    target_resource_id = EXCLUDED.target_resource_id
-                """,
+            # The strength travels beside the caller's `metadata`, not inside
+            # it: the statement merges the stored object with this call's keys
+            # (this call winning a collision), so changing `edge_type` keeps the
+            # caller's other keys and the caller's keys cannot drop or set the
+            # strength. The reserved key is dropped from what the caller sent;
+            # the statement would override it anyway.
+            caller_metadata = {
+                key: value for key, value in (metadata or {}).items()
+                if key != EDGE_TYPE_METADATA_KEY
+            }
+            written = await conn.fetchrow(
+                _LINK_UPSERT_SQL,
                 uuid.uuid4(), vault_id, source_uri, target_uri, relation_type,
-                source_type, target_type, json.dumps(edge_metadata), created_by,
-                source_resource_id, target_resource_id,
+                source_type, target_type, json.dumps(caller_metadata), created_by,
+                source_resource_id, target_resource_id, edge_type,
             )
 
-    logger.info("Linked %s → %s (%s, %s)", source_uri, target_uri, relation_type, edge_type)
+    # What the edge holds now, which is the strength asked for or, when none was
+    # asked for, the one it already had (strong for a new edge).
+    stored_edge_type = resolve_edge_type("explicit", written["stored_edge_type"])
+    logger.info("Linked %s → %s (%s, %s)", source_uri, target_uri, relation_type, stored_edge_type)
     return {
         "linked": True,
         "source": source_uri,
         "target": target_uri,
         "relation": relation_type,
-        "edge_type": edge_type,
+        "edge_type": stored_edge_type,
     }
 
 
@@ -1637,7 +1680,9 @@ async def get_provenance(doc_id: str, *, vault_id: uuid.UUID) -> dict:
 # Second read window for a document whose frontmatter does not close inside the
 # first one (a hub that lists hundreds of relations). Bounded in size and in
 # rows: a label is decoration, and a reader must not be able to turn it into an
-# unbounded read by writing wide frontmatter.
+# unbounded read by writing wide frontmatter. A document past either bound is
+# labelled from the first statement alone (its path or retained catalog title,
+# and its time), never left without a label.
 _LABEL_RETRY_WINDOW_BYTES = 128 * 1024
 _LABEL_RETRY_MAX_ROWS = 50
 
@@ -1811,6 +1856,13 @@ def _label_native_rows(rows, *, final: bool) -> tuple[dict[str, dict], list[str]
     CPU-bound (YAML), so it runs on a worker thread as one hop for the whole
     batch. Returns ``(labels by path, paths whose frontmatter outgrew the
     window)``; the second list is only filled when a later window exists.
+
+    Every row gets a label, a retry candidate included. Such a document is
+    labelled from what the row itself holds (its path, the time of the resource,
+    and the retained catalog row if it kept one) and queued for a wider read that
+    may replace the label. The wider read is capped in rows, so a candidate past
+    the cap is never read again and keeps this label: leaving it out would drop
+    the time the statement already fetched.
     """
     from app.services.search_service import _filtered_native_metadata
 
@@ -1824,7 +1876,6 @@ def _label_native_rows(rows, *, final: bool) -> tuple[dict[str, dict], list[str]
             # window. Worth a wider read only when the body goes on past it.
             if metadata is None and not final and (row["body_size"] or 0) > len(row["body_slice"]):
                 retry.append(row["path"])
-                continue
         labels[row["path"]] = _label_native_row(row, metadata)
     return labels, retry
 
@@ -1833,7 +1884,9 @@ async def _native_doc_labels(conn, vault_id: uuid.UUID, paths: list[str]) -> dic
     """Labels for documents on an installation whose document authority is native.
 
     One query for the whole batch; a second, bounded one only for the rare
-    document whose frontmatter does not fit the first read window.
+    document whose frontmatter does not fit the first read window. The second
+    read replaces a label and never creates one: a document it does not reach
+    keeps the label the first read gave it (`_label_native_rows`).
     """
     from app.services.search_service import NATIVE_CANDIDATE_FRONTMATTER_SLICE_BYTES
 

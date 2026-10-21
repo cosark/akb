@@ -499,7 +499,12 @@ export interface AkbGraphLinkInput {
   target: string;
   relation: import("./core/schema.gen.js").AkbWritableRelationType;
   metadata?: Record<string, AkbJsonValue>;
-  /** Connection strength; the server treats an omitted value as "strong". */
+  /**
+   * Connection strength. Name it to set it, up or down. Leave it out to say
+   * nothing about it: a new link is "strong", and linking an edge that already
+   * exists keeps the strength it has. A server that predates the option ignores
+   * it, and its result has no `edge_type`.
+   */
   edge_type?: import("./core/schema.gen.js").AkbEdgeType;
 }
 
