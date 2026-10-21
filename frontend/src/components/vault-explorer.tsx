@@ -205,7 +205,7 @@ export function VaultExplorer({
   // Keep the existing expandable hierarchy; bounded pages limit each request.
   const browseDepth = -1;
   const { tree: pageTree, items: pageItems, loading, refreshing, showingPreviousScope, unsupported, error, refetch,
-    complete, paginationUnsupported, hasMore, loadingMore, loadMore, pageCount } = useVaultTree(vault, archiveScope, {
+    complete, paginationUnsupported, hasMore, loadingMore, loadMore, pageCount, pastCollectionCatalog } = useVaultTree(vault, archiveScope, {
       collection: collectionScope || explorationPath || undefined,
       content_type: kindFilter === "all" ? "all" : `${kindFilter}s` as "documents" | "tables" | "files",
       depth: browseDepth,
@@ -537,6 +537,24 @@ export function VaultExplorer({
   const visibleRows = useMemo<FlatRow[]>(() => {
     return fullRows.slice(0, renderLimit);
   }, [fullRows, renderLimit]);
+  // If an appended resource page only fills closed branches, the sentinel
+  // staying visible is not fresh demand. This also covers a short root list
+  // containing a README beside closed Collections. Preserve manual paging.
+  const progressOwner = JSON.stringify([filterOwner, archiveScope, kindFilter, collectionScope, explorationPath,
+    nameQuery, [...expanded].sort(), [...collapsedKindGroups].sort()]);
+  const progressPages = loading || searching ? 0 : pageCount;
+  const closedBranch = fullRows.some(row => row.type === "node"
+    ? row.node.kind === "collection" && !row.isOpen : row.type === "kind-group" && !row.isOpen);
+  const [pageProgress, setPageProgress] = useState({ owner: progressOwner, pages: 0, rows: 0, halted: false });
+  let autoHalted = pageProgress.halted;
+  if (pageProgress.owner !== progressOwner || progressPages < pageProgress.pages) {
+    autoHalted = false;
+    setPageProgress({ owner: progressOwner, pages: progressPages, rows: fullRows.length, halted: false });
+  } else if (progressPages > pageProgress.pages) {
+    autoHalted = !nameQuery && pastCollectionCatalog && pageProgress.pages > 0 && closedBranch
+      && fullRows.length <= pageProgress.rows;
+    setPageProgress({ owner: progressOwner, pages: progressPages, rows: fullRows.length, halted: autoHalted });
+  }
 
   useEffect(() => {
     setRenderLimit(TREE_RENDER_PAGE);
@@ -887,7 +905,8 @@ export function VaultExplorer({
           })}
 
         <AutoLoadMore hasMore={fullRows.length > visibleRows.length || hasMore} loading={loadingMore}
-          paused={loading || refreshing || searching || unsupported || (visibleRows.length > 0 && visibleRows.every(row => row.type === "kind-group" && !row.isOpen))}
+          autoPaused={autoHalted && fullRows.length === visibleRows.length}
+          paused={loading || refreshing || searching || unsupported}
           error={Boolean(error)} requestKey={`${filterOwner}:${archiveScope}:${kindFilter}:${collectionScope}:${explorationPath}:${nameQuery}:${renderLimit}:${pageCount}`}
           label="Load more content" loadingLabel={nameQuery && !visibleRows.length ? "" : "Loading more content"}
           className="px-3" onLoadMore={() => fullRows.length > visibleRows.length ? setRenderLimit(current => current + TREE_RENDER_PAGE) : loadMore()} />

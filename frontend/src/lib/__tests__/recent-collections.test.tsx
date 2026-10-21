@@ -128,7 +128,7 @@ describe("Explorer visit recording", () => {
     tree: [{ kind: "collection" as const, name: "notes", path: "notes", children: [
       { kind: "document" as const, name: "One", path: "notes/one.md" },
     ] }],
-    items: [], path: "", accessDenied: false, complete: true, paginationUnsupported: false, hasMore: false, pageCount: 1, loadingMore: false, loadMore: vi.fn(),
+    items: [], path: "", accessDenied: false, complete: true, paginationUnsupported: false, hasMore: false, pageCount: 1, pastCollectionCatalog: false, loadingMore: false, loadMore: vi.fn(),
     loading: false, refreshing: false, showingPreviousScope: false, unsupported: false, error: "", refetch: vi.fn(),
   });
   const explorer = (route: string, userId = "alice", checking = false) => (

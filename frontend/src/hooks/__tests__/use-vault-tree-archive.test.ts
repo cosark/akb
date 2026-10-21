@@ -118,3 +118,15 @@ it("cancels obsolete name scopes and does not accept an ignored server query", a
   rerender({ name: "ignored" });
   await waitFor(() => expect(result.current.error).toContain("Name search is unavailable"));
 });
+
+it("recognizes the resource phase even when status filtering leaves an empty page", async () => {
+  browse.mockResolvedValueOnce({ ...response(), items: [{ type: "collection", name: "Guides", path: "guides" }], complete: false, next_cursor: "documents" });
+  const { result } = renderHook(() => useVaultTree("v"));
+  await waitFor(() => expect(result.current.hasMore).toBe(true));
+  expect(result.current.pastCollectionCatalog).toBe(false);
+  browse.mockResolvedValueOnce({ ...response(), items: [], complete: false, next_cursor: "more-documents" });
+  act(() => result.current.loadMore());
+  await waitFor(() => expect(result.current.pageCount).toBe(2));
+  expect(result.current.pastCollectionCatalog).toBe(true);
+  expect(result.current.hasMore).toBe(true);
+});

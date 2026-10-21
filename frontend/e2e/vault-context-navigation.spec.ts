@@ -14,7 +14,8 @@ async function fixture(page: Page, dark: boolean) {
   }, dark);
   await page.route("**/health**", route => route.fulfill({ json: {} }));
   await page.route("**/api/v1/**", route => {
-    const path = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    const path = url.pathname;
     if (path.endsWith("/auth/config")) return route.fulfill({ json: { schema_version: 2, auth_mode: "local", local_auth: { enabled: true }, keycloak: { enabled: false, browser_session_ready: false }, providers: [], mcp_oauth: { enabled: false } } });
     if (path.endsWith("/auth/me")) return route.fulfill({ json: { user_id: "context-user", username: "owner", email: "owner@example.invalid", display_name: "Workspace owner", auth_method: "local", key_class: null, is_admin: false } });
     if (path.endsWith("/vaults")) return route.fulfill({ json: { vaults: [
@@ -31,11 +32,12 @@ async function fixture(page: Page, dark: boolean) {
     if (path.includes("/browse/")) {
       browseReads += 1;
       if (failNextRead) { failNextRead = false; return route.fulfill({ status: 500, json: { detail: "Fixture refresh failed" } }); }
-      return route.fulfill({ json: { vault: "engineering", complete: true, next_cursor: null, items: [
+      const nameQuery = url.searchParams.get("name_query") || "";
+      return route.fulfill({ json: { vault: "engineering", name_query: nameQuery || null, complete: true, next_cursor: null, items: [
       { type: "collection", path: "guides", name: "guides", doc_count: 1 },
       { type: "document", path: "guides/shared-decisions.md", name: "Shared decisions and the full context behind them" },
       ...createdCollections.map(name => ({ type: "collection", path: name, name, doc_count: 0 })),
-    ], archive_scope: "unarchived" } });
+    ].filter(item => !nameQuery || `${item.name} ${item.path}`.toLowerCase().includes(nameQuery.toLowerCase())), archive_scope: "unarchived" } });
     }
     if (path.includes("/documents/")) return route.fulfill({ status: 404, json: { detail: "No guide" } });
     if (path.endsWith("/help/skill-template")) return route.fulfill({ contentType: "text/plain", body: "# {vault} Guide\n\nStarter template." });

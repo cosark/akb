@@ -5,12 +5,14 @@ import { cn } from "@/lib/utils";
 
 /** Append only when the end approaches its own scroll viewport. The quiet
  * keyboard action is also a fallback for assistive readers without scrolling. */
-export function AutoLoadMore({ hasMore, loading = false, paused = false, error = false, requestKey, onLoadMore,
+export function AutoLoadMore({ hasMore, loading = false, paused = false, autoPaused = false, error = false, requestKey, onLoadMore,
   label = "Load more items", loadingLabel = "Loading more items", className,
 }: {
   hasMore: boolean;
   loading?: boolean;
   paused?: boolean;
+  /** Stop scroll demand while keeping the explicit keyboard action available. */
+  autoPaused?: boolean;
   error?: boolean;
   requestKey: string | number;
   onLoadMore: () => void;
@@ -20,15 +22,15 @@ export function AutoLoadMore({ hasMore, loading = false, paused = false, error =
 }) {
   const sentinel = useRef<HTMLDivElement>(null);
   const requested = useRef<string | number | null>(null);
-  const latest = useRef({ hasMore, loading, paused, error, requestKey, onLoadMore });
-  latest.current = { hasMore, loading, paused, error, requestKey, onLoadMore };
+  const latest = useRef({ hasMore, loading, paused, autoPaused, error, requestKey, onLoadMore });
+  latest.current = { hasMore, loading, paused, autoPaused, error, requestKey, onLoadMore };
   const [showLoading, setShowLoading] = useState(false);
   const supported = typeof IntersectionObserver !== "undefined";
 
   const load = useCallback((retry = false) => {
     const state = latest.current;
     const element = sentinel.current;
-    if (!state.hasMore || state.loading || state.paused || (!retry && state.error)
+    if (!state.hasMore || state.loading || state.paused || (!retry && (state.error || state.autoPaused))
       || !element?.isConnected || element.closest("[hidden], [inert]")) return;
     if (!retry && requested.current === state.requestKey) return;
     requested.current = state.requestKey;
@@ -46,11 +48,11 @@ export function AutoLoadMore({ hasMore, loading = false, paused = false, error =
   // Error gating below still requires an explicit retry after a failure.
   useEffect(() => {
     if (!loading) requested.current = null;
-  }, [loading, paused, requestKey]);
+  }, [loading, paused, autoPaused, requestKey]);
 
   useEffect(() => {
     const element = sentinel.current;
-    if (!element || !hasMore || loading || paused || error || !supported) return;
+    if (!element || !hasMore || loading || paused || autoPaused || error || !supported) return;
     let root = element.parentElement;
     while (root && root !== document.body && root !== document.documentElement && !/(auto|scroll)/.test(getComputedStyle(root).overflowY)) root = root.parentElement;
     if (root === document.body || root === document.documentElement) root = null;
@@ -59,7 +61,7 @@ export function AutoLoadMore({ hasMore, loading = false, paused = false, error =
     }, { root, rootMargin: "0px 0px 240px 0px" });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [hasMore, loading, paused, error, requestKey, supported, load]);
+  }, [hasMore, loading, paused, autoPaused, error, requestKey, supported, load]);
 
   if (!hasMore) return null;
   return <div ref={sentinel} data-slot="auto-load-more" className={cn("min-h-1", className)}>

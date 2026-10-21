@@ -97,3 +97,40 @@ test("main Collections and content advance independently on scroll", async ({ pa
   expect(state.requests.some(url => url.searchParams.get("cursor") === "collections-next")).toBe(true);
   expect(state.requests.some(url => url.searchParams.get("cursor") === "resources-next")).toBe(true);
 });
+
+test("a README beside closed Collections does not drain hidden document pages", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await fixture(page, false);
+  const cursors: (string | null)[] = [];
+  await page.route("**/api/v1/browse/alpha?**", route => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("content_type") !== "all" || url.searchParams.get("name_query")) return route.fallback();
+    const cursor = url.searchParams.get("cursor");
+    cursors.push(cursor);
+    const collection = (index: number) => ({ type: "collection", name: `Collection ${index}`, path: `collection-${String(index).padStart(3, "0")}` });
+    const response = { vault: "alpha", path: "", archive_scope: "unarchived", complete: false };
+    if (!cursor) return route.fulfill({ json: { ...response, next_cursor: "catalog-tail", items: Array.from({ length: 100 }, (_, index) => collection(index)) } });
+    if (cursor === "catalog-tail") return route.fulfill({ json: { ...response, next_cursor: "documents-first", items: Array.from({ length: 5 }, (_, index) => collection(index + 100)) } });
+    if (cursor === "documents-first") return route.fulfill({ json: { ...response, next_cursor: "documents-middle", items: [
+      { type: "document", name: "README", path: "README.md" },
+      ...Array.from({ length: 5 }, (_, index) => ({ type: "document", name: `Hidden document ${index}`, path: `collection-000/doc-${String(index).padStart(3, "0")}.md` })),
+    ] } });
+    if (cursor === "documents-middle") return route.fulfill({ json: { ...response, next_cursor: "documents-tail", items: [{ type: "document", name: "Hidden document 5", path: "collection-000/doc-005.md" }] } });
+    return route.fulfill({ json: { ...response, complete: true, next_cursor: null, items: [{ type: "document", name: "Last hidden document", path: "collection-000/z-last.md" }] } });
+  });
+  await page.goto("/vault/alpha");
+  const explorer = page.getByRole("navigation", { name: "alpha explorer", exact: true });
+  await explorer.getByRole("button", { name: "collection-099", exact: true }).scrollIntoViewIfNeeded();
+  await expect(explorer.getByRole("button", { name: "collection-104", exact: true })).toBeAttached();
+  await explorer.getByRole("button", { name: "collection-104", exact: true }).scrollIntoViewIfNeeded();
+  await expect.poll(() => cursors.filter(Boolean)).toEqual(["catalog-tail", "documents-first", "documents-middle"]);
+  await page.waitForTimeout(400);
+  expect(cursors.filter(Boolean)).toEqual(["catalog-tail", "documents-first", "documents-middle"]);
+  await expect(explorer.getByRole("link", { name: "Document: README", exact: true })).toBeAttached();
+  await expect(explorer.getByRole("button", { name: "Load more content", exact: true })).toBeEnabled();
+  await explorer.getByRole("button", { name: "collection-000", exact: true }).click();
+  await expect(explorer.getByRole("link", { name: "Document: Hidden document 5", exact: true })).toBeAttached();
+  await explorer.getByRole("button", { name: "collection-104", exact: true }).scrollIntoViewIfNeeded();
+  await expect(explorer.getByRole("link", { name: "Document: Last hidden document", exact: true })).toBeAttached();
+  expect(cursors.filter(Boolean)).toEqual(["catalog-tail", "documents-first", "documents-middle", "documents-tail"]);
+});

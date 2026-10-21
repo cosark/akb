@@ -82,6 +82,10 @@ quiet next-page action. Vault directory rendering similarly advances on scroll
 from its complete accessible directory, so its name search covers every Vault.
 Overview Collections and resources have independent cursors and rendering batches.
 There is no permanent partial-load explanation or visible Load more workflow.
+If all visible Collections are closed, stop automatic resource requests after
+passing the Collection catalog. Expanding a branch or searching resumes demand;
+keyboard users can still request the next page explicitly. The catalog itself
+continues on scroll, including Vaults with more than 100 Collections.
 
 Keep ordinary navigation/list semantics: automatic paging alone does not make
 a resource directory an ARIA feed. The

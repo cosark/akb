@@ -68,3 +68,19 @@ it("resumes the same cached page after its request was cancelled", () => {
   approachEnd();
   expect(load).toHaveBeenCalledTimes(3);
 });
+
+it("pauses scroll demand without disabling the explicit action and resumes on expansion", () => {
+  const load = vi.fn();
+  const { rerender } = render(<AutoLoadMore hasMore requestKey="one" onLoadMore={load} />);
+  approachEnd();
+  rerender(<AutoLoadMore hasMore requestKey="one" autoPaused onLoadMore={load} />);
+  approachEnd();
+  expect(load).toHaveBeenCalledTimes(1);
+  const action = screen.getByRole("button", { name: "Load more items" });
+  expect(action).toBeEnabled();
+  fireEvent.click(action);
+  expect(load).toHaveBeenCalledTimes(2);
+  rerender(<AutoLoadMore hasMore requestKey="one" onLoadMore={load} />);
+  approachEnd();
+  expect(load).toHaveBeenCalledTimes(3);
+});

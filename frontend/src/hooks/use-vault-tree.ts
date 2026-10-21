@@ -136,6 +136,10 @@ export function useVaultTree(
     paginationUnsupported: Boolean(lastPage && typeof lastPage.complete !== "boolean"),
     hasMore: query.hasNextPage,
     pageCount: data?.pages.length ?? 0,
+    // Kind ordering puts the Collection catalog before every resource kind.
+    // A following page without Collections has passed that catalog, even if
+    // status filtering leaves the resource page empty.
+    pastCollectionCatalog: Boolean(lastPage && !lastPage.items.some(item => item.type === "collection")),
     loadingMore: query.isFetchingNextPage,
     loadMore: () => { if (!checking && options.enabled !== false && query.hasNextPage && !query.isFetching) void query.fetchNextPage(); },
     loading: items === null && !error && Boolean(vault),

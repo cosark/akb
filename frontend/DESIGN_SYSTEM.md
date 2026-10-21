@@ -967,6 +967,10 @@ an `sr-only` summary, never the only signal.
   focus merely because a request completed. Delay small append indicators by
   150ms; failures stop automatic retries and show a local retry action. A quiet
   keyboard action remains available to readers that do not trigger scrolling.
+  A closed Collection directory stops automatic resource-page requests after
+  the Collection catalog has been traversed. Expanding a branch or searching
+  resumes demand; the explicit keyboard action stays available. Never stop the
+  Collection catalog itself merely because its rows are collapsed.
   Do not show a permanent partial-load or implementation-limit explanation.
   Name/path search is debounced for 250ms, cancels obsolete requests, and queries
   the entire selected Vault/Collection scope on the server. Continue empty

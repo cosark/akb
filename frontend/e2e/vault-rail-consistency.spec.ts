@@ -20,10 +20,10 @@ for (const dark of [false, true]) test(`Focused vault navigation ${dark ? "dark"
     if (path.endsWith("/auth/me")) return route.fulfill({ json: { user_id: "rail-user", username: "reader", display_name: "Workspace User", is_admin: false, auth_method: "local" } });
     if (path.endsWith("/vaults")) return route.fulfill({ json: { vaults: [{ id: "team-id", name: "team", role: "owner" }, { id: "research-id", name: "research", role: "reader" }, { id: "work-id", name: "work-notes", role: "writer" }] } });
     if (path.endsWith("/info")) return route.fulfill({ json: { name: vault, role: vault === "team" ? "owner" : "reader", document_count: 1 } });
-    if (path.includes("/browse/")) return route.fulfill({ json: { vault, path: "", complete: true, next_cursor: null, archive_scope: url.searchParams.get("archive_scope") || "unarchived", items: [
+    if (path.includes("/browse/")) return route.fulfill({ json: { vault, path: "", name_query: url.searchParams.get("name_query"), complete: true, next_cursor: null, archive_scope: url.searchParams.get("archive_scope") || "unarchived", items: [
       { type: "collection", name: "guides", path: "guides", doc_count: 1 },
       { type: "document", name: "Getting started", path: "guides/start.md" },
-    ] } });
+    ].filter(item => !url.searchParams.get("name_query") || `${item.name} ${item.path}`.toLowerCase().includes(url.searchParams.get("name_query")!.toLowerCase())) } });
     if (path.includes("/documents/")) return route.fulfill({ json: { id: "getting-started", path: "guides/start.md", title: "Getting started", content: "# Getting started\n\nStart with a collection.", current_commit: "fixture-head", metadata: {}, status: "active" } });
     return route.fulfill({ json: { tokens: [], items: [], changes: [], templates: [], relations: [], history: [] } });
   });
@@ -79,7 +79,7 @@ for (const dark of [false, true]) test(`Focused vault navigation ${dark ? "dark"
   await page.getByRole("menuitemradio", { name: /^All documents/ }).click();
   await collections.getByRole("button", { name: "Filter content, 3 active", exact: true }).click();
   await expect(filter).toBeVisible();
-  await expect(collections.getByRole("status").filter({ hasText: "Name: not found · Collection: guides · Includes archived" })).toBeVisible();
+  await expect(collections.getByText("Name: not found · Collection: guides · Includes archived", { exact: true })).toBeVisible();
   await collections.getByRole("button", { name: "Reset filters", exact: true }).click();
   await expect(filter).toBeFocused();
   await expect(filter).toHaveValue("");
