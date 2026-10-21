@@ -164,14 +164,21 @@ export function strongNeighborhood(
   const reach = new Map<string, number>([[focus, 0]]);
   // The edge by which the walk first reached each resource: the backbone the map draws at full weight.
   const tree = new Set<string>();
+  // Along depends_on the walk keeps its direction: from what it reached as an affected resource (something that
+  // depends on the way here) it goes on to further affected resources only, and from a dependency to further
+  // dependencies only, so it never turns back into the other services a dependent or a dependency also touches.
+  const mode = new Map<string, "context" | "impact" | "dependency">([[focus, "context"]]);
   const queue = [focus];
   for (let index = 0; index < queue.length; index += 1) {
-    const here = queue[index], next = reach.get(here)! + 1;
+    const here = queue[index], next = reach.get(here)! + 1, from = mode.get(here)!;
     if (next > hops) continue;
     for (const e of explicit) {
-      const other = e.source === here ? e.target : WALKED_BACK.has(e.relation) && e.target === here ? e.source : undefined;
+      const dependency = e.relation === "depends_on";
+      let other: string | undefined, as: "context" | "impact" | "dependency" = "context";
+      if (e.source === here && (!dependency || from !== "impact")) { other = e.target; as = dependency ? "dependency" : "context"; }
+      else if (e.target === here && WALKED_BACK.has(e.relation) && (!dependency || from !== "dependency")) { other = e.source; as = dependency ? "impact" : "context"; }
       if (other === undefined || reach.has(other)) continue;
-      reach.set(other, next); queue.push(other); tree.add(edgeId(e));
+      reach.set(other, next); mode.set(other, as); queue.push(other); tree.add(edgeId(e));
     }
   }
   // How many resources each step adds, for an honest hop control (the walk may end before the chosen depth).
