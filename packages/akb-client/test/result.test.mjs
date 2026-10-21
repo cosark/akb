@@ -1634,6 +1634,39 @@ test("graph facade maps typed methods to graph URLs and preserves auth envelopes
   assert.equal(health.throwOnError().data.orphans.count, 3);
 });
 
+test("graph neighbors sends edge_type only when the caller sets it, and serves titles and truncated", async () => {
+  const urls = [];
+  const client = createClient("https://akb.test/api/v1/", {
+    fetch: async (input) => {
+      urls.push(new URL(String(input)));
+      return new Response(JSON.stringify({
+        kind: "graph_neighbors",
+        nodes: [
+          { uri: "akb://eng/doc/a", name: "Alpha design", title: "Alpha design", doc_type: "spec", tags: ["graph"], path: "a", resource_type: "doc", depth: 0 },
+          { uri: "akb://eng/doc/b", name: "b", doc_type: "note", tags: [], path: "b", resource_type: "doc", depth: 1 },
+        ],
+        edges: [{ source: "akb://eng/doc/a", target: "akb://eng/doc/b", relation: "related_to", kind: "explicit", edge_type: "strong" }],
+        truncated: true,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  const all = await client.graph.neighbors("akb://eng/doc/a", { hops: 2 });
+  const strong = await client.graph.neighbors("akb://eng/doc/a", { hops: 2, limit: 50, edgeType: "strong" });
+  const weak = await client.graph.neighbors("akb://eng/doc/a", { edgeType: "weak" });
+
+  assert.equal(urls[0].searchParams.has("edge_type"), false);
+  assert.equal(urls[1].search, "?uri=akb%3A%2F%2Feng%2Fdoc%2Fa&hops=2&limit=50&edge_type=strong");
+  assert.equal(urls[2].searchParams.get("edge_type"), "weak");
+  const data = strong.throwOnError().data;
+  assert.equal(data.truncated, true);
+  assert.equal(data.nodes[0].title, "Alpha design");
+  assert.deepEqual(data.nodes[0].tags, ["graph"]);
+  assert.equal(data.nodes[1].title, undefined);
+  assert.equal(all.throwOnError().data.nodes[1].path, "b");
+  assert.equal(weak.throwOnError().data.kind, "graph_neighbors");
+});
+
 test("graph facade omits defaults, preflights vault, preserves 4xx, and keeps raw request", async () => {
   const calls = [];
   const responses = [

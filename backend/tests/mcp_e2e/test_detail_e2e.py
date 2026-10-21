@@ -633,6 +633,8 @@ async def test_unicode_graph_grep_and_ownership(
     )
     assert _relation_count(relations) >= 1
     assert [(row["kind"], row["edge_type"]) for row in relations["relations"]] == [("explicit", "strong")]
+    # A row names the document at the other end by its title, not by its path.
+    assert [(row["name"], row["title"]) for row in relations["relations"]] == [("Data Model", "Data Model")]
     graph = await _call_json(
         mcp_client,
         runtime_session,
@@ -642,6 +644,8 @@ async def test_unicode_graph_grep_and_ownership(
     assert len(graph.get("nodes", [])) >= 2
     assert len(graph.get("edges", [])) >= 1
     assert {(edge["kind"], edge["edge_type"]) for edge in graph["edges"]} == {("explicit", "strong")}
+    assert {"API Spec", "Data Model"} <= {node["name"] for node in graph["nodes"]}
+    assert graph["truncated"] is False
     # Linking the same edge again updates it, edge_type included.
     relinked = await _call_json(
         mcp_client,
@@ -657,6 +661,33 @@ async def test_unicode_graph_grep_and_ownership(
         {"uri": first["uri"]},
     )
     assert [(row["kind"], row["edge_type"]) for row in weak_relations["relations"]] == [("explicit", "weak")]
+    # A strength-aware walk follows only edges of that strength: the weak link is
+    # invisible to a strong walk and the only edge of a weak one.
+    strong_walk = await _call_json(
+        mcp_client,
+        runtime_session,
+        "akb_graph",
+        {"uri": first["uri"], "hops": 1, "edge_type": "strong"},
+    )
+    assert [node["uri"] for node in strong_walk["nodes"]] == [first["uri"]]
+    assert strong_walk["edges"] == [] and strong_walk["truncated"] is False
+    weak_walk = await _call_json(
+        mcp_client,
+        runtime_session,
+        "akb_graph",
+        {"uri": first["uri"], "hops": 1, "edge_type": "weak"},
+    )
+    assert {node["uri"] for node in weak_walk["nodes"]} == {first["uri"], second["uri"]}
+    assert [(edge["kind"], edge["edge_type"]) for edge in weak_walk["edges"]] == [("explicit", "weak")]
+    # The vault overview is not strength-aware, so the pairing is refused.
+    refused_walk = await _call_json(
+        mcp_client,
+        runtime_session,
+        "akb_graph",
+        {"vault": vault, "edge_type": "strong"},
+        expect_error=True,
+    )
+    assert refused_walk.get("code") == "invalid_argument"
     invalid_edge_type = await _call_json(
         mcp_client,
         runtime_session,

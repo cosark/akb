@@ -462,6 +462,12 @@ export interface AkbSearchFacade extends AkbNamespaceStub {
 export interface AkbGraphNeighborsOptions {
   hops?: 1 | 2 | 3 | 4 | 5;
   limit?: number;
+  /**
+   * Follow, and return, only edges of this strength — in both directions, so
+   * `limit` is spent on matching neighbours. Omit for every edge. A server
+   * that predates the option ignores it; such a response has no `truncated`.
+   */
+  edgeType?: import("./core/schema.gen.js").AkbEdgeType;
 }
 
 export interface AkbGraphOverviewOptions {
@@ -1094,6 +1100,7 @@ function makeGraphFacade(
       const params = new URLSearchParams({ uri });
       appendOptional(params, "hops", options.hops);
       appendOptional(params, "limit", options.limit);
+      appendOptional(params, "edge_type", options.edgeType);
       return request<import("./core/schema.gen.js").AkbGraphNeighborsEnvelope>(`/graph?${params}`);
     },
     overview(options: AkbGraphOverviewOptions = {}) {

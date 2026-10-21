@@ -627,7 +627,8 @@ TOOLS = [
         description=(
             "Get relations for any resource (document, table, or file). "
             "Shows same-vault cross-type connections: doc→table, doc→file, table→file, etc. "
-            "Each row identifies whether it is an explicit link or implicit document-derived edge."
+            "Each row identifies whether it is an explicit link or implicit document-derived edge, "
+            "and names the resource at the other end by its title."
         ),
         input_schema={
             "type": "object",
@@ -644,7 +645,9 @@ TOOLS = [
         description=(
             "Get a same-vault knowledge graph — nodes (documents, tables, files) and edges (relations). "
             "Provide `uri` to get a subgraph centered on any resource with BFS traversal. "
-            "Provide `vault` (without uri) to get the full vault graph."
+            "Provide `vault` (without uri) to get the full vault graph. "
+            "Each node is named by its title; documents also carry doc_type, tags and path. "
+            "With `uri`, `edge_type` (strong or weak) walks only edges of that strength."
         ),
         input_schema={
             "type": "object",
@@ -663,6 +666,15 @@ TOOLS = [
                     ),
                 },
                 "limit": {"type": "integer", "default": 50, "minimum": 1, "maximum": 200, "description": "Max nodes"},
+                "edge_type": {
+                    "type": "string",
+                    "enum": _EDGE_TYPE_ENUM,
+                    "description": (
+                        "Only with `uri`: follow and return only edges of this strength "
+                        "(strong or weak), in both directions, so `limit` is spent on matching "
+                        "neighbours. Omit for every edge. Refused together with `vault` and no `uri`."
+                    ),
+                },
             },
         },
     ),

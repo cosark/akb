@@ -874,7 +874,11 @@
           "name": { "type": "string" },
           "resource_type": { "type": "string", "enum": ["doc", "table", "file"] },
           "depth": { "anyOf": [{ "type": "integer" }, { "type": "null" }] },
-          "degree": { "anyOf": [{ "type": "integer" }, { "type": "null" }] }
+          "degree": { "anyOf": [{ "type": "integer" }, { "type": "null" }] },
+          "title": { "type": "string" },
+          "doc_type": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "path": { "type": "string" }
         },
         "additionalProperties": { "$ref": "#/components/schemas/AkbJsonValue" }
       },
@@ -909,7 +913,8 @@
         "properties": {
           "kind": { "type": "string", "const": "graph_neighbors" },
           "nodes": { "type": "array", "items": { "$ref": "#/components/schemas/AkbGraphNode" } },
-          "edges": { "type": "array", "items": { "$ref": "#/components/schemas/AkbGraphEdge" } }
+          "edges": { "type": "array", "items": { "$ref": "#/components/schemas/AkbGraphEdge" } },
+          "truncated": { "type": "boolean" }
         }
       },
       "AkbGraphOverviewEnvelope": {
@@ -952,7 +957,11 @@
           "uri": { "type": "string" },
           "resource_type": { "type": "string", "enum": ["doc", "table", "file"] },
           "edge_type": { "type": "string", "enum": ["strong", "weak"] },
-          "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+          "name": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+          "title": { "type": "string" },
+          "doc_type": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "path": { "type": "string" }
         },
         "additionalProperties": { "$ref": "#/components/schemas/AkbJsonValue" }
       },

@@ -434,6 +434,31 @@ def test_graph_rest_openapi_contract_is_codegen_typed():
         assert schemas[name]["properties"]["edge_type"]["enum"] == edge_types, name
         assert "edge_type" in schemas[name]["required"], name
 
+    # A graph node and a relation row name the resource by its title and carry
+    # the parts a client needs to draw it. All optional: they are set only when
+    # the resource resolves in the vault, and a document without a title states
+    # no `title`.
+    label_fields = {"title", "doc_type", "tags", "path"}
+    for name in ("AkbGraphNode", "AkbRelation", "GraphNode", "RelationItem"):
+        assert label_fields.issubset(schemas[name]["properties"]), name
+        assert not label_fields & set(schemas[name].get("required", [])), name
+        tags_schema = schemas[name]["properties"]["tags"]
+        assert any(option.get("type") == "array" for option in tags_schema.get("anyOf") or [tags_schema]), name
+
+    # The neighbourhood walk says whether `limit` cut it short, like the overview.
+    assert schemas["AkbGraphNeighborsEnvelope"]["properties"]["truncated"]["type"] == "boolean"
+    assert "truncated" not in schemas["AkbGraphNeighborsEnvelope"]["required"]
+    assert "truncated" in schemas["GraphNeighborsResponse"]["properties"]
+
+    # `edge_type` selects which edges the neighbourhood walk follows, with the
+    # same vocabulary as the edges it returns.
+    graph_params = {param["name"]: param for param in paths["/api/v1/graph"]["get"]["parameters"]}
+    walk_edge_type = graph_params["edge_type"]
+    assert walk_edge_type["required"] is False
+    walk_options = walk_edge_type["schema"].get("anyOf") or [walk_edge_type["schema"]]
+    assert next(option["enum"] for option in walk_options if "enum" in option) == edge_types
+    assert "edge_type" not in {param["name"] for param in paths["/api/v1/graph/overview"]["get"]["parameters"]}
+
     get_relations = paths["/api/v1/relations"]["get"]
     params = {param["name"]: param for param in get_relations["parameters"]}
     assert set(params["direction"]["schema"]["enum"]) == {"incoming", "outgoing", "both"}

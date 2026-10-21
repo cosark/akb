@@ -1139,6 +1139,9 @@ async def _handle_graph(args: dict, uid: str, user: _MCPUser) -> dict:
         hops=args.get("hops", 2),
         limit=args.get("limit", 50),
         vault_id=access["vault_id"],
+        # Omitted or null = every edge. Anything else, an empty string
+        # included, is validated by the service rather than coerced.
+        edge_type=args.get("edge_type"),
     )
 
 

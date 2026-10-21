@@ -20,6 +20,11 @@ const row: AkbRelation | undefined = relations.relations[0];
 row?.relation satisfies AkbRelationType | undefined;
 row?.name satisfies string | null | undefined;
 row?.edge_type satisfies AkbEdgeType | undefined;
+// The row names the resource at the other end by its title; documents add the rest.
+row?.title satisfies string | undefined;
+row?.doc_type satisfies string | undefined;
+row?.tags satisfies string[] | undefined;
+row?.path satisfies string | undefined;
 
 const linked: AkbRelationLinkEnvelope = (await client.graph.link({
   source: "akb://proof/doc/a",
