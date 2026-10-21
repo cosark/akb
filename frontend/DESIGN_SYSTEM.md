@@ -852,8 +852,9 @@ an `sr-only` summary, never the only signal.
   kind; a compact hop legend beside the control names each colour, and the
   kind legend's markers turn neutral so they do not claim a colour the map is
   not using. Around a focus, "Strong links only" is on by default: the map
-  follows explicit relations outward from the focus (and `derived_from` back
-  to what was derived from it), so shared context such as a cluster ends the
+  follows explicit relations outward from the focus (and back along
+  `derived_from` and `depends_on`: what was derived from a resource and what
+  depends on it, i.e. the services an incident's service affects), so shared context such as a cluster ends the
   walk instead of pulling in every other resource that shares it; the focus's
   own body links, and those of every strongly reached resource short of the
   chosen depth (one step further out), are weak neighbours that are never

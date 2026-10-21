@@ -588,3 +588,18 @@ describe("walk after a date window", () => {
     expect(strongNeighborhood(recent, "focus", 2).nodes.map(n => n.uri)).toEqual(["focus", "child"]);
   });
 });
+
+describe("walking dependents", () => {
+  it("follows what depends on a resource back, but not other incoming strong relations", () => {
+    const s = (source: string, target: string, relation: GraphEdge["relation"] = "related_to"): GraphEdge => ({ source, target, relation, kind: "explicit" });
+    const payload = {
+      nodes: ["inc", "svc", "frontend", "checkout", "other-inc", "db"].map(uri => ({ uri, name: uri, kind: "document" as const })),
+      edges: [s("inc", "svc"), s("frontend", "svc", "depends_on"), s("checkout", "frontend", "depends_on"), s("other-inc", "svc"), s("svc", "db", "depends_on")],
+    };
+    const two = strongNeighborhood(payload, "inc", 2);
+    expect(Object.fromEntries(two.reach)).toEqual({ inc: 0, svc: 1, frontend: 2, db: 2 });
+    expect(strongNeighborhood(payload, "inc", 3).reach.get("checkout")).toBe(3);
+    expect(two.reach.has("other-inc")).toBe(false);
+  });
+});
+
