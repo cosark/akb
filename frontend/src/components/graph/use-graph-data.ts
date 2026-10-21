@@ -389,7 +389,7 @@ export async function fetchNeighbors(
 export async function fetchStrongNeighbors(vault: string, id: string, hops: 1 | 2 | 3, limit = 200): Promise<GraphPayload> {
   const [strong, around] = await Promise.all([
     getGraph(vault, id, hops, limit, "strong"),
-    getGraph(vault, id, 1, 100),
+    getGraph(vault, id, 1, 150),
   ]);
   const merged = mergeGraph(apiToPayload(strong), apiToPayload(around));
   const truncated = (strong as { truncated?: unknown }).truncated === true;
