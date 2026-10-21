@@ -233,6 +233,14 @@ def test_relation_help_matches_the_vault_boundary_and_graph_schema() -> None:
         assert "edge_type" in topics[topic], topic
     assert "weak" in topics["akb_link"] and "strong" in topics["akb_link"]
 
+    # The walk's direction is documented where the walk is: the parameter, what
+    # `outward` follows, that it needs `uri`, and an example.
+    graph_help = re.sub(r"\s+", " ", topics["akb_graph"])
+    assert "| direction |" in topics["akb_graph"]
+    for phrase in ("`outward`", "`both`", "incoming `derived_from`", "With `vault` and no `uri`, `outward` is refused"):
+        assert phrase in graph_help, phrase
+    assert 'direction="outward"' in topics["akb_graph"]
+
 
 def test_help_root_table_topics_are_real_help_topics() -> None:
     """Every drill-down topic the root help table points at exists as a key.

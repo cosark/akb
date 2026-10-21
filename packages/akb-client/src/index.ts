@@ -40,6 +40,7 @@ export type {
   AkbDrillDownEnvelope,
   AkbEdgeType,
   AkbGrepEnvelope,
+  AkbGraphDirection,
   AkbGraphEdge,
   AkbGraphEnvelope,
   AkbGraphHealthEnvelope,
@@ -463,11 +464,20 @@ export interface AkbGraphNeighborsOptions {
   hops?: 1 | 2 | 3 | 4 | 5;
   limit?: number;
   /**
-   * Follow, and return, only edges of this strength — in both directions, so
-   * `limit` is spent on matching neighbours. Omit for every edge. A server
-   * that predates the option ignores it; such a response has no `truncated`.
+   * Follow, and return, only edges of this strength — in the directions
+   * `direction` allows, so `limit` is spent on matching neighbours. Omit for
+   * every edge. A server that predates the option ignores it; such a response
+   * has no `truncated`.
    */
   edgeType?: import("./core/schema.gen.js").AkbEdgeType;
+  /**
+   * Which edges of a reached node the walk takes. `"both"` (the default) takes
+   * every edge touching it; `"outward"` takes its outgoing edges plus incoming
+   * `derived_from` edges, so the walk stops at shared context instead of
+   * fanning out through hubs. Composes with `edgeType`. A server that predates
+   * the option ignores it and walks both ways.
+   */
+  direction?: import("./core/schema.gen.js").AkbGraphDirection;
 }
 
 export interface AkbGraphOverviewOptions {
@@ -1101,6 +1111,7 @@ function makeGraphFacade(
       appendOptional(params, "hops", options.hops);
       appendOptional(params, "limit", options.limit);
       appendOptional(params, "edge_type", options.edgeType);
+      appendOptional(params, "direction", options.direction);
       return request<import("./core/schema.gen.js").AkbGraphNeighborsEnvelope>(`/graph?${params}`);
     },
     overview(options: AkbGraphOverviewOptions = {}) {

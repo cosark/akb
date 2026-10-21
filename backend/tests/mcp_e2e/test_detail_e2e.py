@@ -646,6 +646,32 @@ async def test_unicode_graph_grep_and_ownership(
     assert {(edge["kind"], edge["edge_type"]) for edge in graph["edges"]} == {("explicit", "strong")}
     assert {"API Spec", "Data Model"} <= {node["name"] for node in graph["nodes"]}
     assert graph["truncated"] is False
+    # An outward walk follows a resource's own edges: `first` depends on `second`, so
+    # it reaches it; `second` only has that edge incoming (and not derived_from), so an
+    # outward walk from it stops, while the default walk crosses the edge.
+    outward_from_first = await _call_json(
+        mcp_client,
+        runtime_session,
+        "akb_graph",
+        {"uri": first["uri"], "hops": 1, "direction": "outward"},
+    )
+    assert {node["uri"] for node in outward_from_first["nodes"]} == {first["uri"], second["uri"]}
+    assert [(edge["source"], edge["target"]) for edge in outward_from_first["edges"]] == [(first["uri"], second["uri"])]
+    outward_from_second = await _call_json(
+        mcp_client,
+        runtime_session,
+        "akb_graph",
+        {"uri": second["uri"], "hops": 1, "direction": "outward"},
+    )
+    assert [node["uri"] for node in outward_from_second["nodes"]] == [second["uri"]]
+    assert outward_from_second["edges"] == [] and outward_from_second["truncated"] is False
+    both_from_second = await _call_json(
+        mcp_client,
+        runtime_session,
+        "akb_graph",
+        {"uri": second["uri"], "hops": 1, "direction": "both"},
+    )
+    assert {node["uri"] for node in both_from_second["nodes"]} == {first["uri"], second["uri"]}
     # Linking the same edge again updates it, edge_type included.
     relinked = await _call_json(
         mcp_client,
@@ -688,6 +714,23 @@ async def test_unicode_graph_grep_and_ownership(
         expect_error=True,
     )
     assert refused_walk.get("code") == "invalid_argument"
+    # ... and so is a direction: the overview has none to restrict.
+    refused_outward = await _call_json(
+        mcp_client,
+        runtime_session,
+        "akb_graph",
+        {"vault": vault, "direction": "outward"},
+        expect_error=True,
+    )
+    assert refused_outward.get("code") == "invalid_argument"
+    invalid_direction = await _call_json(
+        mcp_client,
+        runtime_session,
+        "akb_graph",
+        {"uri": first["uri"], "direction": "sideways"},
+        expect_error=True,
+    )
+    assert invalid_direction.get("code") == "invalid_argument"
     invalid_edge_type = await _call_json(
         mcp_client,
         runtime_session,

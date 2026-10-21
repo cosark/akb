@@ -144,6 +144,48 @@ def edge_strength_sql(edge_type: str | None, *, alias: str = "") -> str:
     return f"({col}kind = 'explicit' AND {stored} IS DISTINCT FROM 'weak')"
 
 
+# ── Neighbourhood walk direction — single source of truth ────
+#
+# The BFS behind `GET /graph?uri=…` and `akb_graph(uri=…)` can take the edges of
+# a node it has reached in two ways:
+#
+#   - `both` (the default): every edge touching the node, whichever way it
+#     points. Through a hub — a cluster forty incidents point at — the walk fans
+#     out to everything that points at the hub.
+#   - `outward`: the node's own context, which is its OUTGOING edges (the
+#     cluster, node, service and owner it names), plus the INCOMING
+#     `derived_from` edges (what was derived from it: a postmortem derived_from
+#     the incident). Any other incoming edge is some other resource's context,
+#     so the walk stops there instead of fanning out through it.
+#
+# The vocabulary and the one relation `outward` still follows against the arrow
+# are defined here; the REST route, the MCP `akb_graph` schema and the tests
+# derive from them, like `EdgeType` above.
+GraphDirection = Literal["both", "outward"]
+GRAPH_DIRECTIONS: tuple[str, ...] = get_args(GraphDirection)
+DEFAULT_GRAPH_DIRECTION: GraphDirection = "both"
+OUTWARD_INCOMING_RELATION: LinkRelationType = "derived_from"
+
+
+def incoming_walk_sql(direction: str | None) -> str:
+    """SQL predicate narrowing the walk's *incoming* edge fetch for ``direction``.
+
+    ``both`` (and ``None``, an omitted parameter) adds nothing: the walk takes
+    every incoming edge. ``outward`` keeps the incoming edges whose relation is
+    :data:`OUTWARD_INCOMING_RELATION` and no others. Only the incoming fetch is
+    ever narrowed — an outgoing edge is followed in every direction mode.
+
+    Like :func:`edge_strength_sql`, the fragment is interpolated into SQL, so
+    it is built only from the constants above and any value outside the
+    vocabulary raises.
+    """
+    if direction is None or direction == "both":
+        return ""
+    if direction not in GRAPH_DIRECTIONS:
+        raise ValueError(f"direction must be one of {list(GRAPH_DIRECTIONS)}, got {direction!r}")
+    return f"relation_type = '{OUTWARD_INCOMING_RELATION}'"
+
+
 def validate_new_structured_relation_refs(
     vault: str,
     refs: list[str],
@@ -979,6 +1021,7 @@ async def get_graph(
     *,
     vault_id: uuid.UUID | None = None,
     edge_type: str | None = None,
+    direction: str | None = None,
 ) -> dict:
     """Get a subgraph centered on a resource, or the full vault graph.
 
@@ -995,15 +1038,24 @@ async def get_graph(
     call site.
 
     ``edge_type`` ("strong" or "weak"; ``None`` = every edge, the default)
-    restricts the walk to edges of that strength, in both directions. The
-    restriction is part of the *traversal*, not a filter on its result: a
-    neighbour reachable only through an excluded edge is never visited, so the
-    ``limit`` node cap is spent on the neighbours the caller asked for. It
-    belongs to the neighbourhood walk, so it needs ``resource_uri``; the
-    whole-vault overview is not strength-aware and a request that pairs it
-    with ``edge_type`` is refused instead of silently returning every edge.
-    A neighbourhood result also says whether ``limit`` cut it short
-    (``truncated``).
+    restricts the walk to edges of that strength, in whichever directions
+    ``direction`` follows. The restriction is part of the *traversal*, not a
+    filter on its result: a neighbour reachable only through an excluded edge
+    is never visited, so the ``limit`` node cap is spent on the neighbours the
+    caller asked for. It belongs to the neighbourhood walk, so it needs
+    ``resource_uri``; the whole-vault overview is not strength-aware and a
+    request that pairs it with ``edge_type`` is refused instead of silently
+    returning every edge. A neighbourhood result also says whether ``limit``
+    cut it short (``truncated``).
+
+    ``direction`` ("both", the default and what ``None`` means, or "outward")
+    chooses which edges of a reached node the walk follows. ``both`` takes
+    every edge touching it; ``outward`` takes its outgoing edges plus the
+    incoming ``derived_from`` ones, so the walk ends at shared context instead
+    of fanning out through a hub. It composes with ``edge_type`` (each narrows
+    what the other leaves) and, like it, belongs to the neighbourhood walk:
+    ``outward`` without ``resource_uri`` is refused. ``both`` is what the
+    overview already does, so it is accepted there as the no-op it is.
 
     `vault_id` scopes the graph to one vault: both the BFS edge fetch
     and the name resolution refuse to look outside it. Caller must
@@ -1034,6 +1086,20 @@ async def get_graph(
                 code=INVALID_ARGUMENT,
                 hint="Pass `uri` for a strength-aware subgraph, or drop `edge_type` for the vault overview.",
             )
+    if direction is not None:
+        # Same order as `edge_type`: the value is checked before the pairing.
+        if direction not in GRAPH_DIRECTIONS:
+            return err(
+                f"direction must be one of {list(GRAPH_DIRECTIONS)}, got {direction!r}",
+                code=INVALID_ARGUMENT,
+            )
+        if direction != DEFAULT_GRAPH_DIRECTION and not resource_uri:
+            return err(
+                f"direction={direction} restricts the neighbourhood walk, so it needs `uri`; "
+                "the vault overview always returns every edge",
+                code=INVALID_ARGUMENT,
+                hint="Pass `uri` for a directional subgraph, or drop `direction` for the vault overview.",
+            )
     if not resource_uri:
         return await get_overview(vault, vault_id=vault_id, top_k=limit)
     if not uri_is_in_vault(resource_uri, vault):
@@ -1052,7 +1118,7 @@ async def get_graph(
 
         truncated = await _bfs_collect(
             conn, vault_id, vault, resource_uri, hops, limit, nodes, edge_list,
-            edge_type=edge_type,
+            edge_type=edge_type, direction=direction,
         )
 
     return {
@@ -2072,7 +2138,7 @@ async def _bfs_collect(
     conn, vault_id: uuid.UUID, vault_name: str, start_uri: str,
     depth: int, limit: int,
     nodes: dict[str, dict], edges: list[dict],
-    *, edge_type: str | None = None,
+    *, edge_type: str | None = None, direction: str | None = None,
 ) -> bool:
     """BFS traversal from a starting resource URI, scoped to one vault.
 
@@ -2085,6 +2151,14 @@ async def _bfs_collect(
     never crosses an edge of the other strength: a neighbour reachable only
     through one is not visited, and the ``limit`` node cap is spent on the
     neighbours that qualify.
+
+    ``direction`` ("both" or ``None`` = every edge of a node; "outward" = its
+    outgoing edges plus the incoming ``derived_from`` ones) narrows the
+    *incoming* fetch the same way, so a node that is only pointed at — a hub —
+    is never walked through and never spends the cap. Edges are emitted as the
+    walk follows them: with ``outward`` they are the outgoing edges and the
+    incoming ``derived_from`` edges of the nodes it expanded, and an edge it
+    did not follow is absent even when both its ends were visited.
 
     Returns whether ``limit`` cut the walk short — True when a node that
     qualified and lies within ``depth`` hops could not be added because the cap
@@ -2102,6 +2176,13 @@ async def _bfs_collect(
     strength = edge_strength_sql(edge_type)
     if strength:
         scoped = f"{scoped} AND {strength}"
+    # The direction narrows only the incoming fetch; an outgoing edge is
+    # followed in every mode. Built after the strength so a bad `direction`
+    # raises before the first query, like a bad `edge_type`.
+    scoped_incoming = scoped
+    inward = incoming_walk_sql(direction)
+    if inward:
+        scoped_incoming = f"{scoped} AND {inward}"
 
     for current_depth in range(depth + 1):
         if not queue:
@@ -2128,7 +2209,7 @@ async def _bfs_collect(
         incoming = await conn.fetch(
             "SELECT source_uri, source_type, target_uri, relation_type, kind, "
             f"{_STORED_EDGE_TYPE_COLUMN} "
-            f"FROM edges WHERE target_uri = ANY($1::text[]) AND {scoped}",
+            f"FROM edges WHERE target_uri = ANY($1::text[]) AND {scoped_incoming}",
             unvisited, vault_id, prefix,
         )
         outgoing = [

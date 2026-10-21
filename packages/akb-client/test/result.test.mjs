@@ -1667,6 +1667,29 @@ test("graph neighbors sends edge_type only when the caller sets it, and serves t
   assert.equal(weak.throwOnError().data.kind, "graph_neighbors");
 });
 
+test("graph neighbors sends direction only when the caller sets it, and composes with edgeType", async () => {
+  const urls = [];
+  const client = createClient("https://akb.test/api/v1/", {
+    fetch: async (input) => {
+      urls.push(new URL(String(input)));
+      return new Response(JSON.stringify({ kind: "graph_neighbors", nodes: [], edges: [], truncated: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  await client.graph.neighbors("akb://eng/doc/a", { hops: 2 });
+  await client.graph.neighbors("akb://eng/doc/a", { direction: "both" });
+  await client.graph.neighbors("akb://eng/doc/a", { direction: "outward" });
+  await client.graph.neighbors("akb://eng/doc/a", { hops: 3, limit: 40, edgeType: "strong", direction: "outward" });
+
+  assert.equal(urls[0].searchParams.has("direction"), false);
+  assert.equal(urls[1].searchParams.get("direction"), "both");
+  assert.equal(urls[2].search, "?uri=akb%3A%2F%2Feng%2Fdoc%2Fa&direction=outward");
+  assert.equal(urls[3].search, "?uri=akb%3A%2F%2Feng%2Fdoc%2Fa&hops=3&limit=40&edge_type=strong&direction=outward");
+});
+
 test("graph facade omits defaults, preflights vault, preserves 4xx, and keeps raw request", async () => {
   const calls = [];
   const responses = [

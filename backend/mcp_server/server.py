@@ -1142,6 +1142,8 @@ async def _handle_graph(args: dict, uid: str, user: _MCPUser) -> dict:
         # Omitted or null = every edge. Anything else, an empty string
         # included, is validated by the service rather than coerced.
         edge_type=args.get("edge_type"),
+        # Omitted or null = `both`; validated by the service the same way.
+        direction=args.get("direction"),
     )
 
 

@@ -13,6 +13,13 @@ neighbour reachable only through a weak edge is never visited. ``weak`` is the
 mirror image; omitted means every edge, as before. The vault overview is not
 strength-aware and is left exactly as it was.
 
+``direction=outward`` chooses which edges of a reached node the walk follows: its
+outgoing edges plus the incoming ``derived_from`` ones. Another document that
+merely points at a node it reaches (a sibling incident on the same cluster) is
+not followed, so the walk stops at shared context instead of fanning out through
+a hub. ``both`` (the default) is the walk as it always was. The two compose, and
+what a walk returns is the edges it followed.
+
 Set ``AKB_TEST_DSN`` to a PostgreSQL 16 + pgvector instance; ``REQUIRE_REAL_PG=1``
 turns a missing instance from a skip into a failure.
 """
@@ -41,7 +48,12 @@ settings.git_storage_path = tempfile.mkdtemp(prefix="akb-strong-walk-pg-")
 from app.api.deps import get_current_user
 from app.api.routes import knowledge
 from app.services import document_counters, kg_service
-from app.services.kg_service import resolve_edge_type, store_document_relations
+from app.services.kg_service import (
+    LINK_RELATION_TYPES,
+    OUTWARD_INCOMING_RELATION,
+    resolve_edge_type,
+    store_document_relations,
+)
 from app.services.uri_service import doc_uri
 from mcp_server import server
 
@@ -126,6 +138,28 @@ class World:
     def names(self, graph: dict) -> set[str]:
         prefix = f"akb://{self.vault}/coll/n/doc/"
         return {n["uri"].removeprefix(prefix).removesuffix(".md") for n in graph["nodes"]}
+
+    def edge_names(self, graph: dict) -> set[tuple[str, str, str]]:
+        """Every returned edge as (source, target, relation), by document name."""
+        prefix = f"akb://{self.vault}/coll/n/doc/"
+
+        def short(uri: str) -> str:
+            return uri.removeprefix(prefix).removesuffix(".md")
+
+        return {(short(e["source"]), short(e["target"]), e["relation"]) for e in graph["edges"]}
+
+    async def seed_many(self, sources: list[str], target: str, relation: str = "depends_on") -> None:
+        """One explicit strong edge from each of ``sources`` to ``target``, as ``akb_link`` leaves it."""
+        async with self.pool.acquire() as conn:
+            await conn.executemany(
+                "INSERT INTO documents (id, vault_id, path, title) VALUES ($1, $2, $3, $4)",
+                [(uuid.uuid4(), self.vault_id, f"n/{name}.md", f"Title of {name}") for name in sources],
+            )
+            await conn.executemany(
+                "INSERT INTO edges (vault_id, source_uri, target_uri, relation_type, source_type, target_type, "
+                "metadata, kind) VALUES ($1, $2, $3, $4, 'doc', 'doc', '{}'::jsonb, 'explicit')",
+                [(self.vault_id, self.uri(name), self.uri(target), relation) for name in sources],
+            )
 
 
 @pytest_asyncio.fixture
@@ -392,6 +426,247 @@ async def test_a_strong_walk_costs_the_same_round_trips_as_the_unfiltered_one(wo
     assert len(statements) == unfiltered
 
 
+# ── Direction: an outward walk stops at shared context ───────────────────
+
+
+async def _incidents(world: World) -> None:
+    """An incident, the cluster it ran on, a sibling incident on that same cluster,
+    and a postmortem derived from the incident that also names a service."""
+    await world.docs("incident", "other-incident", "cluster", "pm", "service")
+    await world.link("incident", "cluster", "depends_on")
+    await world.link("other-incident", "cluster", "depends_on")
+    await world.link("pm", "incident", "derived_from")
+    await world.link("pm", "service", "references")
+
+
+async def test_an_outward_walk_follows_its_own_context_and_what_was_derived_from_it(world):
+    await _incidents(world)
+
+    graph = await world.walk("incident", direction="outward")
+
+    assert world.names(graph) == {"incident", "cluster", "pm", "service"}
+    assert "other-incident" not in world.names(graph)  # it only points at the cluster, shared context
+    assert world.edge_names(graph) == {
+        ("incident", "cluster", "depends_on"),  # outgoing
+        ("pm", "incident", "derived_from"),  # incoming, but derived_from
+        ("pm", "service", "references"),  # the postmortem's own outgoing edge, one hop further out
+    }
+    assert {n["uri"].rsplit("/", 1)[-1].removesuffix(".md"): n["depth"] for n in graph["nodes"]} == {
+        "incident": 0, "cluster": 1, "pm": 1, "service": 2,
+    }
+    assert graph["truncated"] is False
+
+
+@pytest.mark.parametrize("direction", [None, "both"])
+async def test_both_is_the_walk_it_always_was(world, direction):
+    await _incidents(world)
+
+    graph = await world.walk("incident", direction=direction)
+    omitted = await world.walk("incident")
+
+    assert world.names(graph) == {"incident", "cluster", "pm", "other-incident", "service"}
+    assert len(graph["edges"]) == 4 and graph["truncated"] is False
+    assert world.edge_names(graph) == world.edge_names(omitted) and world.names(graph) == world.names(omitted)
+
+
+async def test_an_outward_walk_respects_hops(world):
+    await _incidents(world)
+
+    graph = await world.walk("incident", hops=1, direction="outward")
+
+    assert world.names(graph) == {"incident", "cluster", "pm"}  # the postmortem's edge to the service is a second hop
+    assert world.edge_names(graph) == {("incident", "cluster", "depends_on"), ("pm", "incident", "derived_from")}
+    assert graph["truncated"] is False  # the radius is not a cut
+
+
+async def test_started_on_a_hub_an_outward_walk_returns_the_hub_alone(world):
+    await _incidents(world)
+
+    outward = await world.walk("cluster", direction="outward")
+    everything = await world.walk("cluster")
+
+    assert world.names(outward) == {"cluster"} and outward["edges"] == []
+    assert world.names(everything) == {"cluster", "incident", "other-incident", "pm"}
+
+
+async def test_only_derived_from_is_followed_against_the_arrow_for_every_relation(world):
+    """The real SQL over every relation `akb_link` writes, and the implicit body link."""
+    relations = [*LINK_RELATION_TYPES]
+    await world.docs("c", "body-in", *[f"{r}-in" for r in relations], *[f"{r}-out" for r in relations])
+    for relation in relations:
+        await world.link(f"{relation}-in", "c", relation)  # points at c
+        await world.link("c", f"{relation}-out", relation)  # c points at it
+    await world.extract("body-in", body=f"See [c]({world.uri('c')}).")  # implicit links_to, points at c
+
+    outward = await world.walk("c", hops=1, direction="outward")
+    both = await world.walk("c", hops=1)
+
+    assert world.names(outward) == {"c", f"{OUTWARD_INCOMING_RELATION}-in", *[f"{r}-out" for r in relations]}
+    assert world.names(both) == world.names(outward) | {f"{r}-in" for r in relations} | {"body-in"}
+
+
+async def test_derived_from_is_followed_against_the_arrow_from_every_reached_node(world):
+    await world.docs("incident", "pm", "summary", "raw-log")
+    await world.link("pm", "incident", "derived_from")
+    await world.link("summary", "pm", "derived_from")  # derived from the postmortem, not from the incident
+    await world.link("incident", "raw-log", "derived_from")  # the incident derives from a log: outgoing
+
+    graph = await world.walk("incident", direction="outward")
+
+    assert world.names(graph) == {"incident", "pm", "summary", "raw-log"}
+    assert len(graph["edges"]) == 3
+
+
+async def test_outward_composes_with_edge_type(world):
+    await world.docs("incident", "cluster", "owner", "pm", "draft", "log", "sibling")
+    await world.link("incident", "cluster", "depends_on")  # strong, outgoing
+    await world.link("incident", "owner", "references", edge_type="weak")  # weak, outgoing
+    await world.link("pm", "incident", "derived_from")  # strong, derived from it
+    await world.link("draft", "incident", "derived_from", edge_type="weak")  # weak, derived from it
+    await world.seed_edge("log", "incident", kind="implicit", relation="derived_from", metadata=None)  # implicit: weak
+    await world.link("sibling", "cluster", "depends_on")  # strong, but shared context
+
+    outward = await world.walk("incident", direction="outward")
+    strong = await world.walk("incident", edge_type="strong", direction="outward")
+    weak = await world.walk("incident", edge_type="weak", direction="outward")
+    strong_both = await world.walk("incident", edge_type="strong")
+
+    assert world.names(outward) == {"incident", "cluster", "owner", "pm", "draft", "log"}
+    assert world.names(strong) == {"incident", "cluster", "pm"}
+    assert {e["edge_type"] for e in strong["edges"]} == {"strong"}
+    assert world.names(weak) == {"incident", "owner", "draft", "log"}
+    assert {e["edge_type"] for e in weak["edges"]} == {"weak"}
+    assert {e["kind"] for e in weak["edges"]} == {"explicit", "implicit"}
+    # Each narrows what the other leaves: without `outward` the strong walk reaches the sibling.
+    assert world.names(strong_both) == {"incident", "cluster", "pm", "sibling"}
+
+
+async def test_an_implicit_outgoing_link_is_followed_and_an_implicit_incoming_one_is_not(world):
+    await world.docs("a", "b")
+    await world.extract("a", body=f"See [b]({world.uri('b')}).")  # a --links_to--> b, implicit
+
+    from_a = await world.walk("a", direction="outward")
+    from_b = await world.walk("b", direction="outward")
+    weak_from_a = await world.walk("a", edge_type="weak", direction="outward")
+    strong_from_a = await world.walk("a", edge_type="strong", direction="outward")
+
+    assert world.names(from_a) == {"a", "b"} and world.names(weak_from_a) == {"a", "b"}
+    assert world.names(strong_from_a) == {"a"}  # an implicit edge is weak
+    assert world.names(from_b) == {"b"}  # the link is incoming at b, and not derived_from
+
+
+async def test_an_edge_the_walk_did_not_follow_is_not_emitted_even_between_visited_nodes(world):
+    """x points at y and both are reached. x sits on the radius, so its own edges are
+    never read, and y only takes an incoming edge when it is `derived_from`."""
+    await world.docs("s", "y", "p", "x")
+    await world.link("s", "y")
+    await world.link("s", "p")
+    await world.link("p", "x")
+    await world.link("x", "y")
+
+    both = await world.walk("s")
+    outward = await world.walk("s", direction="outward")
+
+    assert world.names(both) == world.names(outward) == {"s", "y", "p", "x"}
+    assert len(both["edges"]) == 4
+    assert world.edge_names(outward) == world.edge_names(both) - {("x", "y", "related_to")}
+
+
+async def test_a_hub_does_not_spend_the_node_cap_on_an_outward_walk(world):
+    """The shape seen on real data: every incident points at one cluster."""
+    await world.docs("cluster")
+    await world.seed_many([f"incident-{i}" for i in range(250)], "cluster")
+
+    fan_out = await world.walk("incident-0", limit=200, edge_type="strong")
+    outward = await world.walk("incident-0", limit=200, edge_type="strong", direction="outward")
+
+    assert len(fan_out["nodes"]) == 200 and fan_out["truncated"] is True  # incident, cluster, then the others
+    assert world.names(outward) == {"incident-0", "cluster"} and len(outward["edges"]) == 1
+    assert outward["truncated"] is False
+
+
+@pytest.mark.parametrize(
+    ("limit", "kept", "truncated"),
+    [(50, 11, False), (11, 11, False), (10, 10, True), (3, 3, True), (1, 1, True)],
+)
+async def test_truncated_means_the_same_for_an_outward_walk(world, limit, kept, truncated):
+    await _hub(world, strong=10, weak=0)  # ten outgoing neighbours
+
+    graph = await world.walk("hub", hops=1, limit=limit, direction="outward")
+
+    assert len(graph["nodes"]) == kept and graph["truncated"] is truncated
+    assert all(e["source"] in {n["uri"] for n in graph["nodes"]} for e in graph["edges"])  # no stub endpoints
+
+
+async def test_neighbours_an_outward_walk_does_not_follow_are_not_a_cut(world):
+    await world.docs("c")
+    await world.seed_many([f"leaf-{i}" for i in range(5)], "c")  # five documents point at c
+
+    outward = await world.walk("c", hops=1, limit=1, direction="outward")
+    default = await world.walk("c", hops=1, limit=1)
+
+    assert world.names(outward) == {"c"} and outward["edges"] == [] and outward["truncated"] is False
+    assert len(default["nodes"]) == 1 and default["truncated"] is True
+
+
+async def test_an_outward_walk_costs_the_same_round_trips_as_the_default_one(world, monkeypatch):
+    await _incidents(world)
+    statements: list[str] = []
+
+    class _Recording:
+        def __init__(self, conn) -> None:
+            self._conn = conn
+
+        def __getattr__(self, name):
+            attr = getattr(self._conn, name)
+            if name != "fetch":
+                return attr
+
+            async def fetch(query, *args, **kwargs):
+                statements.append(query)
+                return await attr(query, *args, **kwargs)
+
+            return fetch
+
+    class _Acquire:
+        def __init__(self, inner) -> None:
+            self._inner = inner
+
+        async def __aenter__(self):
+            return _Recording(await self._inner.__aenter__())
+
+        async def __aexit__(self, *exc):
+            return await self._inner.__aexit__(*exc)
+
+    class _Pool:
+        def acquire(self):
+            return _Acquire(world.pool.acquire())
+
+    async def _get_pool():
+        return _Pool()
+
+    monkeypatch.setattr(kg_service, "get_pool", _get_pool)
+
+    await world.walk("incident")
+    default = len(statements)
+    statements.clear()
+    await world.walk("incident", direction="outward")
+
+    assert len(statements) == default  # two fetches a wave, three waves, either way
+
+
+async def test_the_service_validates_direction_before_it_touches_a_row(world):
+    await _incidents(world)
+
+    invalid = await kg_service.get_graph(world.vault, world.uri("incident"), vault_id=world.vault_id, direction="sideways")
+    refused = await kg_service.get_graph(world.vault, None, vault_id=world.vault_id, direction="outward")
+    overview = await kg_service.get_graph(world.vault, None, vault_id=world.vault_id, direction="both")
+
+    assert invalid["code"] == "invalid_argument" and "nodes" not in invalid
+    assert refused["code"] == "invalid_argument" and "`uri`" in refused["error"] and "nodes" not in refused
+    assert len(overview["edges"]) == 4  # `both` is the overview it always was
+
+
 # ── The overview is not strength-aware, and says so ──────────────────────
 
 
@@ -500,3 +775,46 @@ async def test_mcp_akb_graph_refuses_what_the_walk_cannot_honour(world, mcp):
     assert overview["code"] == "invalid_argument" and overview["hint"]
     assert "nodes" not in invalid and "nodes" not in overview
     assert {e["edge_type"] for e in plain_overview["edges"]} == {"strong", "weak"}  # untouched
+
+
+async def test_rest_walks_outward_and_validates_the_parameter(world, rest):
+    await _incidents(world)
+    params = {"uri": world.uri("incident"), "hops": 2, "limit": 50}
+
+    default = (await rest.get("/api/v1/graph", params=params)).json()
+    outward = (await rest.get("/api/v1/graph", params={**params, "direction": "outward"})).json()
+    both = (await rest.get("/api/v1/graph", params={**params, "direction": "both"})).json()
+    composed = (await rest.get("/api/v1/graph", params={**params, "direction": "outward", "edge_type": "weak"})).json()
+    invalid = await rest.get("/api/v1/graph", params={**params, "direction": "sideways"})
+    refused = await rest.get("/api/v1/graph", params={"vault": world.vault, "direction": "outward"})
+    overview = await rest.get("/api/v1/graph", params={"vault": world.vault, "direction": "both"})
+
+    assert default["kind"] == outward["kind"] == "graph_neighbors"
+    assert world.names(outward) == {"incident", "cluster", "pm", "service"}
+    assert world.names(both) == world.names(default) == {"incident", "cluster", "pm", "other-incident", "service"}
+    assert world.names(composed) == {"incident"}  # every edge here is strong
+    assert outward["truncated"] is False
+    assert invalid.status_code == 422
+    assert refused.status_code == 400 and "`uri`" in refused.json()["detail"]
+    assert overview.status_code == 200 and overview.json()["kind"] == "graph_overview"
+
+
+async def test_mcp_akb_graph_walks_outward_and_validates_the_parameter(world, mcp):
+    await _incidents(world)
+    uri = world.uri("incident")
+
+    default = await mcp("akb_graph", uri=uri)
+    outward = await mcp("akb_graph", uri=uri, direction="outward")
+    explicit_null = await mcp("akb_graph", uri=uri, direction=None)
+    strong_outward = await mcp("akb_graph", uri=uri, direction="outward", edge_type="strong")
+    invalid = await mcp("akb_graph", uri=uri, direction="sideways")
+    refused = await mcp("akb_graph", vault=world.vault, direction="outward")
+    overview = await mcp("akb_graph", vault=world.vault, direction="both")
+
+    assert world.names(outward) == {"incident", "cluster", "pm", "service"}
+    assert world.names(explicit_null) == world.names(default) == {"incident", "cluster", "pm", "other-incident", "service"}
+    assert world.names(strong_outward) == {"incident", "cluster", "pm", "service"}
+    assert {e["edge_type"] for e in outward["edges"]} == {"strong"}
+    assert invalid["code"] == "invalid_argument" and "nodes" not in invalid
+    assert refused["code"] == "invalid_argument" and refused["hint"] and "nodes" not in refused
+    assert len(overview["edges"]) == 4  # the vault graph, untouched
