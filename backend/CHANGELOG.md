@@ -134,17 +134,23 @@ specifically; the proxy has its own log in
   `truncated`.
 - The same two routes also take an optional `direction`: `both` (the default, and
   exactly the walk described above) or `outward`. An `outward` walk takes, from
-  each node it reaches, that node's outgoing edges plus its incoming `derived_from`
-  edges (what was derived from it, such as a postmortem derived from an incident),
-  and no other incoming edge. It therefore ends at shared context instead of
-  fanning out through a hub: from an incident it reaches the cluster, node,
-  service and owner it names and the postmortems derived from it, not every other
-  incident that points at the same cluster, which with `edge_type=strong` and
-  `both` filled the 200-node cap. `direction` composes with `edge_type`, each
-  narrowing what the other leaves. The edges returned are the ones the walk
-  followed, so an edge between two returned nodes that the walk did not follow is
-  not in the result. `truncated` means what it meant: a node the walk would have
-  taken did not fit.
+  each node it reaches, that node's outgoing edges plus what was derived from it
+  and what depends on it: its incoming `derived_from` edges (such as a postmortem
+  derived from an incident) and its incoming `depends_on` edges (the services that
+  depend on a failed service are affected by it, and so, a level per hop, are the
+  ones that depend on those: the blast radius an incident review needs two or
+  three hops out). No other incoming edge is taken. It therefore ends at shared
+  context instead of fanning out through a hub: from an incident it reaches the
+  cluster, node, service and owner it names, the postmortems derived from it and
+  whatever depends on any of them, not every other incident that merely points at
+  the same cluster (`related_to`, `references`, `links_to`, …), which with
+  `edge_type=strong` and `both` filled the 200-node cap. A node many others
+  depend on is still walked through, since those dependents are what the relation
+  is followed for; `limit` and `truncated` apply to them as to any node.
+  `direction` composes with `edge_type`, each narrowing what the other leaves.
+  The edges returned are the ones the walk followed, so an edge between two
+  returned nodes that the walk did not follow is not in the result. `truncated`
+  means what it meant: a node the walk would have taken did not fit.
 - `direction=outward` without `uri` is refused the way `edge_type` is
   (`invalid_argument`, REST 400), because the vault overview has no direction to
   restrict; `both` is what the overview does anyway and is accepted there. A value

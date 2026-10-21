@@ -473,7 +473,8 @@ export interface AkbGraphNeighborsOptions {
   /**
    * Which edges of a reached node the walk takes. `"both"` (the default) takes
    * every edge touching it; `"outward"` takes its outgoing edges plus incoming
-   * `derived_from` edges, so the walk stops at shared context instead of
+   * `derived_from` edges (what was derived from it) and incoming `depends_on`
+   * edges (what depends on it), so the walk stops at shared context instead of
    * fanning out through hubs. Composes with `edgeType`. A server that predates
    * the option ignores it and walks both ways.
    */

@@ -154,18 +154,26 @@ def edge_strength_sql(edge_type: str | None, *, alias: str = "") -> str:
 #     points. Through a hub — a cluster forty incidents point at — the walk fans
 #     out to everything that points at the hub.
 #   - `outward`: the node's own context, which is its OUTGOING edges (the
-#     cluster, node, service and owner it names), plus the INCOMING
-#     `derived_from` edges (what was derived from it: a postmortem derived_from
-#     the incident). Any other incoming edge is some other resource's context,
-#     so the walk stops there instead of fanning out through it.
+#     cluster, node, service and owner it names), plus two kinds of INCOMING
+#     edge, which say what hangs off the node rather than what it names:
+#     `derived_from` (what was derived from it: a postmortem derived_from the
+#     incident) and `depends_on` (what depends on it, and so is affected by
+#     it: a service that depends_on the failed one, then the services that
+#     depend on that one, a dependency level per hop). Any other incoming
+#     edge (`related_to`, `references`, `links_to`, …) is some other
+#     resource's context, so the walk stops there instead of fanning out
+#     through it. A node many others depend on is therefore still walked
+#     through: those dependents are what the relation is followed for.
 #
-# The vocabulary and the one relation `outward` still follows against the arrow
+# The vocabulary and the relations `outward` still follows against the arrow
 # are defined here; the REST route, the MCP `akb_graph` schema and the tests
 # derive from them, like `EdgeType` above.
 GraphDirection = Literal["both", "outward"]
 GRAPH_DIRECTIONS: tuple[str, ...] = get_args(GraphDirection)
 DEFAULT_GRAPH_DIRECTION: GraphDirection = "both"
-OUTWARD_INCOMING_RELATION: LinkRelationType = "derived_from"
+# A tuple, not a set: the SQL fragment below is built from it, and its text must
+# not depend on hash order. Every member is a relation `akb_link` can write.
+OUTWARD_INCOMING_RELATIONS: tuple[LinkRelationType, ...] = ("derived_from", "depends_on")
 
 
 def incoming_walk_sql(direction: str | None) -> str:
@@ -173,18 +181,21 @@ def incoming_walk_sql(direction: str | None) -> str:
 
     ``both`` (and ``None``, an omitted parameter) adds nothing: the walk takes
     every incoming edge. ``outward`` keeps the incoming edges whose relation is
-    :data:`OUTWARD_INCOMING_RELATION` and no others. Only the incoming fetch is
-    ever narrowed — an outgoing edge is followed in every direction mode.
+    one of :data:`OUTWARD_INCOMING_RELATIONS` and no others. Only the incoming
+    fetch is ever narrowed — an outgoing edge is followed in every direction
+    mode.
 
     Like :func:`edge_strength_sql`, the fragment is interpolated into SQL, so
-    it is built only from the constants above and any value outside the
+    it is built only from the constants above (a constant ``IN`` list, so the
+    fetch binds the same arguments in every mode) and any value outside the
     vocabulary raises.
     """
     if direction is None or direction == "both":
         return ""
     if direction not in GRAPH_DIRECTIONS:
         raise ValueError(f"direction must be one of {list(GRAPH_DIRECTIONS)}, got {direction!r}")
-    return f"relation_type = '{OUTWARD_INCOMING_RELATION}'"
+    relations = ", ".join(f"'{relation}'" for relation in OUTWARD_INCOMING_RELATIONS)
+    return f"relation_type IN ({relations})"
 
 
 def validate_new_structured_relation_refs(
@@ -1097,9 +1108,10 @@ async def get_graph(
 
     ``direction`` ("both", the default and what ``None`` means, or "outward")
     chooses which edges of a reached node the walk follows. ``both`` takes
-    every edge touching it; ``outward`` takes its outgoing edges plus the
-    incoming ``derived_from`` ones, so the walk ends at shared context instead
-    of fanning out through a hub. It composes with ``edge_type`` (each narrows
+    every edge touching it; ``outward`` takes its outgoing edges plus what was
+    derived from it and what depends on it (its incoming ``derived_from`` and
+    ``depends_on`` edges), so the walk ends at shared context instead of
+    fanning out through a hub. It composes with ``edge_type`` (each narrows
     what the other leaves) and, like it, belongs to the neighbourhood walk:
     ``outward`` without ``resource_uri`` is refused. ``both`` is what the
     overview already does, so it is accepted there as the no-op it is.
@@ -2309,12 +2321,14 @@ async def _bfs_collect(
     neighbours that qualify.
 
     ``direction`` ("both" or ``None`` = every edge of a node; "outward" = its
-    outgoing edges plus the incoming ``derived_from`` ones) narrows the
-    *incoming* fetch the same way, so a node that is only pointed at — a hub —
-    is never walked through and never spends the cap. Edges are emitted as the
+    outgoing edges plus the incoming ``derived_from`` and ``depends_on`` ones,
+    :data:`OUTWARD_INCOMING_RELATIONS`) narrows the *incoming* fetch the same
+    way, so a node that is only pointed at by other relations — a hub — is
+    never walked through and never spends the cap. Edges are emitted as the
     walk follows them: with ``outward`` they are the outgoing edges and the
-    incoming ``derived_from`` edges of the nodes it expanded, and an edge it
-    did not follow is absent even when both its ends were visited.
+    incoming ``derived_from`` / ``depends_on`` edges of the nodes it expanded,
+    and an edge it did not follow is absent even when both its ends were
+    visited.
 
     Returns whether ``limit`` cut the walk short — True when a node that
     qualified and lies within ``depth`` hops could not be added because the cap

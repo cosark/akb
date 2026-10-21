@@ -244,7 +244,10 @@ def test_relation_help_matches_the_vault_boundary_and_graph_schema() -> None:
     # `outward` follows, that it needs `uri`, and an example.
     graph_help = re.sub(r"\s+", " ", topics["akb_graph"])
     assert "| direction |" in topics["akb_graph"]
-    for phrase in ("`outward`", "`both`", "incoming `derived_from`", "With `vault` and no `uri`, `outward` is refused"):
+    for phrase in (
+        "`outward`", "`both`", "incoming `derived_from` and `depends_on` edges", "what depends on it",
+        "With `vault` and no `uri`, `outward` is refused",
+    ):
         assert phrase in graph_help, phrase
     assert 'direction="outward"' in topics["akb_graph"]
 

@@ -419,7 +419,7 @@ export interface AkbGraphHealthEnvelope {
 
 export type AkbGraphEnvelope = AkbGraphNeighborsEnvelope | AkbGraphOverviewEnvelope;
 
-/** Which edges of a reached node a neighbourhood walk takes: `both` takes every edge touching it; `outward` takes its outgoing edges plus incoming `derived_from` edges. */
+/** Which edges of a reached node a neighbourhood walk takes: `both` takes every edge touching it; `outward` takes its outgoing edges plus incoming `derived_from` edges (what was derived from it) and incoming `depends_on` edges (what depends on it). */
 export type AkbGraphDirection = "both" | "outward";
 
 export type AkbWritableRelationType =
