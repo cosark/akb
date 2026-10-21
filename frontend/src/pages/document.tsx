@@ -1,3 +1,4 @@
+import { readWithAccessBoundary } from "@/lib/query-access-boundary";
 import { Suspense, lazy, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { flushSync } from "react-dom";
@@ -67,7 +68,7 @@ import { changedDocumentDetails, documentDetailsEqual, documentDetailsFrom, type
 import { MarkdownEditorFallback } from "@/components/markdown-editor-fallback";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { TooltipText } from "@/components/ui/tooltip-text";
-import { LoadingState } from "@/components/ui/loading-state";
+import { InlineLoadingState, LoadingState } from "@/components/ui/loading-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useVaultRefresh } from "@/contexts/vault-refresh-context";
 import { RelationsPanel } from "@/components/relations/relations-panel";
@@ -539,7 +540,7 @@ function DocumentPageContent({
 
   const docQuery = useQuery({
     queryKey: ["document", name, docId, documentVersion, currentUser?.user_id, accessRevision],
-    queryFn: () => getDocument(name!, docId, documentVersion),
+    queryFn: ({ queryKey, signal }) => readWithAccessBoundary(queryClient, queryKey, () => getDocument(name!, docId, documentVersion), signal),
     enabled: !!name && !!docId && !accessChecking,
     retry: false,
   });
@@ -555,7 +556,8 @@ function DocumentPageContent({
     return () => window.removeEventListener("akb:mock-document-refetch", onMockRefetch);
   }, [docId, name, queryClient]);
 
-  const doc = docOverride ?? docQuery.data ?? null;
+  const documentAccessDenied = docQuery.error instanceof ApiError && [401, 403, 404].includes(docQuery.error.status);
+  const doc = documentAccessDenied || !docQuery.data ? null : docOverride ?? docQuery.data;
   // Local content/property overrides can outlive a metadata refetch. Dates
   // always come from the current server snapshot, never an optimistic clock.
   const lastEditedAt = docQuery.data?.updated_at;
@@ -581,12 +583,13 @@ function DocumentPageContent({
   usePublishResourceLocation(resolvedLocation, presentation === "page");
   const historyQuery = useQuery({
     queryKey: ["document-history", name, doc?.path, currentUser?.user_id, accessRevision],
-    queryFn: () => getDocumentHistoryWithFallback(name!, doc!.path, 20),
+    queryFn: ({ queryKey, signal }) => readWithAccessBoundary(queryClient, queryKey, () => getDocumentHistoryWithFallback(name!, doc!.path, 20), signal),
     enabled: Boolean(name && doc?.path) && !accessChecking,
     staleTime: 30_000,
     retry: false,
   });
-  const provenance = historyQuery.data?.history ?? EMPTY_DOCUMENT_HISTORY;
+  const historyDenied = historyQuery.error instanceof ApiError && [401, 403, 404].includes(historyQuery.error.status);
+  const provenance = historyDenied ? EMPTY_DOCUMENT_HISTORY : historyQuery.data?.history ?? EMPTY_DOCUMENT_HISTORY;
   const currentUserId = currentUser?.user_id;
   const editTitleCandidatesQuery = useQuery({
     queryKey: ["document-edit-title-candidates", name],
@@ -649,7 +652,7 @@ function DocumentPageContent({
   // share a cache entry rather than double-fetching HEAD.
   const headQuery = useQuery({
     queryKey: ["document", name, docId, undefined, currentUser?.user_id, accessRevision],
-    queryFn: () => getDocument(name!, docId),
+    queryFn: ({ queryKey, signal }) => readWithAccessBoundary(queryClient, queryKey, () => getDocument(name!, docId), signal),
     enabled: !!name && !!docId && !!commitHash && !isDiffMode && !accessChecking,
     retry: false,
   });
@@ -711,11 +714,12 @@ function DocumentPageContent({
   // requests may populate their own cache, but cannot update the next reader.
   const relationsQuery = useQuery({
     queryKey: ["document-relations", name, doc?.path, currentUser?.user_id, accessRevision, doc?.current_commit],
-    queryFn: () => getRelations(name!, doc.path),
+    queryFn: ({ queryKey, signal }) => readWithAccessBoundary(queryClient, queryKey, () => getRelations(name!, doc.path), signal),
     enabled: !!name && !!doc?.path && !accessChecking,
     retry: false,
   });
-  const relations = accessChecking ? [] : relationsQuery.data?.relations || [];
+  const relationsDenied = relationsQuery.error instanceof ApiError && [401, 403, 404].includes(relationsQuery.error.status);
+  const relations = accessChecking || relationsDenied ? [] : relationsQuery.data?.relations || [];
   const relationsError = !accessChecking && relationsQuery.isError;
   const reloadRelations = () => {
     if (name && doc?.path && !accessChecking) void relationsQuery.refetch();
@@ -1442,7 +1446,8 @@ function DocumentPageContent({
     return (
       <div ref={(element) => { navigationFocusRef.current = element; }} tabIndex={-1} className="py-8 fade-up">
         <div className="coord-spark mb-2">⚠ Error</div>
-        <p className="text-destructive mb-6 max-w-xl">{errorMsg}</p>
+        <Alert variant="destructive" className="mb-4 max-w-xl">{errorMsg}</Alert>
+        <Button variant="outline" className="mr-2" loading={docQuery.isFetching} onClick={() => void docQuery.refetch()}>Retry document</Button>
         <Button asChild variant="outline">
           <Link to={`/vault/${name}`}>
             <ArrowLeft className="h-4 w-4" aria-hidden />
@@ -1530,9 +1535,12 @@ function DocumentPageContent({
     <>
       <section
         aria-label="Document workspace"
+        aria-busy={docQuery.isFetching}
         className="@container/reader relative flex h-full min-h-0 flex-col overflow-hidden bg-surface"
         data-presentation={presentation}
       >
+        {docQuery.isFetching && <InlineLoadingState label="Updating document" className="shrink-0 px-4 py-2" />}
+        {docQuery.isError && <Alert variant="destructive" className="shrink-0 mx-4 my-2">Document could not be updated. Previous content shown. <Button size="sm" variant="outline" loading={docQuery.isFetching} onClick={() => void docQuery.refetch()}>Retry document</Button></Alert>}
         <h1 id="doc-title" className="sr-only">{doc.title || "Untitled document"}</h1>
         {presentation === "preview" && (
           <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-surface py-1 pl-4 pr-12 sm:pr-14">
@@ -2023,28 +2031,27 @@ function DocumentPageContent({
                     sourceUri={doc.path ? docUri(name!, doc.path) : ""}
                     relations={relations}
                     relationsError={relationsError}
+                    initialLoading={relationsQuery.isPending}
+                    refreshing={relationsQuery.isFetching}
+                    hasSnapshot={Boolean(relationsQuery.data) && !relationsDenied}
                     canWrite={canEdit}
                     graphHref={`/vault/${name}/graph${doc.path ? `?entry=${encodeURIComponent(doc.path)}` : ""}`}
                     onReload={reloadRelations}
                   />
                 </>}
-              history={<>
+              history={<div aria-busy={historyQuery.isFetching}>
                   <p className="mb-3 text-xs text-foreground-muted">Open a version or compare its changes.</p>
+                  {historyQuery.isFetching && historyQuery.data && <InlineLoadingState label="Updating version history" />}
+                  {historyQuery.isError && <Alert variant="destructive" title="Couldn't load version history">
+                    <Button type="button" variant="outline" size="sm" loading={historyQuery.isFetching} onClick={() => void historyQuery.refetch()}>Try again</Button>
+                  </Alert>}
                   {historyQuery.isPending ? (
                     <LoadingState label="Loading version history" className="space-y-2">
                       <Skeleton className="h-16 w-full rounded-[var(--radius-md)]" />
                       <Skeleton className="h-16 w-full rounded-[var(--radius-md)]" />
                       <Skeleton className="h-16 w-full rounded-[var(--radius-md)]" />
                     </LoadingState>
-                  ) : historyQuery.isError ? (
-                    <Alert variant="destructive" title="Couldn't load version history">
-                      <div className="mt-2">
-                        <Button type="button" variant="outline" size="sm" onClick={() => void historyQuery.refetch()}>
-                          Try again
-                        </Button>
-                      </div>
-                    </Alert>
-                  ) : (
+                  ) : !historyQuery.data || historyDenied ? null : (
                     <div className="space-y-3">
                       {historyQuery.data?.source === "activity" && (
                         <Alert variant="info" title="Limited history from an older server">
@@ -2062,7 +2069,7 @@ function DocumentPageContent({
                       />
                     </div>
                   )}
-                </>}
+                </div>}
             />
           )}
         </div>
@@ -2321,7 +2328,7 @@ function DocumentDiffModuleLoading() {
 
 function DocumentPageLoading({ presentation }: { presentation: "page" | "preview" }) {
   return (
-    <LoadingState label="Loading document" className="@container/reader flex h-full min-h-0 flex-col overflow-hidden bg-surface [&>div]:contents">
+    <LoadingState delayMs={200} label="Loading document" className="@container/reader flex h-full min-h-0 flex-col overflow-hidden bg-surface [&>div]:contents">
       {presentation === "preview" && <div className="flex h-14 items-center gap-3 border-b border-border px-4"><Skeleton className="h-4 w-2/3" /></div>}
       <div data-slot="document-viewer-frame" className="flex min-h-0 flex-1 flex-col overflow-hidden bg-surface">
         <ResourceCommandRow appearance="reader" className="document-unified-toolbar" meta={

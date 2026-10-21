@@ -1,5 +1,7 @@
+import { readWithAccessBoundary } from "@/lib/query-access-boundary";
+import { Button } from "@/components/ui/button";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getDocument } from "@/lib/api";
 import { MarkdownRender } from "@/components/markdown-render";
 import { Alert } from "@/components/ui/alert";
@@ -59,6 +61,7 @@ export function DocumentView({
   bodyOnly = false,
   idPrefix = "docview",
 }: DocumentViewProps) {
+  const queryClient = useQueryClient();
   const user = useCurrentUser();
   const { checking, revision } = useAccessVerification();
   const [localView, setLocalView] = useState<ViewMode>("rendered");
@@ -73,22 +76,26 @@ export function DocumentView({
     }
   };
 
-  const { data: doc, isLoading, error } = useQuery({
+  const { data: doc, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: ["document", vault, docId, version, user?.user_id, revision],
-    queryFn: () => getDocument(vault, docId, version),
+    queryFn: ({ queryKey, signal }) => readWithAccessBoundary(queryClient, queryKey, () => getDocument(vault, docId, version), signal),
     enabled: !!vault && !!docId && !checking,
     retry: false,
+    // The page already owns this query. Mounting its body must not immediately
+    // refetch the response that just replaced the page skeleton.
+    refetchOnMount: !bodyOnly,
   });
 
   if (isLoading) {
     return <DocumentViewLoading appearance={appearance} bodyOnly={bodyOnly} />;
   }
 
-  if (error || !doc) {
+  if (!doc) {
     return (
       <Alert variant="destructive" className="my-4">
         Couldn't load this document body.
         {error instanceof Error ? ` ${error.message}` : ""}
+        <Button variant="outline" size="sm" loading={isFetching} onClick={() => void refetch()}>Retry document body</Button>
       </Alert>
     );
   }
@@ -112,6 +119,8 @@ export function DocumentView({
         </div>
         <DocumentCopyButton key={`${vault}:${docId}:${version ?? "latest"}`} content={doc.content || ""} />
       </ResourceCommandRow>}
+
+      {!bodyOnly && error && <Alert variant="destructive">Document could not be updated. Previous content shown. <Button size="sm" variant="outline" loading={isFetching} onClick={() => void refetch()}>Retry document body</Button></Alert>}
 
       {/* ── Doc body ──────────────────────────────────────────────── */}
       {view === "rendered" ? (
@@ -157,6 +166,7 @@ function DocumentViewLoading({ appearance, bodyOnly }: Pick<DocumentViewProps, "
   return (
     <LoadingState
       label="Loading document body"
+      delayMs={200}
       className={cn(
         "document-reading-container",
         appearance === "file" && !bodyOnly &&

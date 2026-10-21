@@ -33,6 +33,8 @@ import {
   importKnowledgeBundle,
   type KnowledgeImportResult,
 } from "@/lib/api";
+import { LoadingState, InlineLoadingState } from "@/components/ui/loading-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { RelativeTime } from "@/components/ui/relative-time";
 import { recentIcon, recentTone } from "@/lib/recent";
 import { stripFrontmatter } from "@/lib/markdown";
@@ -222,9 +224,13 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
   latestChecking.current = checking;
   const [recent, setRecent] = useState<RecentRow[]>([]);
   const [recentLoading, setRecentLoading] = useState(true);
+  const [recentLoaded, setRecentLoaded] = useState(false);
+  const recentRequest = useRef(0);
   const [recentError, setRecentError] = useState(false);
   const [activity, setActivity] = useState<ActivityRow[]>([]);
   const [activityLoading, setActivityLoading] = useState(true);
+  const [activityLoaded, setActivityLoaded] = useState(false);
+  const activityRequest = useRef(0);
   const [activityError, setActivityError] = useState(false);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -279,16 +285,19 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
   }
 
   async function loadRecent(vault: string, alive: () => boolean = () => mounted.current) {
+    const id = ++recentRequest.current;
     const requestScope = scope;
-    const current = () => alive() && requestScope === latestScope.current && !latestChecking.current;
+    const current = () => id === recentRequest.current && alive() && requestScope === latestScope.current && !latestChecking.current;
     setRecentLoading(true);
     setRecentError(false);
     try {
       const d = await getRecent(vault, 12);
       if (!current()) return;
       setRecent(d.changes || []);
-    } catch {
+      setRecentLoaded(true);
+    } catch (caught) {
       if (!current()) return;
+      if (typeof caught === "object" && caught !== null && "status" in caught && (caught.status === 401 || caught.status === 403)) { setRecent([]); setRecentLoaded(false); }
       setRecentError(true);
     } finally {
       if (current()) setRecentLoading(false);
@@ -299,17 +308,19 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
     vault: string,
     alive: () => boolean = () => mounted.current,
   ) {
+    const id = ++activityRequest.current;
     const requestScope = scope;
-    const current = () => alive() && requestScope === latestScope.current && !latestChecking.current;
+    const current = () => id === activityRequest.current && alive() && requestScope === latestScope.current && !latestChecking.current;
     setActivityLoading(true);
     setActivityError(false);
     try {
       const result = await getVaultActivity(vault, { limit: 10 });
       if (!current()) return;
       setActivity(result.activity || []);
-    } catch {
+      setActivityLoaded(true);
+    } catch (caught) {
       if (!current()) return;
-      setActivity([]);
+      if (typeof caught === "object" && caught !== null && "status" in caught && (caught.status === 401 || caught.status === 403)) { setActivity([]); setActivityLoaded(false); }
       setActivityError(true);
     } finally {
       if (current()) setActivityLoading(false);
@@ -325,9 +336,11 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
     setInfo(null);
     setInfoError(false);
     setRecent([]);
+    setRecentLoaded(false);
     setRecentError(false);
     setRecentLoading(true);
     setActivity([]);
+    setActivityLoaded(false);
     setActivityError(false);
     setActivityLoading(true);
     loadInfo(name, isAlive);
@@ -373,7 +386,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
 
   return (
     <>
-    {(checking || loadedScope !== scope) && <p role="status">{checking ? "Verifying vault access…" : "Loading vault overview…"}</p>}
+    {(checking || loadedScope !== scope) && <OverviewLoadingState checking={checking} />}
     <Activity mode={!checking && loadedScope === scope ? "visible" : "hidden"}>
     <div
       role="region"
@@ -464,6 +477,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
               name={name!}
               rows={recent}
               loading={recentLoading}
+              loaded={recentLoaded}
               error={recentError}
               onRetry={() => name && loadRecent(name)}
             />
@@ -474,6 +488,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
               name={name!}
               rows={activity}
               loading={activityLoading}
+              loaded={activityLoaded}
               error={activityError}
               onRetry={() => name && loadActivity(name)}
             />
@@ -550,12 +565,14 @@ function RecentActivityPanel({
   name,
   rows,
   loading,
+  loaded,
   error,
   onRetry,
 }: {
   name: string;
   rows: RecentRow[];
   loading: boolean;
+  loaded: boolean;
   error: boolean;
   onRetry: () => void;
 }) {
@@ -593,7 +610,9 @@ function RecentActivityPanel({
             : `${rows.length} recent change${rows.length === 1 ? "" : "s"}`}
       </span>
 
-      {loading ? (
+      {loaded && loading && <InlineLoadingState label="Updating recent activity; previous changes shown" className="px-4 py-2" />}
+      {loaded && error && <Alert variant="destructive" className="m-3">Recent activity could not be updated; previous changes shown.<Button variant="outline" size="sm" className="ml-2" loading={loading} onClick={onRetry}>Retry</Button></Alert>}
+      {loading && !loaded ? (
         <ul className="divide-y divide-border" aria-hidden>
           {Array.from({ length: 4 }).map((_, index) => (
             <li
@@ -606,7 +625,7 @@ function RecentActivityPanel({
             </li>
           ))}
         </ul>
-      ) : error ? (
+      ) : error && !loaded ? (
         <div className="p-4">
           <EmptyState
             className="px-5 py-10 [&>p]:text-ui [&>p:first-of-type]:text-sm"
@@ -676,12 +695,14 @@ function CommitHistoryPanel({
   name,
   rows,
   loading,
+  loaded,
   error,
   onRetry,
 }: {
   name: string;
   rows: ActivityRow[];
   loading: boolean;
+  loaded: boolean;
   error: boolean;
   onRetry: () => void;
 }) {
@@ -745,9 +766,11 @@ function CommitHistoryPanel({
         </div>
       </div>
 
+      {loaded && loading && <InlineLoadingState label="Updating commit history; previous commits shown" className="py-2" />}
+      {loaded && error && <Alert variant="destructive" className="my-2">Commit history could not be updated; previous commits shown.<Button variant="outline" size="sm" className="ml-2" loading={loading} onClick={onRetry}>Retry</Button></Alert>}
       {expanded && (
         <div id="commit-history-list">
-          {loading ? (
+          {loading && !loaded ? (
             <ul className="divide-y divide-border" aria-hidden>
               {Array.from({ length: 5 }).map((_, index) => (
                 <li
@@ -760,7 +783,7 @@ function CommitHistoryPanel({
                 </li>
               ))}
             </ul>
-          ) : error ? (
+          ) : error && !loaded ? (
             <div className="p-4">
               <EmptyState
                 className="px-5 py-10 [&>p]:text-ui [&>p:first-of-type]:text-sm"
@@ -1295,4 +1318,16 @@ function OnboardStep({
       {content}
     </button>
   );
+}
+
+function OverviewLoadingState({ checking }: { checking: boolean }) {
+  return <LoadingState label={checking ? "Verifying vault access…" : "Loading vault overview…"} className="w-full space-y-5 p-3 sm:p-4 lg:p-5">
+    <p className="text-sm text-foreground-muted">{checking ? "Verifying vault access…" : "Loading vault overview…"}</p>
+    <div className="flex min-h-16 items-center justify-between gap-4"><Skeleton className="h-8 w-48" /><Skeleton className="h-9 w-28" /></div>
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">{[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-20 w-full" />)}</div>
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <Panel variant="workspace" className="space-y-4 p-4"><Skeleton className="h-5 w-40" />{[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}</Panel>
+      <VaultContextSkeleton />
+    </div>
+  </LoadingState>;
 }

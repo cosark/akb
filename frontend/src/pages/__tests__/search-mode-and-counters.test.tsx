@@ -13,7 +13,7 @@
 // cost) and lets us assert call args directly. The MSW-level contract
 // test already lives in lib/__tests__/api-search-contract.test.ts.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, waitFor, within } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 
@@ -441,4 +441,17 @@ describe("text File literal search", () => {
     expect(screen.queryByText(/No results for/)).not.toBeInTheDocument();
     expect(screen.queryByText(/0 resources/)).not.toBeInTheDocument();
   });
+});
+
+it("retains same-query results after a background failure and recovers", async () => {
+  mockedSearch.mockResolvedValue({ query: "postgres", total: 1, returned: 1, total_matches: 1, results: [{ uri: "akb://alpha/doc/guide.md", vault: "alpha", path: "guide.md", title: "Kept result", score: 1 }] });
+  renderAt("/search?q=postgres");
+  await screen.findByText("Kept result");
+  mockedSearch.mockRejectedValueOnce(new Error("Offline"));
+  act(() => window.dispatchEvent(new Event("akb:document-status-changed")));
+  await screen.findByText("Search could not be updated; previous results shown");
+  expect(screen.getByText("Kept result")).toBeVisible();
+  const actor = userEvent.setup(); await actor.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(screen.queryByText("Search could not be updated; previous results shown")).not.toBeInTheDocument());
+  expect(screen.getByText("Kept result")).toBeVisible();
 });

@@ -121,6 +121,7 @@ function PublicationsWorkspace({
   const [permissionsLoading, setPermissionsLoading] = useState(false);
   const [items, setItems] = useState<Publication[] | null>(null);
   const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [pendingRevoke, setPendingRevoke] = useState<Publication | null>(null);
@@ -140,12 +141,15 @@ function PublicationsWorkspace({
   const load = useCallback(async (vault: string) => {
     if (checking || !active.current) return;
     const generation = ++loadGeneration.current;
+    setRefreshing(true);
     setError("");
     try {
       const result = await listPublications(vault);
       if (!active.current || generation !== loadGeneration.current) return;
       const publications: Publication[] = result.publications || [];
-      const enriched = await Promise.all(
+      setItems(publications);
+      setRefreshing(false);
+      void Promise.all(
         publications.map(async (publication) => {
           if (
             publication.title ||
@@ -158,21 +162,22 @@ function PublicationsWorkspace({
           if (!docPath) return publication;
           try {
             const document = await getDocument(vault, docPath);
-            return {
-              ...publication,
-              title: document.title || publication.title,
-            };
+            if (active.current && generation === loadGeneration.current) {
+              setItems(current => current?.map(item => item.slug === publication.slug ? { ...item, title: document.title || item.title } : item) ?? null);
+            }
+            return publication;
           } catch {
             return publication;
           }
         }),
       );
-      if (!active.current || generation !== loadGeneration.current) return;
-      setItems(enriched);
+
     } catch (caught: unknown) {
       if (!active.current || generation !== loadGeneration.current) return;
       setError(errorMessage(caught, "Failed to load public links"));
-      setItems(null);
+      if ([401, 403].includes((caught as { status?: number })?.status ?? 0)) setItems(null);
+    } finally {
+      if (active.current && generation === loadGeneration.current) setRefreshing(false);
     }
   }, [checking]);
 
@@ -342,7 +347,7 @@ function PublicationsWorkspace({
         />
 
         <Panel variant="workspace" className="w-full">
-          <section aria-labelledby="published-links-heading">
+          <section aria-labelledby="published-links-heading" aria-busy={refreshing}>
             <PublicationPolicySummary />
             {items !== null && unpublishDisabledReason && (
               <p id="unpublish-restriction" className="border-b border-border px-4 py-2.5 text-xs text-foreground-muted sm:px-5">
@@ -376,8 +381,10 @@ function PublicationsWorkspace({
               />
             )}
 
-            {error ? (
-              <PublicationError error={error} onRetry={() => void load(name)} />
+            {refreshing && items !== null && <p role="status" className="px-4 py-3 text-sm text-foreground-muted">Updating public links…</p>}
+            {error && items !== null && <Alert variant="destructive" className="m-4">Could not update public links. Previous links are shown. {error}<Button variant="outline" size="sm" loading={refreshing} onClick={() => void load(name)}>Retry</Button></Alert>}
+            {error && items === null ? (
+              <PublicationError error={error} loading={refreshing} onRetry={() => void load(name)} />
             ) : items === null ? (
               <PublicationSkeleton />
             ) : items.length === 0 ? (
@@ -760,18 +767,20 @@ function PublicationEmptyState({ vault }: { vault: string }) {
 }
 
 function PublicationError({
+  loading,
   error,
   onRetry,
 }: {
   error: string;
   onRetry: () => void;
+  loading: boolean;
 }) {
   return (
     <div className="bg-surface p-4 sm:p-5">
       <Alert variant="destructive" title="Couldn't load public links">
         {error}
         <div className="mt-3">
-          <Button variant="outline" size="sm" onClick={onRetry}>
+          <Button variant="outline" size="sm" loading={loading} onClick={onRetry}>
             Retry
           </Button>
         </div>

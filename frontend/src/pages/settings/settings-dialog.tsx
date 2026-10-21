@@ -32,6 +32,10 @@ export default function SettingsDialog({ initialTab = "profile", onClose, onNavi
   const { checking, revision } = useAccessVerification();
   const shellUser = useCurrentUser();
   const readGeneration = useRef(0);
+  const patsGeneration = useRef(0);
+  const usersGeneration = useRef(0);
+  const [patsLoading, setPatsLoading] = useState(false);
+  const [usersLoading, setUsersLoading] = useState(false);
   const [loadedRevision, setLoadedRevision] = useState<number | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [accountError, setAccountError] = useState(false);
@@ -86,15 +90,21 @@ export default function SettingsDialog({ initialTab = "profile", onClose, onNavi
   }, [dirty, busy]);
   const loadPATs = useCallback(async () => {
     const generation = readGeneration.current;
-    setPatsError(false);
-    try { const data = await listPATs(); if (mounted.current && generation === readGeneration.current) setPats(data.tokens || []); }
-    catch { if (mounted.current && generation === readGeneration.current) setPatsError(true); }
+    const request = ++patsGeneration.current;
+    const current = () => mounted.current && generation === readGeneration.current && request === patsGeneration.current;
+    setPatsLoading(true); setPatsError(false);
+    try { const data = await listPATs(); if (current()) setPats(data.tokens || []); return current(); }
+    catch (error) { if (current()) { setPatsError(true); if ([401, 403].includes((error as { status?: number })?.status ?? 0)) setPats(null); } return false; }
+    finally { if (current()) setPatsLoading(false); }
   }, []);
   const loadUsers = useCallback(async () => {
     const generation = readGeneration.current;
-    setUsersError(false);
-    try { const data = await adminListUsers(); if (mounted.current && generation === readGeneration.current) setUsers(data.users || []); }
-    catch { if (mounted.current && generation === readGeneration.current) setUsersError(true); }
+    const request = ++usersGeneration.current;
+    const current = () => mounted.current && generation === readGeneration.current && request === usersGeneration.current;
+    setUsersLoading(true); setUsersError(false);
+    try { const data = await adminListUsers(); if (current()) setUsers(data.users || []); return current(); }
+    catch (error) { if (current()) { setUsersError(true); if ([401, 403].includes((error as { status?: number })?.status ?? 0)) setUsers(null); } return false; }
+    finally { if (current()) setUsersLoading(false); }
   }, []);
   const userId = user?.user_id;
   useEffect(() => { if (verified && userId && activeTab === "tokens") void loadPATs(); }, [verified, revision, userId, activeTab, loadPATs]);
@@ -174,11 +184,11 @@ export default function SettingsDialog({ initialTab = "profile", onClose, onNavi
               the cleanup of a temporarily hidden Activity. */}
           {user && activeTab === "profile" && <TabsContent value="profile" className="pt-0">{verified && authConfig?.available === false && <Alert variant="warning" className="mb-4">Account editing is temporarily unavailable because authentication settings could not be verified. <Button variant="outline" size="sm" onClick={() => void loadAccount()}>Retry</Button></Alert>}<ProfileSection key={user.user_id} visible={verified} user={user} localPasswordEnabled={localPasswordEnabled} localProfileEditingEnabled={localPasswordEnabled} onDirtyChange={setDirty} onBusyChange={setBusy} onUserUpdate={updateUser} onPasswordChanged={() => completeSessionNavigation(() => navigate("/auth?reason=password-changed", { replace: true }))} /></TabsContent>}
           {user && activeTab === "security" && <TabsContent value="security" className="pt-0"><SecuritySection key={user.user_id} visible={verified} user={user} ownsOperation={ownsOperation} onBusyChange={setBusy} onDirtyChange={setDirty} /></TabsContent>}
-          {user?.is_admin && activeTab === "admin" && <TabsContent value="admin" className="pt-0"><AdminSection key={user.user_id} visible={verified} ownsOperation={ownsOperation} user={user} onDirtyChange={setDirty} onBusyChange={setBusy} users={users} usersError={usersError} localPasswordEnabled={localPasswordEnabled} onReloadUsers={loadUsers} /></TabsContent>}
+          {user?.is_admin && activeTab === "admin" && <TabsContent value="admin" className="pt-0"><AdminSection key={user.user_id} visible={verified} ownsOperation={ownsOperation} user={user} onDirtyChange={setDirty} onBusyChange={setBusy} users={users} usersError={usersError} usersLoading={usersLoading} localPasswordEnabled={localPasswordEnabled} onReloadUsers={loadUsers} /></TabsContent>}
           <Activity mode={verified ? "visible" : "hidden"}><div>{user && <>
             <TabsContent value="preferences" className="pt-0"><PreferencesSection /></TabsContent>
             <TabsContent value="notifications" className="pt-0"><NotificationsSection onBusyChange={reportBusy} /></TabsContent>
-            <TabsContent value="tokens" className="pt-0"><TokensSection key={user.user_id} visible={verified} ownsOperation={ownsOperation} pats={pats} patsError={patsError} mcpOauthEnabled={authConfig?.available === true && authConfig.mcp_oauth.enabled} onReloadPats={loadPATs} onDirtyChange={reportDirty} onBusyChange={reportBusy} /></TabsContent>
+            <TabsContent value="tokens" className="pt-0"><TokensSection key={user.user_id} visible={verified} ownsOperation={ownsOperation} pats={pats} patsError={patsError} patsLoading={patsLoading} mcpOauthEnabled={authConfig?.available === true && authConfig.mcp_oauth.enabled} onReloadPats={loadPATs} onDirtyChange={reportDirty} onBusyChange={reportBusy} /></TabsContent>
           </>}</div></Activity>
         </div>
       </Tabs>

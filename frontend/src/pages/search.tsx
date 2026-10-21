@@ -211,6 +211,9 @@ function SearchWorkspace() {
     [],
   );
   const reqId = useRef(0);
+  const successfulScope = useRef<string | null>(null);
+  const [appliedOptions, setAppliedOptions] = useState<string | null>(null);
+  const [appliedFilterSummary, setAppliedFilterSummary] = useState("");
   const queryInputRef = useRef<HTMLInputElement>(null);
   const filtersButtonRef = useRef<HTMLButtonElement>(null);
   const filterContentRef = useRef<HTMLDivElement>(null);
@@ -231,6 +234,12 @@ function SearchWorkspace() {
     async (searchQuery: string, searchMode: Mode, selectedVaults: string[]) => {
       if (!searchQuery.trim()) return;
       const id = ++reqId.current;
+      const scope = JSON.stringify([searchQuery.trim(), searchMode, selectedVaults]);
+      if (successfulScope.current !== scope) {
+        setDenseResults([]); setLiteralResults([]); setTotal(0); setTotalMatches(0);
+        setReturnedDocs(0); setReturnedMatches(0); setTruncated(false); setDegraded(false);
+        setAppliedOptions(null); setArchiveUnsupported(false);
+      }
       setLoading(true);
       setSearched(true);
       setError(null);
@@ -292,6 +301,16 @@ function SearchWorkspace() {
           setTruncated(Boolean(response.truncated));
           setDegraded(false);
         }
+        successfulScope.current = scope;
+        setAppliedOptions(JSON.stringify(options));
+        setAppliedFilterSummary([
+          options.source_type || "all content kinds",
+          options.doc_types?.length ? `types: ${options.doc_types.join(", ")}` : "all document types",
+          options.tags?.length ? `tags: ${options.tags.join(", ")}` : "all tags",
+          options.collection ? `collection: ${options.collection}` : "all collections",
+          `document state: ${options.archive_scope ?? (options.include_archived ? "all" : "unarchived")}`,
+          ...(searchMode === "literal" ? [options.regex ? "regular expression" : "plain text", options.case_sensitive ? "case sensitive" : "case insensitive", options.include_text_files ? "including text files" : "documents only"] : []),
+        ].join(" · "));
         // Legacy history cannot replay a Collection predicate. Do not turn a
         // scoped search into an unfiltered Vault query on a later visit.
         if (id === reqId.current && currentUserId && !options.collection) {
@@ -306,14 +325,11 @@ function SearchWorkspace() {
       } catch (caught) {
         if (id !== reqId.current) return;
         setError(caught instanceof Error ? caught.message : "Search failed");
-        setDenseResults([]);
-        setLiteralResults([]);
-        setTotal(0);
-        setTotalMatches(0);
-        setReturnedDocs(0);
-        setReturnedMatches(0);
-        setTruncated(false);
-        setDegraded(false);
+        if (typeof caught === "object" && caught !== null && "status" in caught && (caught.status === 401 || caught.status === 403)) {
+          setDenseResults([]); setLiteralResults([]); setTotal(0); setTotalMatches(0);
+          setReturnedDocs(0); setReturnedMatches(0); setTruncated(false); setDegraded(false);
+          successfulScope.current = null; setAppliedOptions(null);
+        }
       } finally {
         if (id === reqId.current) setLoading(false);
       }
@@ -374,6 +390,8 @@ function SearchWorkspace() {
     } else {
       reqId.current += 1;
       setArchiveUnsupported(false);
+      successfulScope.current = null;
+      setAppliedOptions(null);
       setDenseResults([]);
       setLiteralResults([]);
       setTotal(0);
@@ -882,7 +900,7 @@ function SearchWorkspace() {
               {error && !loading && (
                 <Alert
                   variant="destructive"
-                  title="Search unavailable"
+                  title={hasResults ? "Search could not be updated; previous results shown" : "Search unavailable"}
                   className="rounded-[var(--radius-md)]"
                 >
                   {error}.{" "}
@@ -992,6 +1010,7 @@ function SearchWorkspace() {
                 </div>
               )}
 
+              {hasResults && appliedOptions !== JSON.stringify(options) && <p className="text-sm text-foreground-muted">Previous results use: {appliedFilterSummary}. The selected filters have not been applied yet.</p>}
               {hasResults && !archiveUnsupported && (
                 <section aria-labelledby="search-results-heading" className="-mx-4">
                   {mode === "dense" ? (

@@ -29,6 +29,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/empty-state";
 import { Input } from "@/components/ui/input";
 import { InviteMemberDialog } from "@/components/invite-member-dialog";
+import { InlineLoadingState } from "@/components/ui/loading-state";
 import { Panel } from "@/components/ui/panel";
 import { RoleSelect } from "@/components/role-select";
 import {
@@ -108,6 +109,9 @@ function VaultMembersWorkspace({
   const [info, setInfo] = useState<VaultInfo | null>(null);
   const [members, setMembers] = useState<Member[] | null>(null);
   const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [permissionError, setPermissionError] = useState("");
+  const [notice, setNotice] = useState("");
   const [filter, setFilter] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const inviteTriggerRef = useRef<HTMLButtonElement>(null);
@@ -150,20 +154,25 @@ function VaultMembersWorkspace({
   const refresh = useCallback(async () => {
     if (!name || checking || !active.current) return;
     const generation = ++loadGeneration.current;
+    setRefreshing(true);
+    setError("");
+    setPermissionError("");
     try {
-      const [nextInfo, nextMembers] = await Promise.all([
-        getVaultInfo(name).catch(() => null),
-        getVaultMembers(name),
-      ]);
+      const [permission, roster] = await Promise.allSettled([getVaultInfo(name), getVaultMembers(name)]);
       if (!active.current || generation !== loadGeneration.current) return;
-      setInfo(nextInfo);
-      setMembers(nextMembers.members || []);
-      setError("");
-    } catch (caught: unknown) {
-      if (!active.current || generation !== loadGeneration.current) return;
-      setInfo(null);
-      setError(errorMessage(caught, "Failed to load members"));
-      setMembers([]);
+      if (permission.status === "fulfilled") setInfo(permission.value);
+      else {
+        setInfo(null);
+        setPermissionError(errorMessage(permission.reason, "Could not verify Vault permissions"));
+      }
+      const denied = [permission, roster].some(result => result.status === "rejected" && [401, 403].includes(result.reason?.status));
+      if (denied) {
+        setInfo(null); setMembers(null);
+        setError("Access could not be verified. Retry to check your membership.");
+      } else if (roster.status === "fulfilled") setMembers(roster.value.members || []);
+      else setError(errorMessage(roster.reason, "Failed to load members"));
+    } finally {
+      if (active.current && generation === loadGeneration.current) setRefreshing(false);
     }
   }, [name, checking]);
 
@@ -196,11 +205,11 @@ function VaultMembersWorkspace({
   const membershipDisabledReason = info?.is_archived
     ? `Vault '${name}' is archived (read-only)`
     : managedWriteDisabledReason;
-  const canManage = hasManageRole && !membershipDisabledReason;
+  const canManage = hasManageRole && !membershipDisabledReason && !refreshing && !permissionError;
   // Ownership transfer is allowed on archived Vaults, but still passes the
   // backend's owner-level managed-write policy guard.
   const hasTransferRole = info?.role === "owner";
-  const canTransfer = hasTransferRole && !managedWriteDisabledReason;
+  const canTransfer = hasTransferRole && !managedWriteDisabledReason && !refreshing && !permissionError;
 
   const filtered = useMemo(() => {
     const list = members || [];
@@ -222,6 +231,9 @@ function VaultMembersWorkspace({
       id: pendingRevoke.id,
       username: pendingRevoke.username,
     });
+    if (!active.current) return;
+    setMembers(current => current?.filter(member => member.id !== pendingRevoke.id) ?? null);
+    setNotice(`Access revoked for ${pendingRevoke.username}.`);
     await refresh();
   }
 
@@ -234,6 +246,9 @@ function VaultMembersWorkspace({
       id: pendingTransfer.id,
       username: pendingTransfer.username,
     });
+    if (!active.current) return;
+    setInfo(null);
+    setNotice(`Ownership transferred to ${pendingTransfer.username}.`);
     await refresh();
   }
 
@@ -320,6 +335,7 @@ function VaultMembersWorkspace({
           }
         />
 
+        {notice && <Alert variant="success" className="mb-3">{notice}</Alert>}
         {undoTarget && (
           <div
             role="status"
@@ -357,6 +373,7 @@ function VaultMembersWorkspace({
           variant="workspace"
           role="region"
           aria-labelledby="members-heading"
+          aria-busy={refreshing}
           inset={false}
           data-testid="members-workspace-frame"
           className="overflow-hidden"
@@ -388,7 +405,10 @@ function VaultMembersWorkspace({
             </div>
           )}
 
-          {error ? (
+          {refreshing && members !== null && <InlineLoadingState label="Updating members" className="px-4 py-3" />}
+          {permissionError && <Alert variant="warning" className="m-4" title="Could not verify Vault permissions">{permissionError}<Button variant="outline" size="sm" loading={refreshing} onClick={() => void refresh()}>Retry permissions</Button></Alert>}
+          {error && members !== null && <Alert variant="destructive" className="m-4" title="Could not update members">{error} Previous members are shown.<Button variant="outline" size="sm" loading={refreshing} onClick={() => void refresh()}>Try again</Button></Alert>}
+          {error && members === null ? (
             <div className="p-4">
               <Alert variant="destructive" title="Failed to load members">
                 {error}
@@ -396,6 +416,7 @@ function VaultMembersWorkspace({
                   <Button
                     variant="outline"
                     size="sm"
+                    loading={refreshing}
                     onClick={() => void refresh()}
                   >
                     Try again

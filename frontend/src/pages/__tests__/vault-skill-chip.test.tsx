@@ -652,3 +652,12 @@ it("opens an existing guide as a preview over the current Overview", async () =>
   expect(state.backgroundLocation.pathname).toBe("/vault/my-v");
   expect(state.returnFocusId).toBe("vault-overview-guide");
 });
+
+it("keeps visible skeleton geometry while vault details are pending", async () => {
+  getVaultInfoMock.mockReturnValueOnce(new Promise(() => {}));
+  renderVault();
+  const loading = screen.getByRole("status", { name: "Loading vault overview…" });
+  expect(loading).toBeVisible();
+  expect(loading.querySelectorAll('[data-slot="skeleton"]').length || loading.querySelectorAll('.animate-pulse').length).toBeGreaterThan(3);
+  expect(screen.queryByRole("region", { name: "my-v Vault overview" })).not.toBeInTheDocument();
+});

@@ -2116,3 +2116,52 @@ describe("DocumentPage view toggle", () => {
     expect(movedStatus).not.toHaveTextContent("archive/hello.md");
   });
 });
+
+it("recovers an initial document failure with an explicit retry", async () => {
+  getDocumentMock.mockRejectedValueOnce(new Error("Temporary read failure")).mockResolvedValue(makeDoc());
+  renderAt("/vault/v/doc/notes%2Fhello.md");
+  await screen.findByText("Temporary read failure");
+  await userEvent.setup().click(screen.getByRole("button", { name: "Retry document" }));
+  await screen.findByRole("heading", { name: "DocTitle", level: 1 });
+});
+
+it("retains the document after a transient background read failure", async () => {
+  const { queryClient } = renderAt("/vault/v/doc/notes%2Fhello.md");
+  await screen.findByRole("heading", { name: "DocTitle", level: 1 });
+  getDocumentMock.mockRejectedValue(new Error("Temporary read failure"));
+  await queryClient.refetchQueries({ queryKey: ["document"] });
+  expect(await screen.findByText(/Document could not be updated/)).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "DocTitle", level: 1 })).toBeInTheDocument();
+});
+
+it("retains version history after a failed refresh", async () => {
+  const user = userEvent.setup();
+  getDocumentHistoryMock.mockResolvedValue({
+    kind: "document_history", source: "document", uri: "akb://v/coll/notes/doc/hello.md",
+    history: [{ hash: "abcdef1234567", message: "Saved version", author: "user-1", author_name: "Kim", date: "2026-09-02T00:00:00Z" }],
+  });
+  const { queryClient } = renderAt("/vault/v/doc/notes%2Fhello.md");
+  await screen.findByRole("heading", { name: "DocTitle", level: 1 });
+  await openVersionHistory(user);
+  await screen.findByText("Saved version");
+  getDocumentHistoryMock.mockRejectedValue(new Error("History unavailable"));
+  await act(async () => { await queryClient.refetchQueries({ queryKey: ["document-history"] }); });
+  expect(await screen.findByText("Couldn't load version history")).toBeInTheDocument();
+  expect(screen.getByText("Saved version")).toBeInTheDocument();
+});
+
+it("does not resurrect a denied document after a later transient error", async () => {
+  const { queryClient } = renderAt("/vault/v/doc/notes%2Fhello.md");
+  await screen.findByRole("heading", { name: "DocTitle", level: 1 });
+  getDocumentMock.mockRejectedValue(new ApiError("Read denied", 403, {}));
+  await act(async () => { await queryClient.refetchQueries({ queryKey: ["document"] }); });
+  await screen.findByText("Read denied");
+  expect(screen.queryByRole("heading", { name: "DocTitle", level: 1 })).not.toBeInTheDocument();
+  getDocumentMock.mockRejectedValue(new ApiError("Temporary failure", 503, {}));
+  await userEvent.setup().click(screen.getByRole("button", { name: "Retry document" }));
+  await screen.findByText("Temporary failure");
+  expect(screen.queryByRole("heading", { name: "DocTitle", level: 1 })).not.toBeInTheDocument();
+  getDocumentMock.mockResolvedValue(makeDoc({ title: "Fresh document" }));
+  await userEvent.setup().click(screen.getByRole("button", { name: "Retry document" }));
+  expect(await screen.findByRole("heading", { name: "Fresh document", level: 1 })).toBeInTheDocument();
+});
