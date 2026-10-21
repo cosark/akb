@@ -533,6 +533,7 @@ describe("labels and the strong walk's shape", () => {
     expect(displayName({ name: "incidents/inc-1.md", title: "Payment pods crash" })).toBe("Payment pods crash");
     expect(displayName({ name: "incidents/inc-1.md" })).toBe("inc-1");
     expect(displayName({ name: "incidents/inc-1.md", title: "  " })).toBe("inc-1");
+    expect(displayName({ name: "A/B test results" })).toBe("A/B test results");
     expect(categoryOf({ doc_type: "postmortem", group: "postmortems" })).toBe("postmortem");
     expect(categoryOf({ group: "hr/people" })).toBe("people");
     expect(categoryOf({})).toBe("");
@@ -569,5 +570,21 @@ describe("changedWithin", () => {
     expect(shortName({ name: "x", title: "dino-shop/recommendationservice OOMKilled" })).toBe("dino-shop/recom…");
     expect(shortName({ name: "x", title: "조은우 (dino.jo.eunwoo)" })).toBe("조은우 (dino.jo.eu…");
     expect(shortName({ name: "x", title: "dino-dc1-poc01" })).toBe("dino-dc1-poc01");
+  });
+});
+
+describe("walk after a date window", () => {
+  it("still walks when the window removed every strong edge, so an unreachable resource is not shown", () => {
+    const s = (source: string, target: string): GraphEdge => ({ source, target, relation: "related_to", kind: "explicit" });
+    const now = Date.parse("2026-10-21T00:00:00Z");
+    const nodes: GraphNode[] = [
+      { uri: "focus", name: "focus", kind: "document", updated_at: "2026-10-20T12:00:00Z" },
+      { uri: "bridge", name: "bridge", kind: "document", updated_at: "2026-09-01T00:00:00Z" },
+      { uri: "child", name: "child", kind: "document", updated_at: "2026-10-20T12:00:00Z" },
+    ];
+    const recent = changedWithin({ nodes, edges: [s("focus", "bridge"), s("bridge", "child")] }, "1", ["focus"], now);
+    expect(recent.edges).toHaveLength(0);
+    expect(strongNeighborhood(recent, "focus", 2, [], true).nodes.map(n => n.uri)).toEqual(["focus"]);
+    expect(strongNeighborhood(recent, "focus", 2).nodes.map(n => n.uri)).toEqual(["focus", "child"]);
   });
 });

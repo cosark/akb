@@ -73,3 +73,12 @@ describe("label boxes", () => {
     expect(kept.map(l => l.uri)).toEqual(["a", "b"]);
   });
 });
+
+describe("label width", () => {
+  it("gives Hangul and CJK a full em, and counts the prefix and pin", async () => {
+    const { labelWidth } = await import("../graph-spatial-renderer");
+    expect(labelWidth("조은우 (dino.jo.eu…", "", false)).toBeGreaterThan(labelWidth("abc (dino.jo.eu…", "", false) + 15);
+    expect(labelWidth("가나다라마바사아자차카타파하가", "", false)).toBeGreaterThanOrEqual(15 * 12);
+    expect(labelWidth("abc", "person", true)).toBeGreaterThan(labelWidth("abc", "", false) + 50);
+  });
+});

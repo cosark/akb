@@ -73,6 +73,8 @@ export interface RelatedRef {
   direction: "incoming" | "outgoing";
   /** Relation provenance, distinct from the related resource's kind. */
   source?: GraphEdge["kind"];
+  /** Server-reported strength of the relation, when given. */
+  edge_type?: GraphEdge["edge_type"];
 }
 
 export interface GraphView {
@@ -103,6 +105,8 @@ export const HOP_TOKENS = ["cat-5", "cat-1", "cat-2", "cat-3"] as const;
 export function displayName(node: Pick<GraphNode, "name" | "title">): string {
   const title = node.title?.trim();
   if (title) return title;
+  // Only a path-shaped name (a document file) is cut to its file name; a name such as "A/B test results" is kept.
+  if (!/^[^\s]*\.md$/i.test(node.name)) return node.name;
   const leaf = node.name.split("/").filter(Boolean).at(-1) ?? node.name;
   return leaf.replace(/\.md$/i, "") || node.name;
 }

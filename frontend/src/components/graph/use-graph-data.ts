@@ -152,9 +152,11 @@ export function strongNeighborhood(
   hops: number,
   /** Resources the reader asked to see (loaded connections, a followed relationship, the selection): always kept. */
   revealed: Iterable<string> = [],
+  /** Set when filters (e.g. a date window) ran first: the walk applies even if they left no strong edge. */
+  filtered = false,
 ): GraphPayload & StrongScene {
   const explicit = p.edges.filter(e => edgeStrength(e) === "strong" && e.source !== e.target);
-  if (!focus || explicit.length === 0) return { ...p, weak: new Set(), weakDepth: new Map(), strong: false, reach: new Map(), tree: new Set(), perHop: [] };
+  if (!focus || (explicit.length === 0 && !filtered)) return { ...p, weak: new Set(), weakDepth: new Map(), strong: false, reach: new Map(), tree: new Set(), perHop: [] };
   const reach = new Map<string, number>([[focus, 0]]);
   // The edge by which the walk first reached each resource: the backbone the map draws at full weight.
   const tree = new Set<string>();
@@ -418,9 +420,12 @@ export async function fetchStrongNeighbors(vault: string, id: string, hops: 1 | 
   const around = [...new Map(strong.nodes.map(n => [n.uri, n.depth ?? 0])).entries()]
     .filter(([, depth]) => depth < hops).sort((a, b) => a[1] - b[1]).slice(0, WEAK_SOURCES).map(([uri]) => uri);
   if (!around.includes(id)) around.unshift(id);
-  const rings = await Promise.all(around.map(uri => getGraph(vault, uri, 1, 150)));
+  // Weak edges only (server 0.18+), so each request's budget goes to what the map keeps; a ring that fails is left
+  // out rather than failing the strong neighbourhood it decorates.
+  const settled = await Promise.allSettled(around.map(uri => getGraph(vault, uri, 1, 150, "weak")));
+  const rings = settled.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
   const merged = rings.reduce((all, ring) => mergeGraph(all, apiToPayload(ring)), apiToPayload(strong));
-  const truncated = (strong as { truncated?: unknown }).truncated === true;
+  const truncated = rings.length < settled.length || [strong, ...rings].some(response => (response as { truncated?: unknown }).truncated === true);
   return truncated ? { ...merged, meta: { ...merged.meta, truncated: true } } : merged;
 }
 

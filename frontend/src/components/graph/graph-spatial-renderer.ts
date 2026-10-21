@@ -22,6 +22,15 @@ interface Callbacks {
 }
 
 
+/** Estimated rendered width (px) of a map label: 12 px text where Hangul, CJK and other wide scripts take a full
+ *  em, the 10 px uppercase category prefix, the button padding and a pin icon. */
+export function labelWidth(text: string, prefix: string, pinned: boolean): number {
+  const wide = (ch: string) => (ch.codePointAt(0) ?? 0) >= 0x1100 && /[\u1100-\u11ff\u2e80-\ua4cf\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]|[\u{20000}-\u{3ffff}]/u.test(ch);
+  const textWidth = [...text].reduce((sum, ch) => sum + (wide(ch) ? 12 : 6.8), 0);
+  const prefixWidth = prefix ? [...prefix].length * 7 + 4 : 0;
+  return 8 + textWidth + prefixWidth + (pinned ? 16 : 0);
+}
+
 /** GPU rendering and camera only. Data, permissions and force layout stay outside. */
 export class SpatialGraphRenderer {
   private readonly scene = new Scene();
@@ -32,6 +41,9 @@ export class SpatialGraphRenderer {
   private readonly ray = new Raycaster();
   private readonly nodeObjects = new Map<InstancedMesh, GraphNode[]>();
   private readonly edgeObjects = new Map<LineSegments, number[]>();
+  /** Where each drawn edge's segments sit in its line buffer, so a drag rewrites only the moved resource's lines. */
+  private readonly edgeSpans = new Map<number, { lines: LineSegments; start: number; segments: number }>();
+  private readonly incident = new Map<string, number[]>();
   private selectionRing?: Mesh;
   private nodes: GraphNode[] = [];
   private edges: GraphEdge[] = [];
@@ -104,6 +116,8 @@ export class SpatialGraphRenderer {
   }
 
   private pointerDown = (event: PointerEvent) => {
+    // A second pointer (another finger) neither starts a new drag nor moves the click origin of the one in progress.
+    if (this.drag) return;
     this.down = { x: event.clientX, y: event.clientY, button: event.button };
     if (event.button !== 0) return;
     const node = this.hit(event).node, point = node && this.positions.get(node.uri);
@@ -136,8 +150,8 @@ export class SpatialGraphRenderer {
       this.callbacks.onMove?.(drag.uri);
     }
     this.positions.set(drag.uri, { x: hit.x, y: hit.y, z: this.dimension === 2 ? 0 : hit.z });
-    // One rebuild per frame keeps the lines attached while the pointer moves.
-    if (!this.dragFrame) this.dragFrame = requestAnimationFrame(() => { this.dragFrame = 0; if (!this.disposed) this.rebuild(); });
+    // One update per frame keeps the lines attached while the pointer moves: only the moved resource's lines are rewritten.
+    if (!this.dragFrame) this.dragFrame = requestAnimationFrame(() => { this.dragFrame = 0; if (!this.disposed) this.moveLines(drag.uri); });
   }
   /** Ends the drag of ``event``'s pointer; ``commit`` places the resource at the release point first. Always restores the camera controls. */
   private endDrag(event: PointerEvent, commit: boolean) {
@@ -221,7 +235,7 @@ export class SpatialGraphRenderer {
       else disposable.material?.dispose();
       if (object instanceof InstancedMesh) object.dispose();
     });
-    this.resources.clear(); this.nodeObjects.clear(); this.edgeObjects.clear(); this.selectionRing = undefined;
+    this.resources.clear(); this.nodeObjects.clear(); this.edgeObjects.clear(); this.edgeSpans.clear(); this.incident.clear(); this.selectionRing = undefined;
   }
 
   private rebuild() {
@@ -267,14 +281,19 @@ export class SpatialGraphRenderer {
       pairs.set(key, [...(pairs.get(key) ?? []), i]);
     });
     // Weak connections (body links, or a relation made weak) are dashed; strong ones solid.
+    this.edges.forEach((edge, edgeIndex) => {
+      for (const uri of new Set([edge.source, edge.target])) this.incident.set(uri, [...(this.incident.get(uri) ?? []), edgeIndex]);
+    });
     for (const implicit of [false, true]) {
       const vertices: number[] = [], colors: number[] = [], indices: number[] = [];
+      const spans: Array<[number, number, number]> = [];
       this.edges.forEach((edge, edgeIndex) => {
         if ((edgeStrength(edge) === "weak") !== implicit) return;
         const a = this.positions.get(edge.source), b = this.positions.get(edge.target);
         if (!a || !b) return;
         const parallel = pairs.get(JSON.stringify([edge.source, edge.target].sort()))!;
         const points = edgeCurvePoints(a, b, parallel.indexOf(edgeIndex), parallel.length, this.dimension === 2);
+        spans.push([edgeIndex, indices.length, points.length - 1]);
         const active = edge.source === this.selected || edge.target === this.selected || this.isInspected(edge);
         const color = new Color(this.colors[active ? "link" : "graph-edge"]);
         if (!active) color.lerp(background, 0.25);
@@ -288,9 +307,10 @@ export class SpatialGraphRenderer {
         }
       });
       if (!vertices.length) continue;
-      const geometry = new BufferGeometry(); geometry.setAttribute("position", new Float32BufferAttribute(vertices, 3)); geometry.setAttribute("color", new Float32BufferAttribute(colors, 3));
+      const geometry = new BufferGeometry(); geometry.setAttribute("position", new Float32BufferAttribute(vertices, 3).setUsage(DynamicDrawUsage)); geometry.setAttribute("color", new Float32BufferAttribute(colors, 3));
       const material = implicit ? new LineDashedMaterial({ vertexColors: true, dashSize: 9, gapSize: 5, depthWrite: false }) : new LineBasicMaterial({ vertexColors: true, depthWrite: false });
       const lines = new LineSegments(geometry, material); lines.computeLineDistances(); this.edgeObjects.set(lines, indices); this.resources.add(lines);
+      for (const [edgeIndex, start, segments] of spans) this.edgeSpans.set(edgeIndex, { lines, start, segments });
     }
     this.draw();
   }
@@ -351,8 +371,7 @@ export class SpatialGraphRenderer {
       const labels = this.nodes.flatMap(node => {
         const p = this.positions.get(node.uri); if (!p) return [];
         const at = screen(p), gap = this.dotRadius(node) + 3;
-        const chars = [...shortName(node)].length + (this.showCategory ? categoryOf(node).length + 1 : 0);
-        const size = { width: 16 + chars * 6.8, lines: 1 };
+        const size = { width: labelWidth(shortName(node), this.showCategory ? categoryOf(node) : "", this.pinned.has(node.uri)), lines: 1 };
         const priority = node.uri === this.selected ? 100 : node.uri === this.hovered ? 90 : this.labelRank(node.uri);
         const dx = focusPoint ? at.x - focusPoint.x : 0, dy = focusPoint ? at.y - focusPoint.y : 0, len = Math.hypot(dx, dy);
         if (!focusPoint || node.uri === focusUri || len < 1) return [{ uri: node.uri, x: at.x, y: at.y + gap, depth: at.z, ...size, ax: -0.5, ay: 0, priority }];
@@ -361,7 +380,7 @@ export class SpatialGraphRenderer {
           ax: ux > 0.35 ? 0 : ux < -0.35 ? -1 : -0.5, ay: uy < -0.35 ? -1 : uy > 0.35 ? 0 : -0.5 }];
       });
       // Reserve the helper/empty-relationship notice and camera-control areas.
-      const readable = labels.filter(label => label.y > (this.edges.length ? 44 : 110)
+      const readable = labels.filter(label => label.y + 24 * (label.ay ?? 0) > Math.max(this.topInset, this.edges.length ? 44 : 110)
         && !(label.x > width - 210 && label.y > height - 140));
       this.callbacks.onLabels(visibleLabels(readable, width, height));
     });
@@ -370,6 +389,33 @@ export class SpatialGraphRenderer {
   resize() {
     const width = Math.max(1, this.host.clientWidth), height = Math.max(1, this.host.clientHeight);
     this.renderer.setSize(width, height); this.camera.aspect = width / height; this.camera.updateProjectionMatrix(); this.draw();
+  }
+
+  /** Rewrites the line segments of the edges at ``uri`` in place; falls back to a full rebuild when an edge changes shape
+   *  (a line collapsing into a loop has more segments). */
+  private moveLines(uri: string) {
+    const pairs = new Map<string, number[]>();
+    this.edges.forEach((edge, i) => { const key = JSON.stringify([edge.source, edge.target].sort()); pairs.set(key, [...(pairs.get(key) ?? []), i]); });
+    const touched = new Set<LineSegments>();
+    for (const edgeIndex of this.incident.get(uri) ?? []) {
+      const span = this.edgeSpans.get(edgeIndex), edge = this.edges[edgeIndex];
+      const a = this.positions.get(edge.source), b = this.positions.get(edge.target);
+      if (!span || !a || !b) continue;
+      const parallel = pairs.get(JSON.stringify([edge.source, edge.target].sort()))!;
+      const points = edgeCurvePoints(a, b, parallel.indexOf(edgeIndex), parallel.length, this.dimension === 2);
+      if (points.length - 1 !== span.segments) { this.rebuild(); return; }
+      const position = span.lines.geometry.getAttribute("position") as Float32BufferAttribute;
+      for (let i = 0; i < span.segments; i++) {
+        const from = points[i], to = points[i + 1], at = (span.start + i) * 2;
+        position.setXYZ(at, from.x, from.y, from.z); position.setXYZ(at + 1, to.x, to.y, to.z);
+      }
+      touched.add(span.lines);
+    }
+    for (const lines of touched) {
+      lines.geometry.getAttribute("position").needsUpdate = true;
+      lines.computeLineDistances(); lines.geometry.computeBoundingSphere();
+    }
+    this.draw();
   }
 
   /** Height of the floating tools over the top of the canvas; a fit keeps the map below them. */
