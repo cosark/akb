@@ -861,9 +861,9 @@ an `sr-only` summary, never the only signal.
   both; the extra load runs beside the drawn map; the focus's
   own body links, and those of every strongly reached resource short of the
   chosen depth (one step further out), are weak neighbours that are never
-  followed: with more than
-  five they fold into a "Show N weak links" control (with five or fewer they
-  show, faded), and while folded no weak line is drawn. Around a focus the map
+  followed. "Strong links only" is the one strength control: on, no weak line
+  and no resource joined by weak links alone is drawn, including resources
+  brought in by "Load connections"; off, the weak neighbours show, faded. Around a focus the map
   is concentric: the focus at the centre and each strongly reached resource on
   its hop's ring (weak neighbours just outside the deepest ring); only the
   walk's backbone (the edge that first reached each resource) pulls in the
@@ -874,8 +874,7 @@ an `sr-only` summary, never the only signal.
   tooltip carry the full title), prefixed by a muted category (document type,
   else collection) when the map holds more than one;
   around a focus they sit on the far side of their dot from the focus and are
-  prioritised by distance. Turning it off (`links=all`) shows every loaded
-  connection. A Vault without explicit relations around the focus shows all
+  prioritised by distance. A Vault without explicit relations around the focus shows all
   connections with a one-line notice. The whole-Vault map carries a visible note when it leaves anything out (resources
   past its best-connected set, hidden body links), pointing to Focus for the full connections. It also defaults to
   strong links only (body links drawn only when it is turned off) and colours

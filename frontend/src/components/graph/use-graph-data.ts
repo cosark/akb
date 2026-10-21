@@ -241,6 +241,15 @@ export function strongNeighborhood(
   return { nodes: p.nodes.filter(n => keep.has(n.uri)), edges, meta: p.meta, weak, weakDepth, strong: true, reach, tree, perHop };
 }
 
+/** The map with strong links only: every weak line goes, and so does every resource that only a weak line joined —
+ *  a weak neighbour, or what "Load connections" brought in over a body link. The walked resources (``reach``) and the
+ *  selection always stay. */
+export function withoutWeak(p: GraphPayload, reach: ReadonlyMap<string, number>, selected?: string): GraphPayload {
+  const edges = p.edges.filter(e => edgeStrength(e) === "strong");
+  const joined = new Set(edges.flatMap(e => [e.source, e.target]));
+  return { ...p, nodes: p.nodes.filter(n => reach.has(n.uri) || joined.has(n.uri) || n.uri === selected), edges };
+}
+
 /** Only resources changed within the last ``since`` days; ``keep`` (the focus, what the reader selected or revealed)
  *  and resources whose time the server does not report always stay. Applied before the walk, so it never passes
  *  through a resource outside the window. */

@@ -91,7 +91,7 @@ interface Props {
   onReveal?: (uri: string) => void;
   onRearrange?: () => void;
   /** Around a focus in strong mode: resources each hop adds, and the folded weak neighbours. */
-  strongWalk?: { perHop: number[]; weak: number; weakShown: boolean; onToggleWeak: () => void; loadingIncoming?: boolean };
+  strongWalk?: { perHop: number[]; loadingIncoming?: boolean };
   /** Whole-Vault colouring by collection, largest first. */
   collections?: { key: string; count: number; token: string }[];
   /** Whether any loaded resource carries a change time (the date filter needs one). */
@@ -406,18 +406,12 @@ function GraphControls({
             <SinceMenu view={view} updateView={updateView} dated={dated} />
             <button type="button" aria-pressed={view.links === "strong"}
               onClick={() => updateView(current => ({ ...current, links: current.links === "strong" ? "all" : "strong" }))}
-              title="Strong links are explicit relations, followed outward from the focus (and back to what was derived from or depends on a resource). Each resource's body links are weak: shown faded, never followed."
+              title="On: draw strong links (explicit relations) only. Off: also draw each reached resource's weak links (body links), faded and never followed."
               className={cn("min-h-11 rounded-[var(--radius-sm)] px-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/graph-toolbar:min-h-9",
                 view.links === "strong" ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>
               Strong links only
             </button>
-            {strongWalk && strongWalk.weak > 0 && <button type="button" aria-pressed={strongWalk.weakShown} onClick={strongWalk.onToggleWeak}
-              title="Resources joined to the focus only by a body link. They are never followed."
-              className={cn("min-h-11 rounded-[var(--radius-sm)] px-2 tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/graph-toolbar:min-h-9",
-                strongWalk.weakShown ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>
-              {strongWalk.weakShown ? "Hide" : "Show"} {strongWalk.weak} weak link{strongWalk.weak === 1 ? "" : "s"}
-            </button>}
-            {view.links === "strong" && <span role="group" aria-label="Link direction" className="flex items-center gap-1">
+            <span role="group" aria-label="Link direction" className="flex items-center gap-1">
               <span className="text-foreground-muted">Direction</span>
               <span className="flex rounded-[var(--radius-sm)] border border-border p-0.5">
                 {GRAPH_DIRECTIONS.map(direction => <button key={direction} type="button" aria-pressed={view.direction === direction}
@@ -429,7 +423,7 @@ function GraphControls({
                 </button>)}
               </span>
               {strongWalk?.loadingIncoming && <span className="text-foreground-muted" aria-live="polite">Loading incoming connections…</span>}
-            </span>}
+            </span>
             <HopLegend hops={view.hops} />
             {strongWalk && (() => {
               const last = strongWalk.perHop.reduce((end, n, i) => (n > 0 ? i + 1 : end), 0);

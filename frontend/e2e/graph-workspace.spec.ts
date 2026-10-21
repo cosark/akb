@@ -1025,13 +1025,16 @@ test("strong links only keeps a focus's own context and fades its body links", a
   };
   await fixture(page, scene, { dimension: 2, onGraph: async route => { await route.fulfill({ json: around }); return true; } });
   await page.goto("/vault/fixture/graph?hops=2&entry=" + encodeURIComponent(incident.uri));
-  await graphReady(page, 5);
+  await graphReady(page, 4);
   const toggle = page.getByRole("button", { name: "Strong links only", exact: true });
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId("graph-canvas")).toHaveAccessibleName(/: 5 resources, 4 relationships/);
+  // On: the incident's own strong context only; the runbook (a body link) and the sibling (it points at the cluster) stay out.
+  await expect(page.getByTestId("graph-canvas")).toHaveAccessibleName(/: 4 resources, 3 relationships/);
+  await expect(page.getByRole("button", { name: /weak link/ })).toHaveCount(0);
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
   await expect(page).toHaveURL(/links=all/);
-  await expect(page.getByTestId("graph-canvas")).toHaveAccessibleName(/: 6 resources, 5 relationships/);
+  // Off: the body link shows too, faded; the walk is the same.
+  await expect(page.getByTestId("graph-canvas")).toHaveAccessibleName(/: 5 resources, 4 relationships/);
 });
 

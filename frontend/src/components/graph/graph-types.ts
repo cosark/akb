@@ -86,8 +86,8 @@ export interface GraphView {
   // field was called `depth`, which collided with the also-
   // renamed `akb_browse.depth` (collection-tree depth).
   hops: GraphHops;
-  /** Around a focus: follow explicit relations only ("strong", the default)
-   *  or every loaded connection, body links included ("all"). */
+  /** Around a focus the walk follows strong links (explicit relations) either way; "strong" (the default) draws
+   *  them only, "all" also draws each reached resource's weak links (body links), faded. */
   links: "strong" | "all";
   /** Which way the strong walk goes from the focus: its own links ("outgoing", the default), the links that point at
    *  it ("incoming"), or both ("all"). */
