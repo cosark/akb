@@ -1,14 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
+  act,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import VaultMembersPage from "@/pages/vault-members";
+import { CurrentUserProvider } from "@/contexts/current-user-context";
 
 vi.mock("@/lib/api", () => ({
   getMe: vi.fn(),
@@ -68,15 +70,20 @@ const MEMBERS = [
   },
 ] as const;
 
-function renderPage() {
-  return render(
+function pageElement({ account = "account-a", checking = false, revision = 0 } = {}) {
+  return (
+    <CurrentUserProvider user={{ user_id: account } as never} checking={checking} revision={revision}>
     <MemoryRouter initialEntries={["/vault/platform-docs/members"]}>
+      <Link to="/vault/other-vault/members">Switch Vault</Link>
       <Routes>
         <Route path="/vault/:name/members" element={<VaultMembersPage />} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
+    </CurrentUserProvider>
   );
 }
+
+function renderPage() { return render(pageElement()); }
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -267,7 +274,7 @@ describe("Vault Members redesign", () => {
     await user.click(
       await screen.findByRole("button", { name: "Change role for mina" }),
     );
-    await user.click(screen.getByRole("menuitemradio", { name: "admin" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Admin" }));
     expect(grantAccess).toHaveBeenCalledWith(
       "platform-docs",
       { id: "user-mina", username: "mina" },
@@ -379,4 +386,154 @@ describe("Vault Members redesign", () => {
       ).toBeEnabled();
     },
   );
+
+  it.each([
+    ["none", "This Vault does not grant public access to signed-in non-members."],
+    ["reader", "They can still read this Vault when signed in under its public access policy."],
+    ["writer", "They can still read and change content when signed in under this Vault's public access policy."],
+    [undefined, "The public access policy is unknown, so remaining access cannot be confirmed."],
+  ])("explains what revoking membership leaves for public policy %s", async (policy, remaining) => {
+    getVaultInfoMock.mockResolvedValue({ role: "owner", public_access: policy });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "More actions for mina" }));
+    await user.click(screen.getByRole("menuitem", { name: "Revoke access" }));
+    const dialog = screen.getByRole("dialog", { name: "Revoke Mina Park (@mina)?" });
+    expect(dialog).toHaveTextContent("Mina Park (@mina)'s member permissions on platform-docs will be removed.");
+    expect(dialog).toHaveTextContent(remaining);
+    expect(dialog).not.toHaveTextContent("will lose access");
+  });
+
+  it("does not promise public writes on a mirror when revoking membership", async () => {
+    getVaultInfoMock.mockResolvedValue({ role: "owner", public_access: "writer", is_external_git: true });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "More actions for mina" }));
+    await user.click(screen.getByRole("menuitem", { name: "Revoke access" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Content is read-only in this Vault.");
+  });
+
+  it("disables archived membership mutations and preserves ownership transfer", async () => {
+    getVaultInfoMock.mockResolvedValue({ role: "owner", public_access: "reader", is_archived: true });
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByRole("button", { name: "Invite member" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Change role for mina" })).toBeDisabled();
+    expect(screen.getByText(/Vault 'platform-docs' is archived \(read-only\)/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "More actions for mina" }));
+    expect(screen.getByRole("menuitem", { name: "Revoke access" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: "Transfer ownership" })).not.toHaveAttribute("aria-disabled", "true");
+    await user.click(screen.getByRole("menuitem", { name: "Transfer ownership" }));
+    expect(screen.getByRole("dialog", { name: "Transfer ownership to Mina Park (@mina)?" })).toBeInTheDocument();
+    expect(grantAccess).not.toHaveBeenCalled();
+    expect(revokeAccess).not.toHaveBeenCalled();
+  });
+
+  it.each(["Vault", "account", "revision"])("ignores a late roster after the %s boundary changes", async (boundary) => {
+    let resolveOld!: (value: unknown) => void;
+    getVaultMembersMock.mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve; }));
+    const nextMembers = [{ username: "new-member", display_name: "New roster", email: "new@example.com", role: "reader" }];
+    getVaultMembersMock.mockResolvedValue({ members: nextMembers });
+    const user = userEvent.setup();
+    const page = renderPage();
+    await waitFor(() => expect(getVaultMembers).toHaveBeenCalledTimes(1));
+    if (boundary === "Vault") await user.click(screen.getByRole("link", { name: "Switch Vault" }));
+    else page.rerender(pageElement(boundary === "account" ? { account: "account-b" } : { revision: 1 }));
+    await screen.findByText("New roster");
+    await act(async () => { resolveOld({ members: MEMBERS }); });
+    expect(screen.getByRole("table", { name: "Vault members" })).toHaveTextContent("New roster");
+    expect(screen.queryByText("Mina Park")).toBeNull();
+  });
+
+  it("hides private data and clears confirmations during access verification", async () => {
+    const user = userEvent.setup();
+    const page = renderPage();
+    await user.click(await screen.findByRole("button", { name: "More actions for mina" }));
+    await user.click(screen.getByRole("menuitem", { name: "Revoke access" }));
+    page.rerender(pageElement({ checking: true }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText("Mina Park")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Invite member" })).toBeNull();
+    expect(getVaultMembers).toHaveBeenCalledTimes(1);
+    getVaultInfoMock.mockResolvedValue({ role: "reader", public_access: "none" });
+    page.rerender(pageElement({ revision: 1 }));
+    await screen.findByRole("table", { name: "Vault members" });
+    expect(screen.queryByRole("button", { name: "Invite member" })).toBeNull();
+    expect(getVaultMembers).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not create Undo or reload the old Vault after a late role change", async () => {
+    let resolveChange!: (value: unknown) => void;
+    vi.mocked(grantAccess).mockReturnValueOnce(new Promise((resolve) => { resolveChange = resolve; }) as never);
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Change role for mina" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Admin" }));
+    await user.click(screen.getByRole("link", { name: "Switch Vault" }));
+    await waitFor(() => expect(getVaultMembers).toHaveBeenCalledTimes(2));
+    await act(async () => { resolveChange({}); });
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+    expect(getVaultMembers).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["admin", "owner"])("blocks managed Vault membership writes for a browser %s", async (role) => {
+    getVaultInfoMock.mockResolvedValue({ role, role_source: "member", managed_by: "collector", public_access: "writer" });
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByRole("button", { name: "Invite member" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Change role for mina" })).toBeDisabled();
+    expect(screen.getByText("Vault 'platform-docs' is write-managed by collector; writes require a granted service token with the required write action")).toBeInTheDocument();
+    expect(screen.queryByText(/Restore the Vault/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "More actions for mina" }));
+    const revoke = screen.getByRole("menuitem", { name: "Revoke access" });
+    expect(revoke).toHaveAttribute("aria-disabled", "true");
+    await user.click(revoke);
+    if (role === "owner") {
+      const transfer = screen.getByRole("menuitem", { name: "Transfer ownership" });
+      expect(transfer).toHaveAttribute("aria-disabled", "true");
+      await user.click(transfer);
+    } else {
+      expect(screen.queryByRole("menuitem", { name: "Transfer ownership" })).toBeNull();
+    }
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(grantAccess).not.toHaveBeenCalled();
+    expect(revokeAccess).not.toHaveBeenCalled();
+    expect(transferOwnership).not.toHaveBeenCalled();
+  });
+
+  it.each(["admin", "owner"])("preserves managed write bypass for a system admin with displayed role %s", async (role) => {
+    getVaultInfoMock.mockResolvedValue({ role, role_source: "system_admin", managed_by: "collector" });
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByRole("button", { name: "Invite member" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Change role for mina" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "More actions for mina" }));
+    expect(screen.getByRole("menuitem", { name: "Revoke access" })).not.toHaveAttribute("aria-disabled", "true");
+    if (role === "owner") {
+      expect(screen.getByRole("menuitem", { name: "Transfer ownership" })).not.toHaveAttribute("aria-disabled", "true");
+    }
+  });
+
+  it("keeps archive restrictions for system admins while allowing ownership transfer", async () => {
+    getVaultInfoMock.mockResolvedValue({ role: "owner", role_source: "system_admin", managed_by: "collector", is_archived: true });
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByRole("button", { name: "Invite member" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "More actions for mina" }));
+    expect(screen.getByRole("menuitem", { name: "Revoke access" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: "Transfer ownership" })).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("describes managed ownership denial independently of archive membership denial", async () => {
+    getVaultInfoMock.mockResolvedValue({ role: "owner", role_source: "member", managed_by: "collector", is_archived: true });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "More actions for mina" }));
+    expect(screen.getByRole("menuitem", { name: "Revoke access" })).toHaveAccessibleDescription(
+      "Vault 'platform-docs' is archived (read-only). Restore the Vault to invite members, change roles, or revoke membership.",
+    );
+    expect(screen.getByRole("menuitem", { name: "Transfer ownership" })).toHaveAccessibleDescription(
+      "Vault 'platform-docs' is write-managed by collector; writes require a granted service token with the required write action",
+    );
+  });
 });

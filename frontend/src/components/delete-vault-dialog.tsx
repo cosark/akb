@@ -18,6 +18,7 @@ interface DeleteVaultDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   vault: string;
+  inventory?: { documents?: number; tables?: number; files?: number };
   onDeleted: () => void;
 }
 
@@ -28,6 +29,7 @@ export function DeleteVaultDialog({
   open,
   onOpenChange,
   vault,
+  inventory,
   onDeleted,
 }: DeleteVaultDialogProps) {
   const [typed, setTyped] = useState("");
@@ -42,6 +44,9 @@ export function DeleteVaultDialog({
   }, [open]);
 
   const matches = typed === vault;
+  const counts = inventory ? Object.entries(inventory).filter(
+    (entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1]) && entry[1] >= 0,
+  ) : [];
 
   async function handleDelete() {
     if (!matches) return;
@@ -75,6 +80,11 @@ export function DeleteVaultDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          {counts.length > 0 && (
+            <p className="text-sm text-foreground-muted" aria-label="Resources to be deleted">
+              {counts.map(([label, count]) => `${count.toLocaleString()} ${count === 1 ? label.slice(0, -1) : label}`).join(" · ")}
+            </p>
+          )}
           <Alert variant="warning" title="No recovery path">
             If you only want to make the vault read-only, use{" "}
             <span className="font-mono">Archive</span> in the lifecycle section

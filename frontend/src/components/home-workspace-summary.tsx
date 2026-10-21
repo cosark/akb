@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Box, FileText, Paperclip, Table2, type LucideIcon } from "lucide-react";
 import { getWorkspaceSummary, validCount, WorkspaceSummaryAccessDenied, type WorkspaceCountField } from "@/lib/workspace-summary";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 
 const metrics: { field: WorkspaceCountField; label: string; icon: LucideIcon; tone: string }[] = [
   { field: "vault_count", label: "Vaults", icon: Box, tone: "text-cat-1" },
@@ -31,6 +32,7 @@ export function HomeWorkspaceSummary({ userId, accessKey, accessChecking, vaultC
     enabled: verified,
     retry: false,
     staleTime: 30_000,
+    refetchInterval: 30_000,
     gcTime: 60_000,
     // The server resolves accessible Vaults itself. Run beside the directory,
     // but only after the shell's identity proof. The access epoch, not the
@@ -40,7 +42,7 @@ export function HomeWorkspaceSummary({ userId, accessKey, accessChecking, vaultC
     refetchOnReconnect: "always",
   });
   const requestPending = accessChecking || (verified && (query.isPending || query.fetchStatus !== "idle"));
-  const snapshot = verified && query.fetchStatus === "idle" && query.isSuccess ? query.data : undefined;
+  const snapshot = verified && query.isSuccess ? query.data : undefined;
   const totalVaults = snapshot?.vault_count ?? (directoryVerified && !(query.error instanceof WorkspaceSummaryAccessDenied) ? vaultCount : undefined);
   const shown = totalVaults === 0 ? metrics.slice(0, 1) : metrics;
   const values = { ...snapshot, vault_count: totalVaults };
@@ -69,6 +71,6 @@ export function HomeWorkspaceSummary({ userId, accessKey, accessChecking, vaultC
     <span className="sr-only">Resources in vaults you can access.</span>
     {loading && <span role="status" aria-live="polite" aria-label="Loading workspace totals" className="sr-only">Loading workspace totals</span>}
     {summary}
-    {unavailable && <p className="text-xs text-foreground-muted" title="Complete workspace totals are unavailable. You can still open your vaults and documents.">Totals unavailable</p>}
+    {unavailable && <p className="text-xs text-foreground-muted" title="Complete workspace totals are unavailable. You can still open your vaults and documents.">Totals unavailable{query.isError && verified && <Button variant="link" size="sm" onClick={() => void query.refetch()}>Retry totals</Button>}</p>}
   </section>;
 }

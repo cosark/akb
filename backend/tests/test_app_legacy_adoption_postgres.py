@@ -39,7 +39,7 @@ _MIGRATIONS = [
     _BACKEND / "app" / "db" / "migrations" / "052_app_inventory.py",
     _BACKEND / "app" / "db" / "migrations" / "077_legacy_adoptions.py",
     _BACKEND / "app" / "db" / "migrations" / "095_app_release_manifest_v2.py",
-    _BACKEND / "app" / "db" / "migrations" / "114_legacy_adoption_history.py",
+    _BACKEND / "app" / "db" / "migrations" / "115_legacy_adoption_history.py",
 ]
 _DSN = os.environ.get(
     "AKB_TEST_DSN",
@@ -83,7 +83,7 @@ async def _fresh_database(*, history_migration=True):
         async with pool.acquire() as conn:
             await conn.execute(_INIT_SQL)
             for path in _MIGRATIONS:
-                if not history_migration and path.name == "114_legacy_adoption_history.py":
+                if not history_migration and path.name == "115_legacy_adoption_history.py":
                     continue
                 await _load_migration(path).migrate(conn=conn)
         yield pool

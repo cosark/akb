@@ -61,16 +61,18 @@ function drainCorrection(expected: HistoryEntry) {
  * Guard BrowserRouter's indexed, same-document Back/Forward entries. A blocked
  * POP and its correction stay invisible to the router; confirmation replays
  * the first requested delta once. Cross-document exits still use beforeunload.
+ * An optional destination predicate permits local routes that retain drafts.
  */
 export function useDocumentHistoryGuard(
   enabled: boolean,
   requestExit: (proceed: () => void) => void,
+  shouldGuardDestination?: (destination: URL) => boolean,
 ) {
-  const latest = useRef({ enabled, requestExit });
+  const latest = useRef({ enabled, requestExit, shouldGuardDestination });
   const sync = useRef<(() => void) | null>(null);
 
   useLayoutEffect(() => {
-    latest.current = { enabled, requestExit };
+    latest.current = { enabled, requestExit, shouldGuardDestination };
     sync.current?.();
   });
 
@@ -167,7 +169,8 @@ export function useDocumentHistoryGuard(
         return;
       }
 
-      if (!latest.current.enabled || sameEntry(entry, anchor)) {
+      if (!latest.current.enabled || sameEntry(entry, anchor) ||
+          latest.current.shouldGuardDestination?.(new URL(window.location.href)) === false) {
         anchor = entry;
         attempt = null;
         phase = "idle";

@@ -216,31 +216,18 @@ function PublicationPageLoading() {
 
 function DocumentBody({ slug, data }: { slug: string; data: PublicationResponse }) {
   return (
-    <article className="grid grid-cols-1 lg:grid-cols-[180px_1fr] gap-8">
+    <article className="flex min-w-0 flex-col gap-4">
       {/* Left rail — metadata */}
-      <aside className="lg:sticky lg:top-8 lg:self-start">
-        <div className="space-y-5">
-          <MetaField label="Type" value={data.type || "document"} />
-          {data.domain && <MetaField label="Domain" value={data.domain} />}
+      <header className="min-w-0 border-b border-border pb-4">
+        <h1 className="font-display text-2xl sm:text-3xl font-semibold text-foreground leading-tight tracking-tight break-words">{data.title}</h1>
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-foreground-muted">
           {/* Author attribution comes only from the resolved display name; the
               backend no longer sends the raw created_by identifier (F8). */}
           {data.created_by_name && (
-            <MetaField label="Author" value={data.created_by_name} />
+            <span>By {data.created_by_name}</span>
           )}
           {data.updated_at && (
-            <MetaField label="Updated" value={formatDate(data.updated_at)} tabular />
-          )}
-          {data.tags && data.tags.length > 0 && (
-            <div>
-              <div className="coord mb-2">Tags</div>
-              <div className="flex flex-wrap gap-1">
-                {data.tags.map((t) => (
-                  <Badge key={t} variant="outline">
-                    {t}
-                  </Badge>
-                ))}
-              </div>
-            </div>
+            <time dateTime={data.updated_at}>Updated {formatDate(data.updated_at)}</time>
           )}
           {data.section_filter && !data.section_not_found && (
             <div>
@@ -251,15 +238,19 @@ function DocumentBody({ slug, data }: { slug: string; data: PublicationResponse 
             </div>
           )}
         </div>
-      </aside>
+        <details className="mt-3 text-sm">
+          <summary className="w-fit cursor-pointer rounded-[var(--radius-sm)] py-1 text-foreground-muted hover:text-link focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">About this document</summary>
+          <dl className="mt-2 grid gap-3 sm:grid-cols-2">
+            <MetaField label="Type" value={data.type || "document"} />
+            {data.domain && <MetaField label="Domain" value={data.domain} />}
+            {data.tags && data.tags.length > 0 && <div><dt className="coord mb-1">Tags</dt><dd className="flex flex-wrap gap-1">{data.tags.map(tag => <Badge key={tag} variant="outline">{tag}</Badge>)}</dd></div>}
+          </dl>
+        </details>
+      </header>
 
       {/* Main column */}
       <div className="min-w-0">
-        <h1 className="font-display text-3xl lg:text-4xl font-semibold text-foreground leading-tight tracking-tight mb-6">
-          {data.title}
-        </h1>
-
-        <SummaryFold summary={data.summary} prominent className="mt-4 mb-10" />
+        <SummaryFold summary={data.summary} className="mb-4" />
 
         {data.content_unavailable && (
           <Alert variant="destructive" title="Content unavailable" className="mb-8">
@@ -298,10 +289,10 @@ function MetaField({
 }) {
   return (
     <div>
-      <div className="coord mb-1">{label}</div>
-      <div className={`text-sm font-medium text-foreground ${tabular ? "tabular-nums" : ""}`}>
+      <dt className="coord mb-1">{label}</dt>
+      <dd className={`text-sm font-medium text-foreground ${tabular ? "tabular-nums" : ""}`}>
         {value}
-      </div>
+      </dd>
     </div>
   );
 }

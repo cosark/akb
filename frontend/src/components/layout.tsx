@@ -1,9 +1,13 @@
 import { Link, Outlet, Navigate, matchPath, useLocation } from "react-router-dom";
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Boxes, House, PanelLeftOpen, PanelLeftClose, type LucideIcon } from "lucide-react";
 import {
+  ApiError,
+  authSessionSnapshot,
+  isCurrentAuthSession,
   clearPrivateAssetCache,
+  clearSharedVaultReads,
   getAuthConfig,
   getMe,
   getToken,
@@ -17,6 +21,7 @@ import { HeaderIndexingStatus } from "@/components/header-indexing-status";
 import { NotificationBell } from "@/components/notification-bell";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AppPageLocation } from "@/components/app-page-location";
+import { VaultOverviewNavigationFocus } from "@/components/vault-overview-navigation";
 import { appRouteBoundaryForPath } from "@/app-route-contract";
 import { Button } from "@/components/ui/button";
 import type { VaultNavigationControl } from "@/components/vault-shell";
@@ -43,7 +48,14 @@ function identityFingerprint(user: CurrentUser): string {
   ]);
 }
 
-export function Layout() {
+function isExpiredIdentityProof(error: unknown): boolean {
+  // The transport has already invalidated this session on an ordinary 401.
+  // That generation change is not a replacement account to verify again.
+  // Stale responses and pending lifecycle receipts are explicitly deferred.
+  return error instanceof ApiError && error.status === 401 && error.name !== "DeferredSessionError";
+}
+
+export function Layout({ routeOverlay, protectBackgroundDrafts = false }: { routeOverlay?: ReactNode; protectBackgroundDrafts?: boolean }) {
   const queryClient = useQueryClient();
   const location = useLocation();
   const wide = appRouteBoundaryForPath(location.pathname) === "vault-shell";
@@ -71,6 +83,9 @@ export function Layout() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      // A new shell may follow a cookie-backed login without a local token
+      // change. Do not attach it to reads started by the previous shell.
+      clearSharedVaultReads();
       const config = await getAuthConfig();
       if (
         config.available !== true ||
@@ -82,8 +97,19 @@ export function Layout() {
         return;
       }
       try {
-        const user = await getMe({ redirectOnUnauthorized: false });
-        if (!cancelled) setSession({ status: "authenticated", user });
+        while (!cancelled) {
+          const snapshot = authSessionSnapshot();
+          try {
+            const user = await getMe({ redirectOnUnauthorized: false });
+            if (!isCurrentAuthSession(snapshot)) continue;
+            if (!cancelled) setSession({ status: "authenticated", user });
+            break;
+          } catch (error) {
+            if (isExpiredIdentityProof(error)) throw error;
+            if (!isCurrentAuthSession(snapshot)) continue;
+            throw error;
+          }
+        }
       } catch {
         if (!cancelled) setSession({ status: "unauthenticated", user: null });
       }
@@ -100,32 +126,41 @@ export function Layout() {
     if (!activeUser || activeFingerprint === null) return;
     let disposed = false;
     let running = false;
+    let queued = false;
 
     const revalidateForegroundIdentity = async () => {
-      if (running || document.visibilityState === "hidden") return;
+      if (document.visibilityState === "hidden") return;
+      if (running) { queued = true; return; }
       running = true;
       setRevalidating(true);
       clearPrivateAssetCache();
+      clearSharedVaultReads();
       try {
-        const verified = await getMe({ redirectOnUnauthorized: false });
-        if (disposed) return;
-        const identityChanged =
-          identityFingerprint(verified) !== activeFingerprint;
-        // SSO cookies are shared across tabs and are intentionally invisible
-        // to JavaScript. After every foreground proof, clear query state so a
-        // replaced identity or changed server-side ACL cannot inherit data
-        // rendered under the prior cookie. Local mode only pays this cost when
-        // its storage-backed identity actually changed.
-        if (activeUser.auth_method === "browser_session" || identityChanged) {
-          queryClient.clear();
-        }
-        setSession({ status: "authenticated", user: verified });
-        setAccessRevision(revision => revision + 1);
-      } catch (error) {
-        if (disposed || (error instanceof Error && error.name === "DeferredSessionError")) return;
-        queryClient.clear();
-        clearPrivateAssetCache();
-        setSession({ status: "unauthenticated", user: null });
+        do {
+          queued = false;
+          const snapshot = authSessionSnapshot();
+          try {
+            const verified = await getMe({ redirectOnUnauthorized: false });
+            if (disposed) return;
+            // An event or changed carrier invalidates even a successful old
+            // response. Keep private UI hidden until the latest proof settles.
+            if (queued || !isCurrentAuthSession(snapshot)) { queued = true; continue; }
+            clearSharedVaultReads();
+            const identityChanged = identityFingerprint(verified) !== activeFingerprint;
+            if (activeUser.auth_method === "browser_session" || identityChanged) queryClient.clear();
+            setSession({ status: "authenticated", user: verified });
+            setAccessRevision(revision => revision + 1);
+          } catch (error) {
+            if (disposed) return;
+            if (!isExpiredIdentityProof(error) && (queued || !isCurrentAuthSession(snapshot))) { queued = true; continue; }
+            if (error instanceof Error && error.name === "DeferredSessionError") return;
+            queued = false;
+            queryClient.clear();
+            clearPrivateAssetCache();
+            clearSharedVaultReads();
+            setSession({ status: "unauthenticated", user: null });
+          }
+        } while (queued && !disposed);
       } finally {
         running = false;
         if (!disposed) setRevalidating(false);
@@ -164,6 +199,8 @@ export function Layout() {
   const isSearchWorkspace = Boolean(matchPath("/search", location.pathname));
   const isSearchRoute = isSearchWorkspace || Boolean(matchPath("/vault/:name/search", location.pathname));
   const isSettingsWorkspace = Boolean(matchPath("/settings", location.pathname));
+  const overviewMatch = matchPath("/vault/:name", location.pathname);
+  const isVaultOverview = !!overviewMatch && overviewMatch.params.name !== "new";
   const viewportLocked = wide || isSearchWorkspace;
   const sidebarCompact = wide ? vaultSidebar.compact : sidebarCollapsed;
   const surface: AppSurface = location.pathname === "/" || wide || isSearchRoute || isSettingsWorkspace ? "paper" : "workspace";
@@ -174,16 +211,17 @@ export function Layout() {
     if (!wide || !search || !account) return;
     const measure = () => {
       const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-      // Keep a readable location trail, measured search/indexing/
-      // identity controls, outer insets and the optional drawer trigger.
-      setMinimumVaultWorkspaceWidth(search.getBoundingClientRect().width + account.getBoundingClientRect().width + 21.25 * rem);
+      // Compare layout CSS pixels with the rail widths, not zoomed visual rects.
+      // Reserve a readable breadcrumb, search/identity controls, insets and
+      // the optional navigator trigger. Vault page links belong to Overview.
+      setMinimumVaultWorkspaceWidth(search.offsetWidth + account.offsetWidth + 22.25 * rem);
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(search);
     observer.observe(account);
     return () => observer.disconnect();
-  }, [wide, session.status]);
+  }, [wide, session.status, location.pathname]);
 
   function setSidebarCompact(compact: boolean) {
     if (wide) {
@@ -227,8 +265,8 @@ export function Layout() {
   return (
     <SearchStatusProvider identity={activeFingerprint!} enabled={!revalidating}>
     <CurrentUserProvider user={session.user} checking={revalidating} revision={accessRevision}>
-    <ResourceLocationProvider identity={activeFingerprint!} checking={revalidating} revision={accessRevision}>
     <ResourceNavigationProvider>
+    <ResourceLocationProvider identity={activeFingerprint!} checking={revalidating} revision={accessRevision}>
     <SettingsDialogProvider identity={session.user.user_id}>
     <div className={`${rootClass} [--workspace-gutter:1rem] sm:[--workspace-gutter:1.5rem] lg:[--workspace-gutter:2rem] xl:[--workspace-gutter:3rem] 2xl:[--workspace-gutter:9rem] ${sidebarCompact ? "lg:pl-14" : "lg:pl-52"}`} style={{ "--vault-navigation-width": `${wide ? vaultNavigationWidth : 0}px` } as CSSProperties} aria-busy={revalidating || undefined}>
       {revalidating && (
@@ -274,7 +312,7 @@ export function Layout() {
             </Button>}
             <AppPageLocation isAdmin={session.user.is_admin} />
             <div ref={searchControlsRef} className="ml-auto flex min-w-0 flex-1 items-center gap-2 lg:flex-none lg:pl-3">
-              <HeaderIndexingStatus />
+              {!isVaultOverview && <HeaderIndexingStatus />}
               {/* Quick search stays available on every route. The full Search
                   page owns its separate, URL-backed query below this header. */}
               <CurrentUserProvider user={session.user}>
@@ -303,7 +341,7 @@ export function Layout() {
             </nav>
 
             <div ref={accountControlsRef} className="ml-2 flex shrink-0 items-center justify-end gap-2 border-l border-border pl-2 lg:min-w-28">
-              <CurrentUserProvider user={session.user}>
+              <CurrentUserProvider user={session.user} checking={revalidating} revision={accessRevision}>
                 <NotificationBell key={session.user.user_id} />
               </CurrentUserProvider>
               <UserMenu initialUser={session.user} />
@@ -330,6 +368,7 @@ export function Layout() {
           }
         >
           {/* Content */}
+          <VaultOverviewNavigationFocus />
           <main
             id="main"
             tabIndex={-1}
@@ -371,8 +410,15 @@ export function Layout() {
       </div>
     </div>
     </SettingsDialogProvider>
-    </ResourceNavigationProvider>
     </ResourceLocationProvider>
+    {/* Settings previews retain editable drafts. Their mode changes and exits
+        consult that workspace's guard without sharing breadcrumb state. */}
+    {protectBackgroundDrafts && routeOverlay}
+    </ResourceNavigationProvider>
+    {/* Route-backed previews share the shell's identity/access proof, but keep
+        their own location and navigation scope. The inactive background must
+        not intercept a preview's mode changes after an approved departure. */}
+    {!protectBackgroundDrafts && routeOverlay}
     </CurrentUserProvider>
     </SearchStatusProvider>
   );

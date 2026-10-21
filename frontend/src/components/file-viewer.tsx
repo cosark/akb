@@ -5,6 +5,8 @@ import { Alert } from "@/components/ui/alert";
 import { CopyButton } from "@/components/ui/copy-button";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
+import { FilePreviewLimitError, readBoundedFilePreview } from "@/lib/bounded-file-preview";
 import {
   publicationDownloadUrl,
   publicationRawUrl,
@@ -15,10 +17,6 @@ import {
   filePreviewKind,
   formatFileSize,
 } from "@/lib/file-preview";
-
-// Cap inline text/JSON previews so a multi-MB file can't freeze the tab; the
-// full file is always available via the download link.
-const PREVIEW_TEXT_CAP = 512 * 1024;
 
 interface Props {
   slug: string;
@@ -107,6 +105,7 @@ export function FileViewer({ slug, data }: Props) {
             directUrl={rawUrl}
             rawUrl={rawUrl}
             name={data.name || ""}
+            sizeBytes={data.size_bytes}
           />
         </div>
       </div>
@@ -119,9 +118,11 @@ interface FileBodyProps {
   directUrl: string;
   rawUrl: string;
   name: string;
+  sizeBytes?: number;
+  onRefreshLink?: () => void;
 }
 
-export function FilePreviewBody({ mime, directUrl, rawUrl, name }: FileBodyProps) {
+export function FilePreviewBody({ mime, directUrl, rawUrl, name, sizeBytes, onRefreshLink }: FileBodyProps) {
   if (!directUrl) {
     return (
       <div className="p-8 text-center">
@@ -131,28 +132,30 @@ export function FilePreviewBody({ mime, directUrl, rawUrl, name }: FileBodyProps
   }
 
   if (mime.startsWith("image/")) {
-    return <ImageFileBody directUrl={directUrl} name={name} />;
+    return <ImageFileBody key={directUrl} directUrl={directUrl} name={name} onRefreshLink={onRefreshLink} />;
   }
 
   if (mime === "application/pdf") {
-    return <PdfFileBody directUrl={directUrl} name={name} />;
+    return <PdfFileBody key={directUrl} directUrl={directUrl} name={name} />;
   }
 
   if (mime === "text/html") {
-    return <HtmlFileBody rawUrl={rawUrl} name={name} />;
+    return <HtmlFileBody key={rawUrl} rawUrl={rawUrl} name={name} />;
   }
 
   if (mime === "application/json") {
-    return <JsonFileBody url={rawUrl} />;
+    return <JsonFileBody key={rawUrl} url={rawUrl} onRefreshLink={onRefreshLink} />;
   }
 
   if (filePreviewKind(mime) === "text") {
-    return <TextFileBody url={rawUrl} />;
+    return <TextFileBody key={rawUrl} url={rawUrl} onRefreshLink={onRefreshLink} />;
   }
 
   return (
-    <div className="p-12 text-center">
+    <div className="mx-auto max-w-xl break-words p-6 text-center sm:p-12">
+      {name && <p className="mb-3 font-semibold text-foreground">{name}</p>}
       <p className="mb-2 text-sm font-medium text-foreground">Preview unavailable</p>
+      {sizeBytes !== undefined && <p className="mb-2 text-sm text-foreground-muted">{formatFileSize(sizeBytes)}</p>}
       <p className="text-sm text-foreground-muted">
         No inline view for <code className="font-mono">{mime || "this format"}</code>.
         Download the original file to open it locally.
@@ -161,38 +164,44 @@ export function FilePreviewBody({ mime, directUrl, rawUrl, name }: FileBodyProps
   );
 }
 
-function ImageFileBody({ directUrl, name }: { directUrl: string; name: string }) {
+function ImageFileBody({ directUrl, name, onRefreshLink }: { directUrl: string; name: string; onRefreshLink?: () => void }) {
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [actualSize, setActualSize] = useState(false);
   if (failed) {
     return (
-      <div className="p-12 text-center">
-        <p className="mb-2 text-sm font-medium text-foreground">Preview failed</p>
-        <p className="text-sm text-foreground-muted">
-          The image couldn't be loaded. Download the original file to open it locally.
-        </p>
-      </div>
+      <PreviewFailure
+        error={new Error("The image couldn't be loaded. Refresh the link to check current access, or download the original file.")}
+        onRetry={onRefreshLink || (() => { setFailed(false); setLoading(true); })}
+        refreshLink={Boolean(onRefreshLink)}
+      />
     );
   }
   return (
-    <div className="relative flex min-h-[12rem] justify-center bg-surface-2 p-6">
-      {loading && (
-        <LoadingState label="Loading image preview" className="absolute inset-0 p-6">
-          <Skeleton className="h-full min-h-40 w-full rounded-[var(--radius-md)]" />
-        </LoadingState>
-      )}
-      <img
-        src={directUrl}
-        alt={name || "File preview image"}
-        loading="lazy"
-        decoding="async"
-        onLoad={() => setLoading(false)}
-        onError={() => {
-          setLoading(false);
-          setFailed(true);
-        }}
-        className={loading ? "max-h-[80vh] max-w-full object-contain opacity-0" : "max-h-[80vh] max-w-full object-contain"}
-      />
+    <div className="bg-surface-2">
+      <div role="group" aria-label="Image preview size" className="flex flex-wrap gap-1 border-b border-border p-2">
+        <Button variant="ghost" size="sm" aria-pressed={!actualSize} onClick={() => setActualSize(false)}>Fit image</Button>
+        <Button variant="ghost" size="sm" aria-pressed={actualSize} onClick={() => setActualSize(true)}>Actual size</Button>
+      </div>
+      <div role="region" aria-label="Image file content" tabIndex={0} className="relative min-h-48 max-h-[80vh] overflow-auto p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:p-6">
+        {loading && (
+          <LoadingState label="Loading image preview" className="absolute inset-0 p-6">
+            <Skeleton className="h-full min-h-40 w-full rounded-[var(--radius-md)]" />
+          </LoadingState>
+        )}
+        <img
+          src={directUrl}
+          alt={name || "File preview image"}
+          loading="lazy"
+          decoding="async"
+          onLoad={() => setLoading(false)}
+          onError={() => {
+            setLoading(false);
+            setFailed(true);
+          }}
+          className={`${actualSize ? "max-w-none" : "mx-auto max-h-[72vh] max-w-full object-contain"} ${loading ? "opacity-0" : ""}`}
+        />
+      </div>
     </div>
   );
 }
@@ -328,55 +337,69 @@ function HtmlFileBody({ rawUrl, name }: { rawUrl: string; name: string }) {
   );
 }
 
-function JsonFileBody({ url }: { url: string }) {
-  const [json, setJson] = useState<unknown>(undefined);
-  const [error, setError] = useState("");
+function useBoundedPreview(url: string, json: boolean) {
+  const [result, setResult] = useState<{ text: string; truncated: boolean; value?: unknown } | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    fetch(url)
-      .then((r) => r.json())
-      .then((d) => !cancelled && setJson(d))
-      .catch((e) => !cancelled && setError(String(e)));
-    return () => { cancelled = true; };
-  }, [url]);
-  if (error) return <Alert variant="destructive" className="m-4">{error}</Alert>;
-  if (json === undefined) return <FileBodyLoading label="Loading JSON preview" />;
+    const controller = new AbortController();
+    setResult(null);
+    setError(null);
+    fetch(url, { signal: controller.signal })
+      .then((response) => readBoundedFilePreview(response, { json, signal: controller.signal }))
+      .then((preview) => {
+        if (cancelled) return;
+        let value: unknown;
+        if (json) {
+          try { value = JSON.parse(preview.text); }
+          catch { throw new Error("This file isn't valid JSON. Download the original file to inspect it."); }
+        }
+        setResult({ ...preview, value });
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) setError(caught instanceof Error ? caught : new Error(String(caught)));
+      });
+    return () => { cancelled = true; controller.abort(); };
+  }, [url, json, attempt]);
+  return { result, error, retry: () => setAttempt((value) => value + 1) };
+}
+
+function PreviewFailure({ error, onRetry, refreshLink }: { error: Error; onRetry: () => void; refreshLink: boolean }) {
   return (
-    <div className="font-mono text-sm overflow-auto p-4 max-h-[80vh]">
-      <JsonTree data={json} />
+    <Alert variant={error instanceof FilePreviewLimitError ? "info" : "destructive"} title="Preview unavailable" className="m-4">
+      <p>{error.message}</p>
+      {!(error instanceof FilePreviewLimitError) && (
+        <Button variant="outline" size="sm" className="mt-3" onClick={onRetry}>
+          {refreshLink ? "Refresh link" : "Retry preview"}
+        </Button>
+      )}
+    </Alert>
+  );
+}
+
+function JsonFileBody({ url, onRefreshLink }: { url: string; onRefreshLink?: () => void }) {
+  const { result, error, retry } = useBoundedPreview(url, true);
+  if (error) return <PreviewFailure error={error} onRetry={onRefreshLink || retry} refreshLink={Boolean(onRefreshLink)} />;
+  if (!result) return <FileBodyLoading label="Loading JSON preview" />;
+  return (
+    <div role="region" aria-label="JSON file content" tabIndex={0} className="max-h-[80vh] overflow-auto p-4 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+      <JsonTree data={result.value} />
     </div>
   );
 }
 
-function TextFileBody({ url }: { url: string }) {
-  const [text, setText] = useState<string | null>(null);
-  const [truncated, setTruncated] = useState(false);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let cancelled = false;
-    fetch(url)
-      .then((r) => r.text())
-      .then((t) => {
-        if (cancelled) return;
-        if (t.length > PREVIEW_TEXT_CAP) {
-          setText(t.slice(0, PREVIEW_TEXT_CAP));
-          setTruncated(true);
-        } else {
-          setText(t);
-        }
-      })
-      .catch((e) => !cancelled && setError(String(e)));
-    return () => { cancelled = true; };
-  }, [url]);
-  if (error) return <Alert variant="destructive" className="m-4">{error}</Alert>;
-  if (text === null) return <FileBodyLoading label="Loading text preview" />;
+function TextFileBody({ url, onRefreshLink }: { url: string; onRefreshLink?: () => void }) {
+  const { result, error, retry } = useBoundedPreview(url, false);
+  if (error) return <PreviewFailure error={error} onRetry={onRefreshLink || retry} refreshLink={Boolean(onRefreshLink)} />;
+  if (!result) return <FileBodyLoading label="Loading text preview" />;
   return (
     <>
-      {truncated && (
-        <div className="coord px-4 pt-3">Preview truncated — download the file for the full content.</div>
+      {result.truncated && (
+        <Alert variant="info" className="m-4 mb-0">Preview truncated at 512 KB. Download the file for the full content.</Alert>
       )}
-      <pre className="text-sm whitespace-pre-wrap font-mono p-4 overflow-auto max-h-[80vh] bg-surface">
-        {text}
+      <pre role="region" aria-label="Text file content" tabIndex={0} className="max-h-[80vh] overflow-auto whitespace-pre-wrap bg-surface p-4 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+        {result.text}
       </pre>
     </>
   );

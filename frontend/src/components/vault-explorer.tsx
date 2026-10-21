@@ -54,6 +54,7 @@ import {
   getVaultInfo,
   type ArchiveScope,
 } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { recentTone } from "@/lib/recent";
 import { isReservedCollection } from "@/lib/skill";
 import { CreateCollectionDialog } from "@/components/create-collection-dialog";
@@ -928,6 +929,15 @@ interface RowProps {
   onCreateTable?: (node: TreeNode) => void;
 }
 
+/** Row tools overlay the full-width title surface without taking a flex slot. */
+function explorerRowActions(active: boolean) {
+  return cn(
+    "absolute right-1 top-1/2 z-10 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-[var(--radius-sm)] bg-transparent text-foreground-muted opacity-100 pointer-events-auto transition-[opacity,color] hover:bg-transparent hover:text-link focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring max-sm:right-0 max-sm:h-11 max-sm:w-11 pointer-coarse:right-0 pointer-coarse:h-11 pointer-coarse:w-11",
+    !active && "sm:pointer-fine:pointer-events-none sm:pointer-fine:opacity-0",
+    "group-hover/explorer-row:pointer-events-auto group-hover/explorer-row:opacity-100 group-focus-within/explorer-row:pointer-events-auto group-focus-within/explorer-row:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100 data-[state=open]:bg-transparent data-[state=open]:text-link pointer-coarse:pointer-events-auto pointer-coarse:opacity-100",
+  );
+}
+
 const TreeRow = memo(function TreeRow({
   node, depth, sig, isOpen, isActive, vault, onToggle, onSearchCollection, canWrite, canAdmin, showDocumentDisambiguator, onDeleteCollection, onDeleteResource, onOpenDetails, onCreateSubCollection, onCreateDoc, onUploadFile, onCreateTable,
 }: RowProps) {
@@ -947,15 +957,15 @@ const TreeRow = memo(function TreeRow({
         aria-level={depth + 1}
         aria-selected={isActive}
         aria-current={isActive ? "page" : undefined}
-        className="group relative flex items-stretch focus-within:bg-surface-hover"
+        className={cn("group group/explorer-row relative flex items-stretch max-sm:min-h-11 pointer-coarse:min-h-11",
+          isActive ? "bg-surface-selected text-surface-selected-foreground" : "hover:bg-surface-hover focus-within:bg-surface-hover has-[[data-state=open]]:bg-surface-hover")}
       >
         <button
           data-sig={sig}
           onClick={() => onToggle(node.path)}
           style={indent}
-          className={`flex min-h-9 min-w-0 flex-1 items-center gap-1.5 py-1.5 pr-1 text-left transition-colors hover:bg-surface-hover focus:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring cursor-pointer ${
-            isActive ? "bg-surface-selected text-surface-selected-foreground" : ""
-          }`}
+          className={cn("flex min-h-9 min-w-0 flex-1 items-center gap-1.5 py-1.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring cursor-pointer max-sm:min-h-11 pointer-coarse:min-h-11",
+            onOpenDetails ? "pr-10 max-sm:pr-12 pointer-coarse:pr-12" : "pr-2")}
         >
           <ChevronIcon
             className="h-3 w-3 shrink-0 text-foreground-muted group-hover:text-link transition-colors"
@@ -987,6 +997,7 @@ const TreeRow = memo(function TreeRow({
             vault={vault}
             node={node}
             editable={Boolean(canWrite && !isReserved)}
+            active={isActive}
             onSearch={() => onSearchCollection(node)}
             onOpenDetails={() => onOpenDetails(node)}
             onCreateDoc={
@@ -1044,7 +1055,9 @@ const TreeRow = memo(function TreeRow({
   return (
     <div
       role="none"
-      className={`group flex items-stretch focus-within:bg-surface-hover ${documentDisambiguator ? "min-h-11" : "min-h-9"}`}
+      className={cn("group group/explorer-row relative flex items-stretch max-sm:min-h-11 pointer-coarse:min-h-11",
+        documentDisambiguator ? "min-h-11" : "min-h-9",
+        isActive ? "bg-surface-selected text-surface-selected-foreground" : "hover:bg-surface-hover focus-within:bg-surface-hover has-[[data-state=open]]:bg-surface-hover")}
     >
       <Link
         to={href}
@@ -1054,9 +1067,9 @@ const TreeRow = memo(function TreeRow({
         aria-current={isActive ? "page" : undefined}
         aria-selected={isActive}
         style={indent}
-        className={`flex min-h-9 min-w-0 flex-1 items-center gap-1.5 py-1.5 pr-1 transition-colors hover:bg-surface-hover focus:bg-surface-hover focus:outline-none ${
-          isActive ? "-ml-[2px] border-l-2 border-primary bg-surface-selected text-surface-selected-foreground" : ""
-        }`}
+        className={cn("flex min-h-9 min-w-0 flex-1 items-center gap-1.5 py-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring max-sm:min-h-11 pointer-coarse:min-h-11",
+          canDeleteResource ? "pr-10 max-sm:pr-12 pointer-coarse:pr-12" : "pr-2",
+          isActive && "-ml-[2px] border-l-2 border-primary")}
       >
         {/* Tinted icon chip — the same kind-swatch grammar Home + the vault
             overview use, so a doc vs table vs file is pre-attentive here too
@@ -1108,7 +1121,7 @@ const TreeRow = memo(function TreeRow({
           onDelete={() => onDeleteResource?.(node)}
           side="right"
           align="start"
-          className="h-9 w-9 rounded-none opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+          className={explorerRowActions(isActive)}
         />
       )}
     </div>
@@ -1280,6 +1293,7 @@ function CollectionActionsMenu({
   vault,
   node,
   editable,
+  active,
   onSearch,
   onOpenDetails,
   onCreateDoc,
@@ -1291,6 +1305,7 @@ function CollectionActionsMenu({
   vault: string;
   node: TreeNode;
   editable: boolean;
+  active: boolean;
   onSearch: () => void;
   onOpenDetails: () => void;
   onCreateDoc?: () => void;
@@ -1321,7 +1336,7 @@ function CollectionActionsMenu({
           type="button"
           title={`Collection actions for ${node.path}`}
           aria-label={`Collection actions for ${node.path}`}
-          className="inline-flex min-h-9 w-8 shrink-0 items-center justify-center text-foreground-muted transition-colors hover:bg-surface-hover hover:text-link focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          className={explorerRowActions(active)}
         >
           <MoreHorizontal className="h-4 w-4" aria-hidden />
         </button>

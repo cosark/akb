@@ -1147,6 +1147,7 @@ class DocumentService:
             current_fm["status"] = req.status
         if req.tags is not None:
             current_fm["tags"] = req.tags
+        # Legacy null/omission are no-ops; an explicit empty string clears.
         if req.domain is not None:
             current_fm["domain"] = req.domain
         if req.summary is not None:

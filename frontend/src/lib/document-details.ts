@@ -65,15 +65,18 @@ export function documentDetailsEqual(a: DocumentDetailsValues, b: DocumentDetail
   );
 }
 
-/** Only explicit detail changes enter the PATCH; title/body remain separate. */
+/** Only explicit detail changes enter the PATCH; title/body remain separate.
+ * Empty strings clear summary/domain. Legacy null means no change on both
+ * backends, so it must not represent a user's explicit removal.
+ */
 export function changedDocumentDetails(
   current: DocumentDetailsValues,
   base: DocumentDetailsValues,
 ): DocumentDetailsUpdate {
   const changed: DocumentDetailsUpdate = {};
-  if (nullableText(current.summary) !== nullableText(base.summary)) changed.summary = current.summary.trim() || null;
+  if (nullableText(current.summary) !== nullableText(base.summary)) changed.summary = nullableText(current.summary);
   if (serializedText(current.type) !== serializedText(base.type)) changed.type = current.type;
-  if (nullableText(current.domain) !== nullableText(base.domain)) changed.domain = current.domain.trim() || null;
+  if (nullableText(current.domain) !== nullableText(base.domain)) changed.domain = nullableText(current.domain);
   if (!sameTags(current.tags, base.tags)) changed.tags = [...current.tags];
   // Unknown existing statuses are retained in the snapshots and omitted from
   // updates. An explicit selection is the only path that writes a new status.

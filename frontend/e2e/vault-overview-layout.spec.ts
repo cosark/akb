@@ -46,21 +46,39 @@ for (const dark of [false, true]) for (const width of [375, 1440, 1920, 2560]) {
     const aside = page.getByRole("complementary", { name: "Vault overview details" });
     const summary = page.getByRole("region", { name: "Vault summary", exact: true });
     const contents = summary.getByRole("region", { name: "Contents", exact: true });
+    const pages = summary.getByRole("navigation", { name: "Vault pages", exact: true });
     await expect(contents).toBeVisible();
+    await expect(page.getByRole("button", { name: "Navigate in fixture", exact: true })).toHaveCount(0);
+    await expect(pages).toBeVisible();
+    await expect(pages.getByRole("link")).toHaveCount(4);
+    for (const [label, path] of [["Graph", "graph"], ["Public links", "publications"], ["Members", "members"], ["Settings", "settings"]]) {
+      await expect(pages.getByRole("link", { name: label, exact: true })).toHaveAttribute("href", `/vault/fixture/${path}`);
+    }
+    await expect(page.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
     await expect(summary.getByRole("button", { name: "Copy akb://fixture" })).toBeVisible();
     await expect(summary.getByText("owner", { exact: true })).toBeVisible();
     await expect(aside.getByRole("region", { name: "Contents", exact: true })).toHaveCount(0);
     await expect(aside.getByRole("region")).toHaveCount(2);
     await expect(aside.getByRole("region", { name: "Tables", exact: true })).toHaveCount(0);
+    const availableRems = await page.getByRole("region", { name: "fixture Vault overview", exact: true }).evaluate(element => {
+      const style = getComputedStyle(element);
+      const width = element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      return width / parseFloat(getComputedStyle(document.documentElement).fontSize);
+    });
+    const contextBesideActivity = availableRems >= 60;
+    const contextHasTwoColumns = availableRems >= 40 && !contextBesideActivity;
     const sections = await aside.getByRole("region").all();
     for (let index = 1; index < sections.length; index++) {
       const previous = (await sections[index - 1].boundingBox())!;
       const current = (await sections[index].boundingBox())!;
-      const gap = current.y - previous.y - previous.height;
+      const gap = contextHasTwoColumns
+        ? current.x - previous.x - previous.width
+        : current.y - previous.y - previous.height;
       expect(gap).toBeGreaterThanOrEqual(12);
       expect(gap).toBeLessThanOrEqual(16);
-      expect(current.x).toBe(previous.x);
-      expect(current.width).toBe(previous.width);
+      if (contextHasTwoColumns) expect(current.y).toBe(previous.y);
+      else expect(current.x).toBe(previous.x);
+      expect(current.width).toBeCloseTo(previous.width, 0);
     }
     const link = recent.getByRole("link", { name: /Operations Runbook/ });
     await expect(link).toHaveAttribute("href", "/vault/fixture/doc/guides%2Fteam%2Fresource-0.md");
@@ -68,7 +86,7 @@ for (const dark of [false, true]) for (const width of [375, 1440, 1920, 2560]) {
     await expect(recent).not.toContainText("abc1234");
     const mainBox = (await recent.boundingBox())!;
     const asideBox = (await aside.boundingBox())!;
-    if (width >= 1920) {
+    if (contextBesideActivity) {
       expect(Math.abs(mainBox.y - asideBox.y)).toBeLessThanOrEqual(1);
       expect(asideBox.width).toBeGreaterThanOrEqual(304);
       expect(asideBox.width).toBeLessThanOrEqual(336);
@@ -77,13 +95,17 @@ for (const dark of [false, true]) for (const width of [375, 1440, 1920, 2560]) {
       expect(asideBox.y).toBeGreaterThan(mainBox.y + mainBox.height);
       expect(Math.abs(asideBox.width - mainBox.width)).toBeLessThanOrEqual(1);
     }
-    if (width >= 1440) {
-      const contentsBox = (await contents.boundingBox())!;
-      const actionsBox = (await summary.getByRole("group", { name: "Create content" }).boundingBox())!;
-      expect(Math.abs(contentsBox.y - actionsBox.y)).toBeLessThanOrEqual(1);
-      expect(actionsBox.x).toBeGreaterThan(contentsBox.x + contentsBox.width + 16);
+    const contentsBox = (await contents.boundingBox())!;
+    const pagesBox = (await pages.boundingBox())!;
+    if (availableRems >= 58) {
+      expect(Math.abs(contentsBox.y + contentsBox.height / 2 - pagesBox.y - pagesBox.height / 2)).toBeLessThanOrEqual(1);
+      expect(pagesBox.x).toBeGreaterThanOrEqual(contentsBox.x + contentsBox.width + 16);
+    } else {
+      expect(pagesBox.y).toBeGreaterThanOrEqual(contentsBox.y + contentsBox.height);
     }
-    // Counts share the summary with actions instead of an expanded stats band.
+    const actionsBox = (await summary.getByRole("group", { name: "Create content" }).boundingBox())!;
+    expect(actionsBox.y + actionsBox.height).toBeLessThanOrEqual(contentsBox.y);
+    // Counts and page destinations stay inside the compact summary.
     const identityBox = (await summary.boundingBox())!;
     expect(mainBox.y - identityBox.y - identityBox.height).toBeLessThanOrEqual(24);
     for (const button of await summary.getByRole("button").all()) {
@@ -97,7 +119,7 @@ for (const dark of [false, true]) for (const width of [375, 1440, 1920, 2560]) {
       expect(box.x + box.width).toBeLessThanOrEqual(identityBox.x + identityBox.width + 1);
     }
     await expect(page.getByRole("button", { name: "Show commits" })).toHaveAttribute("aria-expanded", "false");
-    await expect(page.getByRole("link", { name: /Members.*5/ })).toHaveAttribute("href", "/vault/fixture/members");
+    await expect(aside.getByText("Members", { exact: true }).locator("..").getByRole("definition")).toHaveText("5");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("vault-overview.png"), fullPage: true });
   });
@@ -200,9 +222,9 @@ for (const dark of [false, true]) test(`Context separates information from desti
     });
   });
   for (const sample of contrast) expect(sample.ratio, sample.label || "Context text contrast").toBeGreaterThanOrEqual(4.5);
-  for (const link of [aside.getByRole("link", { name: /Members/ })]) {
+  for (const link of [guide]) {
     const before = (await link.boundingBox())!;
-    expect(before.height).toBeGreaterThanOrEqual(40);
+    expect(before.height).toBeGreaterThanOrEqual(32);
     const resting = await link.evaluate(el => getComputedStyle(el).backgroundColor);
     await link.hover();
     await expect.poll(() => link.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(resting);
@@ -213,5 +235,15 @@ for (const dark of [false, true]) test(`Context separates information from desti
     expect(after.width).toBe(before.width);
     expect(after.height).toBe(before.height);
   }
+  const members = page.getByRole("navigation", { name: "Vault pages", exact: true }).getByRole("link", { name: "Members", exact: true });
+  const membersBox = (await members.boundingBox())!;
+  expect(membersBox.height).toBeGreaterThanOrEqual(44);
+  const restingColor = await members.evaluate(el => getComputedStyle(el).color);
+  await members.hover();
+  await expect.poll(() => members.evaluate(el => getComputedStyle(el).color)).not.toBe(restingColor);
+  await members.focus();
+  await expect(members).toBeFocused();
+  expect(await members.evaluate(el => parseFloat(getComputedStyle(el).outlineWidth))).toBeGreaterThan(0);
+  expect(await members.boundingBox()).toEqual(membersBox);
   await page.screenshot({ path: testInfo.outputPath("vault-context.png"), animations: "disabled" });
 });
