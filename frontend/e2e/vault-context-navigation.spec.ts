@@ -31,7 +31,7 @@ async function fixture(page: Page, dark: boolean) {
     if (path.includes("/browse/")) {
       browseReads += 1;
       if (failNextRead) { failNextRead = false; return route.fulfill({ status: 500, json: { detail: "Fixture refresh failed" } }); }
-      return route.fulfill({ json: { vault: "engineering", items: [
+      return route.fulfill({ json: { vault: "engineering", complete: true, next_cursor: null, items: [
       { type: "collection", path: "guides", name: "guides", doc_count: 1 },
       { type: "document", path: "guides/shared-decisions.md", name: "Shared decisions and the full context behind them" },
       ...createdCollections.map(name => ({ type: "collection", path: name, name, doc_count: 0 })),
