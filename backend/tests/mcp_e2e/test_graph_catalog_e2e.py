@@ -1,16 +1,12 @@
-"""Opt-in REST/MCP graph checks on API-created documents in either backend.
+"""Required REST/MCP graph checks in the repository-owned runtime gate.
 
-Set AKB_GRAPH_TEST_URL and AKB_E2E_PAT or fixture login credentials.
-AKB_E2E_CA_FILE supplies a private CA. Optional AKB_E2E_OUTSIDER_PAT and
-AKB_E2E_READER_PAT / AKB_E2E_READER_ID exercise actual membership boundaries.
-Only this module's randomly named Vaults are deleted.
+Reuse descriptor/reset/PAT fixtures. Native catalog and endpoint-identity
+regressions run separately in the required real-PostgreSQL CI lane.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import ssl
 import uuid
 
 import httpx
@@ -19,38 +15,23 @@ import pytest
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 
+from .conftest import _prepare_secondary_user
+from .runtime import RuntimeContext
+
 
 @pytest.fixture
-def graph_installation():
-    origin = os.getenv("AKB_GRAPH_TEST_URL")
-    if not origin:
-        pytest.skip("set AKB_GRAPH_TEST_URL for actual REST/MCP graph checks")
-    ca_file = os.getenv("AKB_E2E_CA_FILE")
-    verify = ssl.create_default_context(cafile=ca_file) if ca_file else True
-    with httpx.Client(base_url=origin, verify=verify, timeout=30) as client:
-        token = os.getenv("AKB_E2E_PAT")
-        if not token:
-            username, password = os.getenv("AKB_E2E_USERNAME"), os.getenv("AKB_E2E_PASSWORD")
-            if not username or not password:
-                pytest.fail("provide a fixture PAT or fixture login credentials")
-            login = client.post("/api/v1/auth/login", json={"username": username, "password": password})
-            assert login.status_code == 200
-            token = login.json()["token"]
-        client.headers["Authorization"] = "Bearer " + token
+def graph_installation(runtime_session: RuntimeContext):
+    origin = runtime_session.descriptor.app_origin
+    token = runtime_session.pat
+    verify = True
+    with httpx.Client(
+        base_url=origin, timeout=30, trust_env=False,
+        headers={"Authorization": "Bearer " + token},
+    ) as client:
         vault = "graph-catalog-test-" + uuid.uuid4().hex[:12]
         created = client.post("/api/v1/vaults", params={"name": vault})
         assert created.status_code == 200, created.text
-        minted = None
         try:
-            if not os.getenv("AKB_E2E_PAT"):
-                # MCP uses a PAT, not the browser session token obtained at
-                # login. Keep that distinction in both test environments.
-                issued = client.post("/api/v1/auth/tokens", json={
-                    "name": "graph-catalog-http", "expires_days": 1, "scopes": ["read", "write"],
-                })
-                assert issued.status_code == 200
-                token = issued.json()["token"]
-                minted = issued.json()["token_id"]
             seed = client.get(f"/api/v1/documents/{vault}/overview/vault-skill.md")
             assert seed.status_code in (200, 404)
             docs = []
@@ -72,10 +53,7 @@ def graph_installation():
             yield client, vault, docs, origin, token, verify
         finally:
             deleted = client.delete("/api/v1/vaults/" + vault)
-            revoked = client.delete("/api/v1/auth/tokens/" + minted) if minted else None
             assert deleted.status_code == 200, deleted.text
-            if revoked is not None:
-                assert revoked.status_code == 200
 
 
 def _get(client, path, **params):
@@ -145,6 +123,7 @@ async def test_mcp_provenance_and_orphans_use_the_same_catalog(graph_installatio
     _client, vault, docs, origin, token, verify = graph_installation
     async with httpx2.AsyncClient(
         headers={"Authorization": "Bearer " + token}, verify=verify, timeout=30, follow_redirects=True,
+        trust_env=False,
     ) as http_client:
         async with Client(streamable_http_client(origin.rstrip("/") + "/mcp", http_client=http_client)) as client:
             provenance = await client.call_tool("akb_provenance", {"uri": docs[0]["uri"]})
@@ -162,18 +141,23 @@ async def test_mcp_provenance_and_orphans_use_the_same_catalog(graph_installatio
             }
 
 
-def test_reader_and_outsider_boundaries_are_preserved(graph_installation):
+def test_reader_and_outsider_boundaries_are_preserved(graph_installation, runtime_session: RuntimeContext):
     client, vault, docs, origin, _token, verify = graph_installation
-    outsider = os.getenv("AKB_E2E_OUTSIDER_PAT")
-    reader, reader_id = os.getenv("AKB_E2E_READER_PAT"), os.getenv("AKB_E2E_READER_ID")
-    if not outsider or not reader or not reader_id:
-        pytest.skip("provide isolated reader and outsider fixtures for actual ACL checks")
+    _name, reader, _secrets = _prepare_secondary_user(runtime_session)
+    _name, outsider, _secrets = _prepare_secondary_user(runtime_session)
+    with httpx.Client(
+        base_url=origin, verify=verify, timeout=30, trust_env=False,
+        headers={"Authorization": "Bearer " + reader},
+    ) as actor:
+        profile = actor.get("/api/v1/auth/me")
+        assert profile.status_code == 200, profile.text
+        reader_id = profile.json()["user_id"]
     granted = client.post(f"/api/v1/vaults/{vault}/grant", json={"user_id": reader_id, "role": "reader"})
     assert granted.status_code == 200, granted.text
     paths = [("provenance", {"uri": docs[0]["uri"]}), ("graph/overview", {"vault": vault}),
              ("graph/health", {"vault": vault})]
     for token, status in ((reader, 200), (outsider, 403)):
-        with httpx.Client(base_url=origin, verify=verify, timeout=30,
+        with httpx.Client(base_url=origin, verify=verify, timeout=30, trust_env=False,
                           headers={"Authorization": "Bearer " + token}) as actor:
             for path, params in paths:
                 response = actor.get("/api/v1/" + path, params=params)

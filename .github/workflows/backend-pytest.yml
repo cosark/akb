@@ -362,6 +362,10 @@ jobs:
             tests/test_tool_usage_e2e.py
             tests/test_table_if_not_exists_e2e.py
             tests/test_kg_document_ref_postgres.py
+            # Native graph catalogs, snapshot pagination and stable endpoint
+            # identity need real PostgreSQL; otherwise they skip in unit CI.
+            tests/test_graph_native_catalog_pg.py
+            tests/test_native_graph_resource_identity_pg.py
             tests/test_search_covering_indexes_e2e.py
             # Needs the vchord service, not the postgres one. It skips rather
             # than failing where the extension is absent, so it has to be on a

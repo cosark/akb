@@ -69,6 +69,15 @@ only these cases against a repository-owned `serve` runtime, use the pytest
 command below with `backend/tests/mcp_e2e/test_table_schema_e2e.py` as the test
 path and keep `--confcutdir=backend/tests/mcp_e2e` and `--runtime-descriptor`.
 
+`test_graph_catalog_e2e.py` checks provenance, orphan membership and titles,
+link/unlink/move/delete identity, MCP results and actual Reader/Outsider access
+through the same mandatory runtime fixture lifecycle. It creates its secondary
+users in the disposable fixture and does not skip ACL checks for missing PATs.
+The selected runtime backend is exercised through HTTP; Native catalog paging,
+concurrent edits and stable endpoint identity are additionally required in the
+live-PG lane via `test_graph_native_catalog_pg.py` and
+`test_native_graph_resource_identity_pg.py`.
+
 The detailed security suite also covers declarative table constraints and
 indexes, stable permission envelopes, private-document and graph boundaries,
 SQL failure-state integrity, and PAT write scopes. The PG-native ACL backstops

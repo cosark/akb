@@ -122,3 +122,65 @@ async def test_legacy_catalog_remains_the_authority_in_legacy_mode(monkeypatch):
         result = await kg_service.get_provenance("a.md", vault_id=vault)
         assert result["doc_id"] == str(rid)
         assert result["title"] == "Legacy A"
+
+
+async def test_native_rest_and_mcp_reads_enforce_real_vault_acl_without_a_legacy_mirror(monkeypatch):
+    from types import SimpleNamespace
+
+    import httpx
+    from fastapi import FastAPI
+
+    from app.api.deps import get_current_user
+    from app.api.routes import documents, knowledge
+    from app.db import postgres
+    from app.exceptions import AKBError, ForbiddenError
+    from app.main import akb_error_handler
+    from app.services.native_document_service import NativeDocumentService
+    import mcp_server.server as mcp
+
+    async with _fresh_database() as pool:
+        vault, native = await _setup(pool, monkeypatch)
+        await _apply_migration(pool, 106)
+        monkeypatch.setattr(postgres, "_pool", pool)
+        monkeypatch.setattr(documents, "doc_service", NativeDocumentService(pool=pool))
+        created = await native.create_text(**_args(vault, "canary.md"), payload=_body("Native API canary"))
+        reader_vault = await _vault(pool, "reader")
+        outsider_vault = await _vault(pool, "outsider")
+        async with pool.acquire() as conn:
+            owner = await conn.fetchval("SELECT owner_id FROM vaults WHERE id=$1", vault)
+            reader = await conn.fetchval("SELECT owner_id FROM vaults WHERE id=$1", reader_vault)
+            outsider = await conn.fetchval("SELECT owner_id FROM vaults WHERE id=$1", outsider_vault)
+            await conn.execute("INSERT INTO vault_access(vault_id,user_id,role) VALUES($1,$2,'reader')", vault, reader)
+            assert await conn.fetchval("SELECT count(*) FROM documents WHERE vault_id=$1", vault) == 0
+        app = FastAPI()
+        app.include_router(documents.router, prefix="/api/v1")
+        app.include_router(knowledge.router, prefix="/api/v1")
+        app.add_exception_handler(AKBError, akb_error_handler)
+        uri = "akb://review/doc/canary.md"
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            for uid, expected in ((owner, 200), (reader, 200), (outsider, 403)):
+                app.dependency_overrides[get_current_user] = lambda uid=uid: SimpleNamespace(user_id=str(uid))
+                response = await client.get("/api/v1/documents/review/canary.md")
+                assert response.status_code == expected, response.text
+                for route, params in (("provenance", {"uri": uri}),
+                                      ("graph/overview", {"vault": "review"}),
+                                      ("graph/health", {"vault": "review"})):
+                    response = await client.get("/api/v1/" + route, params=params)
+                    assert response.status_code == expected, response.text
+                    if expected == 200 and route == "provenance":
+                        assert response.json()["doc_id"] == str(created.resource_id)
+                        assert response.json()["current_commit"] == created.revision_id
+                    elif expected == 200 and route == "graph/overview":
+                        assert response.json()["nodes"] == [{
+                            "uri": uri, "name": "Native API canary", "resource_type": "doc", "degree": 0,
+                        }]
+                    elif expected == 200 and route == "graph/health":
+                        assert response.json()["orphans"]["count"] == 1
+                user = mcp._MCPUser(user_id=str(uid))
+                if expected == 403:
+                    with pytest.raises(ForbiddenError):
+                        await mcp._handle_provenance({"uri": uri}, str(uid), user)
+                else:
+                    result = await mcp._handle_provenance({"uri": uri}, str(uid), user)
+                    assert result["doc_id"] == str(created.resource_id)
+                    assert result["title"] == "Native API canary"
