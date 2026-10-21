@@ -33,7 +33,7 @@ export const LocalLoginReady: Story = {
   render: () => <AkbRouteTree />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByLabelText("Username")).toBeInTheDocument();
+    await expect(await canvas.findByLabelText("Username or email")).toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: /Sign in/i })).toBeEnabled();
     await expect(canvas.queryByRole("navigation", { name: "Primary" })).not.toBeInTheDocument();
   },
@@ -55,7 +55,7 @@ export const LocalLoginInvalidCredentials: Story = {
   render: () => <AkbRouteTree />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.type(await canvas.findByLabelText("Username"), "jylkim");
+    await userEvent.type(await canvas.findByLabelText("Username or email"), "jylkim");
     await userEvent.type(canvas.getByLabelText("Password"), "wrong-password");
     await userEvent.click(canvas.getByRole("button", { name: /Sign in/i }));
     await expect(await canvas.findByText("Invalid username or password.")).toBeInTheDocument();

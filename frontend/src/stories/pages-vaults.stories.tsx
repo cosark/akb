@@ -57,17 +57,25 @@ export const IndexWithExistingVaults: Story = {
     const canvas = within(canvasElement);
     await expect(
       await canvas.findByRole("heading", {
-        name: "Open a vault. Everything else follows.",
+        name: "Your vaults",
       }),
     ).toBeInTheDocument();
+    // Focus the iframe before interacting with the directory: foreground
+    // access proof can replace its initially loaded controls.
+    await userEvent.click(canvas.getByRole("heading", { name: "Your vaults" }));
     await expect(await canvas.findByLabelText("2 vaults available")).toBeInTheDocument();
     await expect((await canvas.findAllByText("Vaults")).length).toBeGreaterThan(1);
     await expect(canvas.queryByRole("tree", { name: "akb explorer" })).not.toBeInTheDocument();
     await expect(await canvas.findByRole("navigation", { name: "Workspace navigation" })).toBeInTheDocument();
     await expect(await canvas.findByRole("navigation", { name: "Vaults" })).toBeInTheDocument();
-    const createButtons = await canvas.findAllByRole("button", { name: "New vault" });
-    await userEvent.click(createButtons[createButtons.length - 1]);
-    await expect(await within(document.body).findByRole("dialog")).toHaveTextContent("Create a vault");
+    const directoryList = await canvas.findByRole("list", { name: "Available vaults" });
+    await expect(within(directoryList).getByRole("link", { name: "akb" })).toHaveAttribute("href", "/vault/akb");
+    await expect(within(directoryList).getByRole("link", { name: "research" })).toHaveAttribute("href", "/vault/research");
+    const directory = within(directoryList.closest("section")!);
+    await expect(directory.getByLabelText("Find a vault")).toBeVisible();
+    await userEvent.click(directory.getByRole("button", { name: /^New vault$/ }));
+    const createDialog = await within(canvasElement.ownerDocument.body).findByRole("dialog", { name: /^Create a vault$/ });
+    await expect(await within(createDialog).findByLabelText(/^Name\s*\*$/)).toBeVisible();
     await userEvent.keyboard("{Escape}");
   },
 };

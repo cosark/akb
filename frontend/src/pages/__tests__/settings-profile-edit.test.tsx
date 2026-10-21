@@ -1,9 +1,11 @@
 import { act, cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import SettingsDialog from "../settings/settings-dialog";
 import * as api from "@/lib/api";
 import { ProfileSection } from "../settings/profile-section";
+import { CurrentUserProvider } from "@/contexts/current-user-context";
+import { ResourceNavigationProvider } from "@/contexts/resource-navigation-context";
 
 // Mock the entire api module so the test doesn't touch network. Only
 // the call surface used by the Profile tab matters here; other tabs
@@ -18,6 +20,10 @@ vi.mock("@/lib/api", () => ({
   adminListUsers: vi.fn().mockResolvedValue({ users: [] }),
   adminDeleteUser: vi.fn(),
   changePassword: vi.fn(),
+  authSessionSnapshot: vi.fn(() => ({ generation: 0, token: "fake-jwt" })),
+  isCurrentAuthSession: vi.fn(() => true),
+  clearCompletedAccountSession: vi.fn(() => false),
+  beginAccountLifecycle: vi.fn(() => vi.fn()),
   updateProfile: vi.fn(),
   getAuthConfig: vi.fn(),
 }));
@@ -74,6 +80,11 @@ const SSO_AUTH_CONFIG = {
   mcp_oauth: { enabled: true },
 };
 
+function InternalNavigation() {
+  const navigate = useNavigate();
+  return <><button onClick={() => navigate("/vault")}>Navigate internally</button><output aria-label="Current route">{useLocation().pathname}</output></>;
+}
+
 describe("settings — profile edit", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -88,6 +99,75 @@ describe("settings — profile edit", () => {
   });
 
   afterEach(() => cleanup());
+
+  it("shows typed wrong-current-password feedback on that field without clearing any draft", async () => {
+    vi.mocked(api.changePassword).mockRejectedValue(Object.assign(new Error("Current password is incorrect"), { detail: { code: "current_password_incorrect" } }));
+    renderSettings();
+    await screen.findByLabelText("Current password");
+    fireEvent.change(screen.getByLabelText("Current password"), { target: { value: "wrong" } });
+    fireEvent.change(screen.getByLabelText("New password"), { target: { value: "new-password" } });
+    fireEvent.change(screen.getByLabelText("Confirm new password"), { target: { value: "new-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "Change password" }));
+    await screen.findByText("Current password is incorrect");
+    expect(screen.getByLabelText("Current password")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("Current password")).toHaveFocus();
+    expect(screen.getByLabelText("New password")).toHaveValue("new-password");
+    fireEvent.change(screen.getByLabelText("Current password"), { target: { value: "corrected" } });
+    expect(screen.getByLabelText("Current password")).not.toHaveAttribute("aria-invalid");
+    expect(screen.queryByText("Current password is incorrect")).not.toBeInTheDocument();
+  });
+
+  it("ends only the submitted login generation after a verified password change", async () => {
+    vi.mocked(api.changePassword).mockResolvedValue({ ok: true });
+    vi.mocked(api.clearCompletedAccountSession).mockReturnValueOnce(true);
+    const completed = vi.fn();
+    render(<ProfileSection user={USER} localPasswordEnabled localProfileEditingEnabled onUserUpdate={vi.fn()} onPasswordChanged={completed} />);
+    fireEvent.change(screen.getByLabelText("Current password"), { target: { value: "old" } });
+    fireEvent.change(screen.getByLabelText("New password"), { target: { value: "new-password" } });
+    fireEvent.change(screen.getByLabelText("Confirm new password"), { target: { value: "new-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "Change password" }));
+    await waitFor(() => expect(completed).toHaveBeenCalledOnce());
+    expect(api.clearCompletedAccountSession).toHaveBeenCalledWith({ generation: 0, token: "fake-jwt" });
+    expect(screen.queryByText("Current session stays active")).not.toBeInTheDocument();
+  });
+
+  it("masks same-account profile/password drafts during proof and preserves them after refresh", async () => {
+    const view = (checking: boolean, revision: number) => <MemoryRouter><CurrentUserProvider user={{ ...USER, auth_method: "local", key_class: null }} checking={checking} revision={revision}><SettingsDialog onClose={vi.fn()} /></CurrentUserProvider></MemoryRouter>;
+    const { rerender } = render(view(false, 0));
+    const name = await screen.findByLabelText("Display name");
+    fireEvent.change(name, { target: { value: "Active draft" } });
+    fireEvent.change(screen.getByLabelText("Current password"), { target: { value: "private draft" } });
+    rerender(view(true, 0));
+    expect(name).not.toBeVisible();
+    expect(screen.getByLabelText("Current password")).not.toBeVisible();
+    rerender(view(false, 1));
+    await waitFor(() => expect(name).toBeVisible());
+    expect(name).toHaveValue("Active draft");
+    expect(screen.getByLabelText("Current password")).toHaveValue("private draft");
+  });
+
+  it("keeps a hidden write guarded until its success is accepted", async () => {
+    let resolve!: (value: Awaited<ReturnType<typeof api.updateProfile>>) => void;
+    vi.mocked(api.updateProfile).mockReturnValueOnce(new Promise(r => { resolve = r; }));
+    const close = vi.fn();
+    const view = (checking: boolean, revision: number) => <MemoryRouter initialEntries={["/search"]}><CurrentUserProvider user={{ ...USER, auth_method: "local", key_class: null }} checking={checking} revision={revision}><ResourceNavigationProvider><InternalNavigation /><SettingsDialog onClose={close} /></ResourceNavigationProvider></CurrentUserProvider></MemoryRouter>;
+    const { rerender } = render(view(false, 0));
+    fireEvent.change(await screen.findByLabelText("Display name"), { target: { value: "Submitted name" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    await waitFor(() => expect(api.updateProfile).toHaveBeenCalled());
+    rerender(view(true, 0));
+    fireEvent.click(screen.getByText("Navigate internally"));
+    expect(screen.getByLabelText("Current route")).toHaveTextContent("/search");
+    expect(close).not.toHaveBeenCalled();
+    vi.mocked(api.getMe).mockResolvedValue({ ...USER, display_name: "Submitted name", auth_method: "local", key_class: null });
+    await act(async () => resolve({ updated: true, username: USER.username, display_name: "Submitted name", email: USER.email }));
+    rerender(view(false, 1));
+    await waitFor(() => expect(screen.getByLabelText("Display name")).toBeVisible());
+    expect(screen.getByLabelText("Display name")).toHaveValue("Submitted name");
+    fireEvent.click(screen.getByText("Navigate internally"));
+    expect(screen.getByLabelText("Current route")).toHaveTextContent("/vault");
+    expect(screen.queryByRole("dialog", { name: "Discard unsaved changes?" })).not.toBeInTheDocument();
+  });
 
   it("hydrates the form with the current user payload", async () => {
     renderSettings();
@@ -206,7 +286,7 @@ describe("settings — profile edit", () => {
     fireEvent.change(screen.getByLabelText("New password"), { target: { value: "newpassword" } });
     fireEvent.change(screen.getByLabelText("Confirm new password"), { target: { value: "newpassword" } });
     fireEvent.click(screen.getByRole("button", { name: "Change password" }));
-    await screen.findByText("Password changed");
+    await screen.findByText("Password changed. Sign in again with your new password.");
     expect(api.changePassword).toHaveBeenCalledWith("oldpassword", "newpassword");
     // The flash render does not guarantee the dirty-effect propagation has
     // settled (#553): wait for the final state instead of reading a
@@ -224,7 +304,7 @@ describe("settings — profile edit", () => {
       fireEvent.change(screen.getByLabelText(label), { target: { value: "password123" } });
     }
     fireEvent.click(screen.getByRole("button", { name: "Change password" }));
-    await screen.findByText("Password changed");
+    await screen.findByText("Password changed. Sign in again with your new password.");
     await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
   });
 

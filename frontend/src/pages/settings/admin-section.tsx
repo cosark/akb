@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { Activity, useEffect, useMemo, useState } from "react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Key, Loader2, Search, Trash2 } from "lucide-react";
 import { adminDeleteUser, type AdminUser } from "@/lib/api";
 import { useDebounce } from "@/hooks/use-debounce";
@@ -12,6 +13,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { RoleBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty-state";
 import { AdminResetPasswordDialog } from "@/components/admin-reset-password-dialog";
+import { ResourceActionsMenu } from "@/components/resource-actions-menu";
 import { TooltipText } from "@/components/ui/tooltip-text";
 import { Panel } from "@/components/ui/panel";
 import type { User } from "./profile-section";
@@ -24,6 +26,10 @@ interface Props {
   usersError: boolean;
   localPasswordEnabled: boolean;
   onReloadUsers: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
+  onBusyChange?: (busy: boolean) => void;
+  ownsOperation?: () => boolean;
+  visible?: boolean;
 }
 
 export function AdminSection({
@@ -32,6 +38,10 @@ export function AdminSection({
   usersError,
   localPasswordEnabled,
   onReloadUsers,
+  onDirtyChange,
+  onBusyChange,
+  ownsOperation,
+  visible = true,
 }: Props) {
   const [adminQuery, setAdminQuery] = useState("");
   const [adminSort, setAdminSort] = useState<AdminSort>("recent");
@@ -39,6 +49,10 @@ export function AdminSection({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [pendingDeleteUser, setPendingDeleteUser] = useState<AdminUser | null>(null);
   const [resetTarget, setResetTarget] = useState<AdminUser | null>(null);
+  const [resetBusy, setResetBusy] = useState(false);
+  useEffect(() => { onDirtyChange?.(resetTarget !== null); }, [resetTarget, onDirtyChange]);
+  useEffect(() => { onBusyChange?.(resetBusy || deletingId !== null); }, [resetBusy, deletingId, onBusyChange]);
+  useEffect(() => () => { onDirtyChange?.(false); onBusyChange?.(false); }, [onDirtyChange, onBusyChange]);
 
   const filteredUsers = useMemo(() => {
     if (!users) return [];
@@ -84,7 +98,7 @@ export function AdminSection({
 
   return (
     <>
-      <section aria-labelledby="settings-users-heading">
+      <Activity mode={visible ? "visible" : "hidden"}><section aria-labelledby="settings-users-heading">
         <header className="mb-4 flex items-start justify-between gap-4 border-b border-border pb-4">
           <div className="flex items-start gap-3">
             <div>
@@ -182,11 +196,11 @@ export function AdminSection({
                         data-testid="admin-user-name"
                         className="truncate text-sm font-semibold text-foreground"
                       >
-                        {u.username}
+                        {u.display_name || u.username}
                       </TooltipText>
                       {u.display_name && u.display_name !== u.username && (
                         <TooltipText className="truncate text-sm text-foreground-muted">
-                          {u.display_name}
+                          {u.username}
                         </TooltipText>
                       )}
                       {u.is_admin && (
@@ -207,33 +221,31 @@ export function AdminSection({
                     {u.id === user.user_id ? (
                       <Badge variant="outline">You</Badge>
                     ) : (
-                      <>
+                      <ResourceActionsMenu resourceName={u.username} onCloseAutoFocus={event => { if (resetTarget || pendingDeleteUser) event.preventDefault(); }}>
                         {localPasswordEnabled && (
-                          <button
-                            type="button"
-                            onClick={() => setResetTarget(u)}
-                            title={`Reset password for ${u.username}`}
+                          <DropdownMenu.Item
+                            onSelect={() => setResetTarget(u)}
                             aria-label={`Reset password for ${u.username}`}
-                            className="inline-flex min-h-[36px] cursor-pointer items-center gap-1 rounded-[var(--radius-sm)] px-2 text-xs text-foreground-muted transition-colors hover:bg-surface-hover hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+                            className="flex min-h-10 cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-2 text-sm outline-none data-[highlighted]:bg-surface-hover"
                           >
                             <Key className="h-3 w-3" aria-hidden />
-                            Reset
-                          </button>
+                            Reset password
+                          </DropdownMenu.Item>
                         )}
-                        <button
-                          onClick={() => setPendingDeleteUser(u)}
+                        <DropdownMenu.Item
+                          onSelect={() => setPendingDeleteUser(u)}
                           disabled={deletingId === u.id}
                           aria-label={`Delete user ${u.username}`}
-                          className="inline-flex min-h-[36px] cursor-pointer items-center gap-1 rounded-[var(--radius-sm)] px-2 text-xs text-destructive transition-colors hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-50"
+                          className="flex min-h-10 cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-2 text-sm text-destructive outline-none data-[highlighted]:bg-surface-hover data-[disabled]:opacity-50"
                         >
                           {deletingId === u.id ? (
                             <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
                           ) : (
                             <Trash2 className="h-3 w-3" aria-hidden />
                           )}
-                          {deletingId === u.id ? "Deleting" : "Delete"}
-                        </button>
-                      </>
+                          {deletingId === u.id ? "Deleting" : "Delete account"}
+                        </DropdownMenu.Item>
+                      </ResourceActionsMenu>
                     )}
                   </div>
                 </div>
@@ -242,15 +254,15 @@ export function AdminSection({
           )}
         </div>
       </Panel>
-      </section>
+      </section></Activity>
 
       <ConfirmDialog
-        open={pendingDeleteUser !== null}
+        open={visible && pendingDeleteUser !== null}
         onOpenChange={(o) => !o && setPendingDeleteUser(null)}
         title={pendingDeleteUser ? `Delete user "${pendingDeleteUser.username}"?` : ""}
         description={
           pendingDeleteUser && pendingDeleteUser.owned_vaults > 0
-            ? `This will ALSO permanently delete ${pendingDeleteUser.owned_vaults} vault(s) they own — including documents, files, tables, and Git history.\n\nThis cannot be undone.`
+            ? `This will ALSO permanently delete ${pendingDeleteUser.owned_vaults} vault(s) they own — including documents, files, tables, and version history.\n\nThis cannot be undone.`
             : "This cannot be undone."
         }
         confirmLabel="Delete user"
@@ -260,6 +272,9 @@ export function AdminSection({
 
       {localPasswordEnabled && (
         <AdminResetPasswordDialog
+          ownsOperation={ownsOperation}
+          visible={visible}
+          onBusyChange={setResetBusy}
           userId={resetTarget?.id ?? ""}
           username={resetTarget?.username ?? ""}
           open={resetTarget !== null}

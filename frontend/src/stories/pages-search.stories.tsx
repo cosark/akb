@@ -35,7 +35,7 @@ export const ReadyNoQuery: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("heading", { name: "Suggested searches" })).toBeInTheDocument();
-    await expect(canvas.getByRole("search", { name: "Search all vaults" })).toBeInTheDocument();
+    await expect(canvas.getByRole("search", { name: "Search in All vaults" })).toBeInTheDocument();
     await expect(await canvas.findByRole("navigation", { name: "Workspace navigation" })).toBeInTheDocument();
     await expect(canvas.queryByRole("navigation", { name: "Vaults" })).not.toBeInTheDocument();
   },
@@ -157,6 +157,6 @@ export const ScopedVaultSearch: Story = {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("navigation", { name: "Vaults" })).toBeInTheDocument();
     await expect(await canvas.findByRole("tree", { name: "akb explorer" })).toBeInTheDocument();
-    await expect(canvas.getByRole("link", { name: /All vaults/i })).toBeInTheDocument();
+    await expect(canvas.getByRole("search", { name: "Search in akb" })).toBeInTheDocument();
   },
 };

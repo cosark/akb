@@ -8,6 +8,8 @@ for (const width of [1920, 1440, 375]) for (const dark of [false, true]) {
     await page.addInitScript(() => localStorage.setItem("akb_token", "home-watch-fixture"));
     const writes: string[] = [];
     let watched = true;
+    let releaseWatchingRefresh!: () => void;
+    const watchingRefresh = new Promise<void>(resolve => { releaseWatchingRefresh = resolve; });
     const row = (id: string, title: string) => ({ doc_id: id, title, vault: "fixture", path: `guides/${id}.md`, changed_at: "2026-09-09T00:00:00Z" });
     await page.route("**/health/**", route => route.fulfill({ json: {} }));
     await page.route("**/api/v1/**", async route => {
@@ -21,6 +23,7 @@ for (const width of [1920, 1440, 375]) for (const dark of [false, true]) {
       if (path.endsWith("/vaults/fixture/info")) return route.fulfill({ json: { name: "fixture", role: "writer", is_archived: false, is_external_git: false } });
       if (path.endsWith("/recent")) {
         const scope = url.searchParams.get("scope") || "all";
+        if (scope === "watching" && !watched) await watchingRefresh;
         return route.fulfill({ json: { scope, next_cursor: null, changes: scope === "watching" ? (watched ? [row("watched", "Watched operating guide")] : []) : [row("other", "Another recent document")] } });
       }
       if (path.endsWith("/notifications/unread-count")) return route.fulfill({ json: { supported: true, unread_count: 1, snapshot: "snapshot", retention_days: 90 } });
@@ -58,9 +61,14 @@ for (const width of [1920, 1440, 375]) for (const dark of [false, true]) {
     await page.getByRole("menuitemcheckbox", { name: "Unwatch", exact: true }).click();
     await expect(page.getByRole("menuitemcheckbox", { name: "Watch", exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
+    await expect(page.getByRole("menuitemcheckbox", { name: "Watch", exact: true })).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(preview).toHaveCount(0);
     await expect(page).toHaveURL(/\/$/);
+    // The preview returns to its still-present source before the delayed
+    // watched-feed response removes that source. Focus must survive both.
+    await expect(link).toBeFocused();
+    releaseWatchingRefresh();
     await expect(recent.getByText("Watched operating guide")).toHaveCount(0);
     await expect(recent.getByRole("heading", { name: "Watched documents", exact: true })).toBeFocused();
     expect(writes).toEqual(["DELETE /api/v1/notification-subscriptions"]);

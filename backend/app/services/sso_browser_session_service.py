@@ -205,6 +205,9 @@ def _authenticated_user(row, scope: str) -> AuthenticatedUser:
         is_admin=row["is_admin"],
         auth_method="browser_session",
         oauth_scopes=scope.split(" "),
+        browser_session_id=row["id"],
+        browser_session_epoch=row["session_epoch"],
+        browser_session_runtime_generation=current_sso_session_authority().runtime_generation,
     )
 
 

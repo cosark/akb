@@ -1,9 +1,12 @@
-import { useRef, type ReactNode } from "react";
+import { useId, useRef, type ReactNode } from "react";
+import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface SegmentedOption {
   value: string;
   label: string;
+  /** Optional explanation turns a compact choice into a labelled option card. */
+  description?: string;
   /** Optional leading icon element (e.g. a Lucide <Icon className="h-3 w-3" />). */
   icon?: ReactNode;
   /** Escalated/destructive choice — the selected state tints amber (warning)
@@ -35,6 +38,7 @@ export function Segmented({
   "aria-label"?: string;
 }) {
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
+  const descriptionId = useId();
   const order = options.map((o) => o.value);
 
   function onKeyDown(e: React.KeyboardEvent) {
@@ -73,6 +77,8 @@ export function Segmented({
             }}
             type="button"
             role="radio"
+            aria-label={o.description ? o.label : undefined}
+            aria-describedby={o.description ? `${descriptionId}-${i}` : undefined}
             aria-checked={active}
             tabIndex={active ? 0 : -1}
             onClick={() => !disabled && onChange(o.value)}
@@ -81,6 +87,7 @@ export function Segmented({
               "flex min-h-[36px] items-center justify-center gap-1.5 px-3 py-2 text-sm transition-colors",
               "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
               "disabled:opacity-50 disabled:cursor-not-allowed",
+              o.description && "items-start justify-start gap-2.5 p-4 text-left",
               active
                 ? o.danger
                   ? "bg-warning-soft text-warning-soft-foreground"
@@ -89,7 +96,20 @@ export function Segmented({
             )}
           >
             {o.icon}
-            {o.label}
+            {o.description ? (
+              <>
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium">{o.label}</span>
+                  <span
+                    id={`${descriptionId}-${i}`}
+                    className="mt-2 block text-sm font-normal leading-relaxed"
+                  >
+                    {o.description}
+                  </span>
+                </span>
+                {active && <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />}
+              </>
+            ) : o.label}
           </button>
         );
       })}

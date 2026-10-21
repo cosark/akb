@@ -1,3 +1,5 @@
+import { changesInventory, notifyInventoryChanged } from "./inventory-refresh";
+
 const API_BASE = "/api/v1";
 
 export type AuthMode = "local" | "sso";
@@ -23,12 +25,20 @@ type AssetFlight = {
   settled: boolean;
 };
 const privateAssetFlights = new Map<string, AssetFlight>();
+const privateAssetResetListeners = new Set<() => void>();
+
+/** In-memory private media follows the same session/proof boundary as assets. */
+export function subscribePrivateAssetReset(listener: () => void): () => void {
+  privateAssetResetListeners.add(listener);
+  return () => { privateAssetResetListeners.delete(listener); };
+}
 
 export function clearPrivateAssetCache() {
   privateAssetCache.clear();
   privateAssetCacheBytes = 0;
   for (const flight of privateAssetFlights.values()) flight.controller.abort();
   privateAssetFlights.clear();
+  for (const listener of privateAssetResetListeners) listener();
 }
 
 type StoredTokenRead =
@@ -59,6 +69,7 @@ export function setToken(t: string | null) {
   if (_token !== t || (stored.available && stored.value !== t)) {
     _authSessionGeneration += 1;
     clearPrivateAssetCache();
+    clearSharedVaultReads();
   }
   _token = t;
   writeStoredToken(t);
@@ -332,7 +343,7 @@ export async function authenticatedFetch(
   return res;
 }
 
-async function throwJsonApiError(res: Response): Promise<never> {
+export async function throwJsonApiError(res: Response): Promise<never> {
   const body = await res.json().catch(() => ({}));
   if (body && typeof body.detail === "object" && body.detail !== null) {
     const detail = body.detail as { message?: string };
@@ -362,7 +373,9 @@ async function api<T>(
   if (!res.ok) {
     await throwJsonApiError(res);
   }
-  return res.json();
+  const result = await res.json();
+  if (changesInventory(path, opts?.method)) notifyInventoryChanged();
+  return result;
 }
 
 async function apiText(path: string, opts?: RequestInit): Promise<string> {
@@ -1036,6 +1049,22 @@ export function setAdminSsoProviderEnabled(
 }
 
 // ── Auth (ordinary browser session) ──
+export interface AvatarState {
+  revision: string | null;
+  url: string | null;
+  width?: number;
+  height?: number;
+}
+
+export interface ProfileAvatarCapabilities {
+  supported: boolean;
+  can_upload: boolean;
+  can_remove: boolean;
+  reason: string | null;
+  max_upload_bytes: number;
+  allowed_content_types: string[];
+}
+
 export interface CurrentUser {
   user_id: string;
   username: string;
@@ -1045,7 +1074,11 @@ export interface CurrentUser {
   auth_method: string;
   account_kind?: "human" | "service";
   key_class: string | null;
+  avatar?: AvatarState;
+  profile_capabilities?: { avatar?: ProfileAvatarCapabilities };
 }
+
+export { getProfilePhotoBlob, uploadProfilePhoto, removeProfilePhoto } from "./api-profile-photo";
 
 export const getMe = (
   { redirectOnUnauthorized = true }: { redirectOnUnauthorized?: boolean } = {},
@@ -1138,10 +1171,17 @@ export const listVaultTemplates = () =>
 // Several shell surfaces ask for these on the same navigation. Concurrent
 // identical reads share one request; nothing is kept after it settles.
 const inFlightReads = new Map<string, Promise<unknown>>();
+/** A foreground identity/ACL proof starts a new owner for shell reads. */
+export function clearSharedVaultReads() {
+  inFlightReads.clear();
+}
 function sharedRead<T>(path: string): Promise<T> {
   const pending = inFlightReads.get(path);
   if (pending) return pending as Promise<T>;
-  const request = api<T>(path).finally(() => inFlightReads.delete(path));
+  const request = api<T>(path).finally(() => {
+    // A detached old request must not delete its replacement's ownership.
+    if (inFlightReads.get(path) === request) inFlightReads.delete(path);
+  });
   inFlightReads.set(path, request);
   return request;
 }
@@ -1652,6 +1692,8 @@ export async function discardAsset(vault: string, fileId: string): Promise<void>
 }
 
 // ── Vault files ──
+import { notifyInventoryChanged as notifyConfirmedFileInventory } from "@/lib/inventory-refresh";
+
 export type FileUploadStage = "preparing" | "uploading" | "confirming";
 
 export interface VaultFileUploadOptions {
@@ -1681,6 +1723,69 @@ export interface VaultFileDeleteResult {
   deleted: true;
 }
 
+export class VaultFileUploadUncertainError extends Error {
+  readonly #session: AuthSessionSnapshot;
+
+  constructor(public readonly vault: string, public readonly fileId: string, cause: unknown, session = authSessionSnapshot()) {
+    super("The upload may already be saved, but its confirmation could not be verified. Check this upload before uploading the file again.", { cause });
+    this.name = "VaultFileUploadUncertainError";
+    this.#session = session;
+  }
+
+  checkUpload(): Promise<VaultFileUploadResult> {
+    return confirmVaultFileUpload(this.vault, this.fileId, this.#session);
+  }
+}
+
+function verifiedUploadResult(value: unknown, vault: string): VaultFileUploadResult {
+  const data = value as Partial<VaultFileUploadResult> | null;
+  if (!data || data.kind !== "file" || typeof data.uri !== "string" || !data.uri ||
+      typeof data.name !== "string" || typeof data.mime_type !== "string" ||
+      typeof data.size_bytes !== "number" || !Number.isFinite(data.size_bytes) || data.size_bytes < 0) {
+    throw new Error("The server returned an incomplete upload confirmation.");
+  }
+  return { ...data, vault } as VaultFileUploadResult;
+}
+
+/** Retry the same reservation and reconcile a lost success through the
+ * confirmed-only metadata read. Never reserve or delete a File here. */
+function requireUploadSession(session: AuthSessionSnapshot) {
+  if (!isCurrentAuthSession(session)) {
+    throw new Error("The account changed during upload. Check the file in the original account before uploading again.");
+  }
+}
+
+export async function confirmVaultFileUpload(
+  vault: string, fileId: string, session = authSessionSnapshot(),
+): Promise<VaultFileUploadResult> {
+  const path = `/files/${encodeURIComponent(vault)}/${encodeURIComponent(fileId)}`;
+  let failure: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    requireUploadSession(session);
+    try {
+      const data = await api<unknown>(`${path}/confirm`, { method: "POST" });
+      requireUploadSession(session);
+      return verifiedUploadResult(data, vault);
+    } catch (caught: unknown) {
+      failure = caught;
+      requireUploadSession(session);
+      try {
+        const data = await api<unknown>(path);
+        requireUploadSession(session);
+        const confirmed = verifiedUploadResult(data, vault);
+        notifyConfirmedFileInventory(vault);
+        return confirmed;
+      } catch {
+        // Pending uploads are intentionally absent from the metadata read.
+        // A failed observation is not authorization to roll back a File.
+      }
+      if (caught instanceof ApiError && caught.status >= 400 && caught.status < 500 &&
+          caught.status !== 408 && caught.status !== 429) break;
+    }
+  }
+  throw new VaultFileUploadUncertainError(vault, fileId, failure, session);
+}
+
 /**
  * Complete the backend's presigned file flow from the browser: reserve the
  * file record, PUT the bytes directly to object storage, then certify the
@@ -1692,6 +1797,7 @@ export async function uploadVaultFile(
   file: File,
   options: VaultFileUploadOptions = {},
 ): Promise<VaultFileUploadResult> {
+  const session = authSessionSnapshot();
   const mimeType = file.type || "application/octet-stream";
   const params = new URLSearchParams({
     filename: file.name,
@@ -1719,7 +1825,9 @@ export async function uploadVaultFile(
     throw new Error("The server returned an incomplete upload reservation.");
   }
 
+  let confirmationStarted = false;
   try {
+    requireUploadSession(session);
     if (!reservation.deduplicated) {
       options.onStageChange?.("uploading");
       const transfer = await fetch(reservation.upload_url, {
@@ -1733,23 +1841,32 @@ export async function uploadVaultFile(
     }
 
     options.onStageChange?.("confirming");
-    const confirm = await authenticatedFetch(
-      `${API_BASE}/files/${encodeURIComponent(vault)}/${encodeURIComponent(fileId)}/confirm`,
-      { method: "POST" },
-    );
-    if (!confirm.ok) await throwJsonApiError(confirm);
-    return confirm.json();
+    requireUploadSession(session);
+    confirmationStarted = true;
+    return await confirmVaultFileUpload(vault, fileId, session);
   } catch (error) {
-    // Best-effort rollback: pending reservations are otherwise cleaned by the
-    // backend worker, but immediate cleanup lets a user retry the same file now.
-    try {
-      await authenticatedFetch(
-        `${API_BASE}/files/${encodeURIComponent(vault)}/${encodeURIComponent(fileId)}`,
-        { method: "DELETE" },
-        { unauthorized: "preserve-session" },
-      );
-    } catch {
-      // The original transfer/confirmation error is the useful one to surface.
+    if (!confirmationStarted && !reservation.deduplicated && isCurrentAuthSession(session)) {
+      try {
+        const cleanup = await authenticatedFetch(
+          `${API_BASE}/files/${encodeURIComponent(vault)}/${encodeURIComponent(fileId)}/cancel-upload`,
+          { method: "POST" },
+          { unauthorized: "preserve-session" },
+        );
+        requireUploadSession(session);
+        if (!cleanup.ok) throw new Error("Pending upload cancellation could not be verified.", { cause: error });
+        const cancellation = await cleanup.json() as { state?: string };
+        if (cancellation.state === "confirmed") {
+          return await confirmVaultFileUpload(vault, fileId, session);
+        }
+        if (!["cancelled", "absent"].includes(cancellation.state || "")) {
+          throw new Error("Pending upload cancellation could not be verified.", { cause: error });
+        }
+      } catch (cleanupError) {
+        // Older servers can lack pending-only cancellation. Let their pending
+        // lifecycle expire; never fall back to an ordinary File DELETE.
+        requireUploadSession(session);
+        throw new VaultFileUploadUncertainError(vault, fileId, cleanupError, session);
+      }
     }
     throw error;
   }
@@ -1770,9 +1887,11 @@ export interface VaultFileDownloadResult {
 export async function getVaultFileDownloadUrl(
   vault: string,
   fileId: string,
+  signal?: AbortSignal,
 ): Promise<VaultFileDownloadResult> {
   const response = await authenticatedFetch(
     `${API_BASE}/files/${encodeURIComponent(vault)}/${encodeURIComponent(fileId)}/download`,
+    { signal },
   );
   if (!response.ok) await throwJsonApiError(response);
   return response.json() as Promise<VaultFileDownloadResult>;
@@ -2729,11 +2848,37 @@ export interface AdminUser {
 export const adminListUsers = () => api<{ users: AdminUser[] }>("/admin/users");
 export const adminDeleteUser = (user_id: string) =>
   api<any>(`/admin/users/${user_id}`, { method: "DELETE" });
-export const changePassword = (current_password: string, new_password: string) =>
-  api<{ ok: true }>("/auth/change-password", {
-    method: "POST",
-    body: JSON.stringify({ current_password, new_password }),
-  });
+export async function changePassword(current_password: string, new_password: string): Promise<{ ok: true }> {
+  const snapshot = authSessionSnapshot();
+  try {
+    const receipt = await api<unknown>("/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ current_password, new_password }),
+    }, "preserve-session");
+    if (!receipt || typeof receipt !== "object" || !("ok" in receipt) || receipt.ok !== true) {
+      throw new ApiError("The password-change result could not be verified. Check your account before trying again.", 502, { code: "password_change_unverified" });
+    }
+    return { ok: true };
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 401) throw error;
+    // Older servers also use 401 for an incorrect current password. Prove the
+    // same session through /auth/me before classifying that as a form error.
+    // A real expired session still goes through the normal 401 expiry path.
+    if (!isCurrentAuthSession(snapshot)) {
+      error.name = "DeferredSessionError";
+      throw error;
+    }
+    const account = await getMe();
+    if (!account || typeof account.user_id !== "string" || !account.user_id || typeof account.username !== "string" || !account.username) {
+      throw new ApiError("Your session could not be verified. Check your account before trying again.", 502, { code: "session_proof_unverified" });
+    }
+    if (!isCurrentAuthSession(snapshot)) {
+      error.name = "DeferredSessionError";
+      throw error;
+    }
+    throw new ApiError("Current password is incorrect", 400, { code: "current_password_incorrect" });
+  }
+}
 export const updateProfile = (patch: { display_name?: string; email?: string }) =>
   api<{ updated: true; username: string; display_name: string | null; email: string }>(
     "/auth/me",

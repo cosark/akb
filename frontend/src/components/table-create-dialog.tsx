@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { FolderOpen, Plus, Table2, Trash2 } from "lucide-react";
 import {
+  authSessionSnapshot,
+  isCurrentAuthSession,
   createVaultTable,
   type VaultTableColumnInput,
 } from "@/lib/api";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
   DialogContent,
@@ -46,6 +49,7 @@ const firstColumn = (): EditableColumn => ({
 
 export function TableCreateDialog({
   open,
+  visible = true,
   onOpenChange,
   vault,
   initialCollection = "",
@@ -53,6 +57,8 @@ export function TableCreateDialog({
   returnFocusRef,
 }: {
   open: boolean;
+  /** Hide during access proof without disposing the draft or create job. */
+  visible?: boolean;
   onOpenChange: (open: boolean) => void;
   vault: string;
   initialCollection?: string;
@@ -68,12 +74,29 @@ export function TableCreateDialog({
   const [submitted, setSubmitted] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const draftFocusRef = useRef<HTMLElement | null>(null);
+  const wasOpen = useRef(false);
+  const active = useRef(true);
+  const [completed, setCompleted] = useState<{ name: string; session: ReturnType<typeof authSessionSnapshot> } | null>(null);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+  useEffect(() => {
+    if (open && visible && completed && isCurrentAuthSession(completed.session)) {
+      setCompleted(null);
+      onCreated(completed.name);
+      onOpenChange(false);
+    }
+  }, [open, visible, completed, onCreated, onOpenChange]);
 
   useEffect(() => {
+    const opening = open && !wasOpen.current;
+    const closing = !open && wasOpen.current;
+    wasOpen.current = open;
     if (open) {
-      setCollection(initialCollection.trim());
+      if (opening) setCollection(initialCollection.trim());
       return;
     }
+    if (!closing) return;
     setName("");
     setDescription("");
     setCollection("");
@@ -81,6 +104,8 @@ export function TableCreateDialog({
     nextColumnKey.current = 2;
     setSubmitted(false);
     setError("");
+    setDiscardOpen(false);
+    setCompleted(null);
   }, [open, initialCollection]);
 
   const tableNameError = identifierError(name, "Table name");
@@ -88,6 +113,18 @@ export function TableCreateDialog({
     columnError(column.name, index, columns),
   );
   const invalid = Boolean(tableNameError || columnErrors.some(Boolean));
+  const dirty = name !== "" || description !== "" || collection !== initialCollection.trim()
+    || columns.length !== 1 || columns.some((column) => column.name !== "" || column.type !== "text" || column.required || column.unique);
+
+  function requestOpenChange(next: boolean) {
+    if (creating) return;
+    if (!next && dirty) {
+      draftFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setDiscardOpen(true);
+      return;
+    }
+    onOpenChange(next);
+  }
 
   function updateColumn(key: number, patch: Partial<EditableColumn>) {
     setColumns((current) =>
@@ -111,6 +148,7 @@ export function TableCreateDialog({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (!visible || creating || completed) return;
     setSubmitted(true);
     setError("");
     if (invalid) {
@@ -123,6 +161,8 @@ export function TableCreateDialog({
     }
 
     setCreating(true);
+    const session = authSessionSnapshot();
+    const submittedName = name.trim();
     try {
       await createVaultTable(vault, {
         name: name.trim(),
@@ -133,32 +173,33 @@ export function TableCreateDialog({
           name: column.name.trim(),
         })),
       });
-      onCreated(name.trim());
-      onOpenChange(false);
+      if (active.current && isCurrentAuthSession(session)) setCompleted({ name: submittedName, session });
     } catch (caught: unknown) {
-      setError(
+      if (active.current && isCurrentAuthSession(session)) setError(
         caught instanceof Error
           ? caught.message
           : "The table could not be created. Check the schema and try again.",
       );
     } finally {
-      setCreating(false);
+      if (active.current) setCreating(false);
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !creating && onOpenChange(next)}>
+    <>
+    <Dialog open={open && visible} onOpenChange={requestOpenChange}>
       <DialogContent
-        className="max-w-3xl gap-0 p-0"
+        className="flex max-w-3xl flex-col gap-0 overflow-hidden p-0"
         onEscapeKeyDown={(event) => creating && event.preventDefault()}
         onPointerDownOutside={(event) => creating && event.preventDefault()}
         onCloseAutoFocus={(event) => {
+          if (!visible) { event.preventDefault(); return; }
           if (!returnFocusRef?.current) return;
           event.preventDefault();
-          returnFocusRef.current.focus();
+          returnFocusRef.current.focus({ preventScroll: true });
         }}
       >
-        <DialogHeader className="border-b border-border px-6 py-5 pr-14">
+        <DialogHeader className="shrink-0 border-b border-border px-6 py-5 pr-14">
           <DialogTitle className="flex items-center gap-2">
             <Table2 className="h-5 w-5 text-primary" aria-hidden />
             Create a table
@@ -168,8 +209,8 @@ export function TableCreateDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form ref={formRef} onSubmit={(event) => void submit(event)}>
-          <div className="space-y-5 p-6">
+        <form ref={formRef} className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={(event) => void submit(event)}>
+          <div className="rail-scroll min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-6">
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <Label htmlFor="table-name" className="mb-1.5 block">
@@ -377,11 +418,11 @@ export function TableCreateDialog({
             )}
           </div>
 
-          <DialogFooter className="border-t border-border bg-surface-2 px-6 py-4">
+          <DialogFooter className="shrink-0 border-t border-border bg-surface-2 px-6 py-4">
             <Button
               type="button"
               variant="outline"
-              onClick={() => onOpenChange(false)}
+              onClick={() => requestOpenChange(false)}
               disabled={creating}
             >
               Cancel
@@ -394,6 +435,18 @@ export function TableCreateDialog({
         </form>
       </DialogContent>
     </Dialog>
+    <ConfirmDialog
+      open={open && visible && discardOpen}
+      onOpenChange={setDiscardOpen}
+      title="Discard table draft?"
+      description="Your unsaved table name, description, and columns will be lost."
+      cancelLabel="Keep editing"
+      confirmLabel="Discard draft"
+      variant="destructive"
+      returnFocusRef={draftFocusRef}
+      onConfirm={() => onOpenChange(false)}
+    />
+    </>
   );
 }
 

@@ -43,7 +43,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const code = body?.error?.code ?? body?.detail?.code ?? body?.code;
     if (code === "notifications_disabled") throw new NotificationsUnavailable("Notifications are turned off on this server.");
     if (code === "notifications_session_required") throw new NotificationsUnavailable("Sign in with your personal account to use notifications.");
-    if (response.status === 409) throw new NotificationConflict("This notification changed. We refreshed it; try again.");
+    if (response.status === 409) throw new NotificationConflict("This notification changed. Review its current update before marking it read.");
     throw new Error("Could not update notifications. Try again.");
   }
   const value = await response.json();

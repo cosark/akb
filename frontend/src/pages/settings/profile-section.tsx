@@ -1,30 +1,26 @@
-import { useEffect, useState } from "react";
-import { ShieldCheck, UserRound } from "lucide-react";
-import { changePassword, updateProfile } from "@/lib/api";
+import { Activity, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ShieldCheck } from "lucide-react";
+import { authSessionSnapshot, beginAccountLifecycle, isCurrentAuthSession, clearCompletedAccountSession, changePassword, getMe, updateProfile, type CurrentUser } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert } from "@/components/ui/alert";
-import { RoleBadge } from "@/components/status-badge";
 import { useFlashStatus } from "@/hooks/use-flash-status";
+import { ProfilePhotoEditor, useProfilePhotoEditor } from "./profile-photo-editor";
 
-export interface User {
-  user_id: string;
-  username: string;
-  email: string;
-  display_name: string | null;
-  is_admin: boolean;
-  auth_method?: string;
-  key_class?: string | null;
-}
+export type User = Pick<CurrentUser, "user_id" | "username" | "email" | "display_name" | "is_admin">
+  & Partial<Pick<CurrentUser, "auth_method" | "key_class" | "account_kind" | "avatar" | "profile_capabilities">>;
+export type ProfileUserPatch = Partial<Pick<CurrentUser, "display_name" | "email" | "avatar" | "profile_capabilities">>;
 
 interface Props {
   user: User;
   localPasswordEnabled: boolean;
   localProfileEditingEnabled: boolean;
-  onUserUpdate: (patch: { display_name?: string | null; email?: string }) => void;
+  onUserUpdate: (patch: ProfileUserPatch) => void;
   onDirtyChange?: (dirty: boolean) => void;
   onBusyChange?: (busy: boolean) => void;
+  onPasswordChanged?: () => void;
+  visible?: boolean;
 }
 
 export function ProfileSection({
@@ -34,7 +30,13 @@ export function ProfileSection({
   onUserUpdate,
   onDirtyChange,
   onBusyChange,
+  onPasswordChanged,
+  visible = true,
 }: Props) {
+  const mounted = useRef(true);
+  const owner = useRef(user.user_id);
+  owner.current = user.user_id;
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [profileDisplayName, setProfileDisplayName] = useState(
     (user.display_name ?? "").trim(),
   );
@@ -50,32 +52,39 @@ export function ProfileSection({
   const [pwNew, setPwNew] = useState("");
   const [pwConfirm, setPwConfirm] = useState("");
   const [pwError, setPwError] = useState("");
+  const [currentPasswordError, setCurrentPasswordError] = useState(false);
+  const currentPasswordInput = useRef<HTMLInputElement>(null);
   const [pwBusy, setPwBusy] = useState(false);
   const [pwTouched, setPwTouched] = useState({ new: false, confirm: false });
   const passwordFlash = useFlashStatus(3000);
+  const photo = useProfilePhotoEditor({ user, visible, blocked: profileBusy || pwBusy, onUserUpdate });
 
   const pwTooShort = pwTouched.new && pwNew.length > 0 && pwNew.length < 8;
   const pwMismatch = pwTouched.confirm && pwConfirm.length > 0 && pwNew !== pwConfirm;
   const pwSubmitDisabled =
-    pwBusy || pwNew.length < 8 || pwNew !== pwConfirm || pwCurrent.length === 0;
+    pwBusy || photo.busy || pwNew.length < 8 || pwNew !== pwConfirm || pwCurrent.length === 0;
 
-  // Sync local edit state when user payload arrives.
+  const baseline = useRef({ id: user.user_id, name: (user.display_name ?? "").trim(), email: (user.email ?? "").trim() });
+  // Same-account identity refreshes must not replace an active profile draft.
   useEffect(() => {
-    setProfileDisplayName((user.display_name ?? "").trim());
-    setProfileEmail((user.email ?? "").trim());
+    const previous = baseline.current;
+    setProfileDisplayName(value => previous.id !== user.user_id || value.trim() === previous.name ? (user.display_name ?? "").trim() : value);
+    setProfileEmail(value => previous.id !== user.user_id || value.trim() === previous.email ? (user.email ?? "").trim() : value);
+    baseline.current = { id: user.user_id, name: (user.display_name ?? "").trim(), email: (user.email ?? "").trim() };
   }, [user.user_id, user.display_name, user.email]);
+  useEffect(() => { if (visible && !pwBusy && currentPasswordError) currentPasswordInput.current?.focus(); }, [visible, pwBusy, currentPasswordError]);
 
   const profileDirty =
     (user.display_name ?? "").trim() !== profileDisplayName.trim()
     || (user.email ?? "").trim() !== profileEmail.trim();
   const dirty = (localProfileEditingEnabled && profileDirty)
-    || (localPasswordEnabled && Boolean(pwCurrent || pwNew || pwConfirm));
+    || (localPasswordEnabled && Boolean(pwCurrent || pwNew || pwConfirm)) || photo.dirty;
 
-  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
-  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
-  const busy = profileBusy || pwBusy;
-  useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
-  useEffect(() => () => onBusyChange?.(false), [onBusyChange]);
+  useLayoutEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+  useLayoutEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+  const busy = profileBusy || pwBusy || photo.busy;
+  useLayoutEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
+  useLayoutEffect(() => () => onBusyChange?.(false), [onBusyChange]);
 
   // Protect both profile and password work during refresh / external navigation.
   useEffect(() => {
@@ -90,7 +99,7 @@ export function ProfileSection({
 
   async function handleSaveProfile(e: React.FormEvent) {
     e.preventDefault();
-    if (!localProfileEditingEnabled) return;
+    if (!visible || !localProfileEditingEnabled || profileBusy || photo.busy) return;
     setProfileError("");
     setProfileNotice("");
     const patch: { display_name?: string; email?: string } = {};
@@ -104,23 +113,29 @@ export function ProfileSection({
       return;
     }
     setProfileBusy(true);
+    const submittedOwner = user.user_id;
+    const session = authSessionSnapshot();
     try {
       const res = await updateProfile(patch);
+      if (!mounted.current || owner.current !== submittedOwner || !isCurrentAuthSession(session)) return;
       setProfileDisplayName(res.display_name ?? "");
       setProfileEmail(res.email);
       onUserUpdate({ display_name: res.display_name, email: res.email });
       profileFlash.setFlash("Saved");
     } catch (err) {
-      setProfileError(err instanceof Error ? err.message : "Failed to save");
+      if (mounted.current && owner.current === submittedOwner && isCurrentAuthSession(session)) setProfileError(err instanceof Error ? err.message : "Failed to save");
     } finally {
+      // Activity can suspend effects while retaining this state. Completion
+      // must release its busy flag even while hidden (a true unmount ignores it).
       setProfileBusy(false);
     }
   }
 
   async function handleChangePassword(e: React.FormEvent) {
     e.preventDefault();
-    if (!localPasswordEnabled) return;
+    if (!visible || !localPasswordEnabled || pwBusy || photo.busy) return;
     setPwError("");
+    setCurrentPasswordError(false);
     if (pwNew !== pwConfirm) {
       setPwError("New password and confirmation do not match");
       return;
@@ -130,39 +145,50 @@ export function ProfileSection({
       return;
     }
     setPwBusy(true);
+    const submittedOwner = user.user_id;
+    const session = authSessionSnapshot();
+    let endLifecycle: (() => void) | undefined;
     try {
+      // A foreground proof can observe this mutation's revoked generation
+      // before its receipt arrives. Let the explicit action own that transition.
+      endLifecycle = beginAccountLifecycle(session);
       await changePassword(pwCurrent, pwNew);
-      passwordFlash.setFlash("Password changed");
+      if (!mounted.current || owner.current !== submittedOwner || !isCurrentAuthSession(session)) return;
+      passwordFlash.setFlash("Password changed. Sign in again with your new password.");
       setPwCurrent("");
       setPwNew("");
       setPwConfirm("");
       setPwTouched({ new: false, confirm: false });
+      // The backend revokes this local login generation transactionally. Do
+      // not clear a newer account/session which replaced it while saving.
+      if (clearCompletedAccountSession(session)) onPasswordChanged?.();
     } catch (e) {
+      if (e instanceof Error && e.name === "DeferredSessionError" && isCurrentAuthSession(session)) {
+        // A failed password request is no longer a pending revocation. Release
+        // its suppression and prove expiry normally (legacy servers use 401
+        // for both wrong-password and expired-session errors).
+        endLifecycle?.(); endLifecycle = undefined;
+        try { await getMe(); } catch { return; }
+      }
+      if (!mounted.current || owner.current !== submittedOwner || !isCurrentAuthSession(session)) return;
       setPwError(e instanceof Error ? e.message : "Failed to change password");
+      setCurrentPasswordError(typeof e === "object" && e !== null && "detail" in e &&
+        typeof e.detail === "object" && e.detail !== null && "code" in e.detail && e.detail.code === "current_password_incorrect");
     } finally {
+      endLifecycle?.();
       setPwBusy(false);
     }
   }
 
   return (
-    <div className="@container/profile min-w-0 space-y-8">
+    <Activity mode={visible ? "visible" : "hidden"}><div className="@container/profile min-w-0 space-y-8">
       <section aria-labelledby="profile-heading">
         <header className="border-b border-border pb-4">
           <h2 id="profile-heading" className="text-base font-semibold text-foreground">Profile</h2>
           <p className="mt-1 text-sm text-foreground-muted">Your display name and AKB account identity.</p>
         </header>
 
-        <div className="flex items-center gap-3 py-5" data-testid="profile-identity">
-          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-surface-selected text-base font-semibold text-surface-selected-foreground" aria-hidden>
-            {(user.display_name?.trim() || user.username).slice(0, 2) || <UserRound className="h-5 w-5" />}
-          </span>
-          <div className="min-w-0">
-            <p className="break-words text-sm font-semibold text-foreground">{user.display_name?.trim() || user.username}</p>
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-foreground-muted">
-              <RoleBadge role={user.is_admin ? "admin" : "user"} />
-            </div>
-          </div>
-        </div>
+        <div data-testid="profile-identity"><ProfilePhotoEditor editor={photo} /></div>
         <form onSubmit={handleSaveProfile} aria-busy={profileBusy || undefined}>
           <div className="space-y-4">
             <div className="grid min-w-0 gap-2 @min-[28rem]/profile:grid-cols-[9rem_minmax(0,1fr)] @min-[28rem]/profile:gap-4">
@@ -210,7 +236,7 @@ export function ProfileSection({
 
           {localProfileEditingEnabled ? (
             <div className="mt-4 flex flex-wrap items-center gap-3 @min-[28rem]/profile:pl-40">
-              <Button type="submit" loading={profileBusy} disabled={!profileDirty}>
+              <Button type="submit" loading={profileBusy} disabled={!profileDirty || profileBusy || photo.busy}>
                 Save profile
               </Button>
               {profileFlash.message && (
@@ -248,10 +274,13 @@ export function ProfileSection({
                 <Label htmlFor="pw-current" className="@min-[28rem]/profile:pt-3">Current password</Label>
                 <Input
                   id="pw-current"
+                  ref={currentPasswordInput}
                   type="password"
                   autoComplete="current-password"
                   value={pwCurrent}
-                  onChange={(e) => setPwCurrent(e.target.value)}
+                  onChange={(e) => { setPwCurrent(e.target.value); if (currentPasswordError) { setCurrentPasswordError(false); setPwError(""); } }}
+                  aria-invalid={currentPasswordError || undefined}
+                  aria-describedby={currentPasswordError ? "pw-error" : undefined}
                   required
                   disabled={pwBusy}
                 />
@@ -300,7 +329,7 @@ export function ProfileSection({
               </div>
             </div>
             {pwError && (
-              <p role="alert" className="mt-3 text-sm text-destructive @min-[28rem]/profile:pl-40">
+              <p id="pw-error" role="alert" className="mt-3 text-sm text-destructive @min-[28rem]/profile:pl-40">
                 {pwError}
               </p>
             )}
@@ -315,7 +344,7 @@ export function ProfileSection({
               </Button>
               <span className="flex items-center gap-1.5 text-xs text-foreground-muted">
                 <ShieldCheck className="h-4 w-4" aria-hidden />
-                Current session stays active
+                Local sign-ins, including this session, will end
               </span>
             </div>
           </form>
@@ -342,6 +371,6 @@ export function ProfileSection({
           </div>
         </section>
       )}
-    </div>
+    </div></Activity>
   );
 }

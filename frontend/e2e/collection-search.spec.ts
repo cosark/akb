@@ -57,6 +57,10 @@ for (const width of [375, 2560]) for (const dark of [false, true]) {
     await page.keyboard.press("ArrowRight");
     await expect(documents).toHaveAttribute("aria-expanded", "true");
     const launcher = page.getByRole("button", { name: `Collection actions for ${collection}`, exact: true });
+    // Desktop row actions become pointer targets only after the row is hovered.
+    await launcher.locator("..").hover();
+    await expect(launcher).toHaveCSS("pointer-events", "auto");
+    await expect(launcher).toHaveCSS("opacity", "1");
     await launcher.click();
     await page.getByRole("menuitem", { name: "Search in collection", exact: true }).click();
     const input = page.getByRole("searchbox", { name: "Filter resources" });
@@ -88,6 +92,9 @@ for (const width of [375, 2560]) for (const dark of [false, true]) {
     await expect(input).toHaveValue("deploy");
     await expect(page.getByRole("treeitem", { name: "Document: Deployment outside", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Filter collections", exact: true })).toBeVisible();
+    await launcher.locator("..").hover();
+    await expect(launcher).toHaveCSS("pointer-events", "auto");
+    await expect(launcher).toHaveCSS("opacity", "1");
     await launcher.click();
     await page.getByRole("menuitem", { name: "Search in collection", exact: true }).click();
     await expect(scope).toContainText(collection);
