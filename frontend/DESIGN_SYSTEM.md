@@ -852,9 +852,25 @@ an `sr-only` summary, never the only signal.
   follows explicit relations outward from the focus (and `derived_from` back
   to what was derived from it), so shared context such as a cluster ends the
   walk instead of pulling in every other resource that shares it; the focus's
-  own body links stay as faded weak neighbours and are never followed. Turning
-  it off (`links=all`) shows every loaded connection. A Vault without explicit
-  relations around the focus shows all connections with a one-line notice. Keep gesture instructions in Help, not another persistent title row.
+  own body links are weak neighbours that are never followed: with more than
+  five they fold into a "Show N weak links" control (with five or fewer they
+  show, faded), and while folded no weak line is drawn. Around a focus the map
+  is concentric: the focus at the centre and each strongly reached resource on
+  its hop's ring (weak neighbours just outside the deepest ring); only the
+  walk's backbone (the edge that first reached each resource) pulls in the
+  layout and draws at full weight, other strong edges among the kept resources
+  stay faint until a resource is selected. Each hop button shows what it adds
+  ("2 +1"), and a note says where the strong walk ends. Labels are titles (the
+  file name without path or extension when the server has no title), at most
+  two lines, prefixed by a muted category (document type, else collection);
+  around a focus they sit on the far side of their dot from the focus and are
+  prioritised by distance. Turning it off (`links=all`) shows every loaded
+  connection. A Vault without explicit relations around the focus shows all
+  connections with a one-line notice. The whole-Vault map also defaults to
+  strong links only (body links drawn only when it is turned off) and colours
+  resources by collection: the four largest collections take `cat-1`..`cat-4`,
+  the rest share `cat-6`, named in a compact legend; shape still carries the
+  kind. A fit keeps the map below the floating tools. Keep gesture instructions in Help, not another persistent title row.
   Measure the dock's actual height after wrapping: List's scroll viewport,
   inspector, relationship details, and notices must begin below it. Focusable
   canvas labels must also stay clear. Empty space around floating controls

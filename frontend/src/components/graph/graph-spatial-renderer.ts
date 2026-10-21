@@ -6,7 +6,7 @@ import {
   type Material, type Object3D,
 } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { HOP_TOKENS, edgeStrength, type GraphEdge, type GraphNode } from "./graph-types";
+import { HOP_TOKENS, categoryOf, displayName, edgeId, edgeStrength, type GraphEdge, type GraphNode } from "./graph-types";
 import type { GraphDimension, SpatialPoint } from "./graph-spatial-layout";
 import { CORNER_VIEW, TOP_VIEW, cameraForPoints, edgeCurvePoints, focusSpatialCamera, visibleLabels, type ProjectedLabel } from "./graph-spatial-view";
 
@@ -50,6 +50,10 @@ export class SpatialGraphRenderer {
   private dragFrame = 0;
   private hops?: Map<string, number>;
   private weak = new Set<string>();
+  private topInset = 0;
+  private showCategory = false;
+  private tree?: Set<string>;
+  private groupTokens?: Map<string, string>;
   private colors: Record<string, string> = {};
 
   constructor(private host: HTMLDivElement, private callbacks: Callbacks, private dimension: GraphDimension = 2) {
@@ -198,11 +202,13 @@ export class SpatialGraphRenderer {
   }
 
   /** Distance from the focused resource; while set, a resource's colour is its distance and its shape its kind. */
-  setHops(hops: Map<string, number> | undefined, weak: Set<string> = new Set()) { this.hops = hops; this.weak = weak; this.rebuild(); }
+  setHops(hops: Map<string, number> | undefined, weak: Set<string> = new Set(), tree?: Set<string>, groupTokens?: Map<string, string>) {
+    this.hops = hops; this.weak = weak; this.tree = tree; this.groupTokens = groupTokens; this.rebuild();
+  }
 
   theme() {
     const css = getComputedStyle(document.documentElement);
-    this.colors = Object.fromEntries(["surface", "cat-1", "cat-2", "cat-3", "cat-4", "cat-5", "graph-edge", "link"].map(key => [key, css.getPropertyValue(`--color-${key}`).trim()]));
+    this.colors = Object.fromEntries(["surface", "cat-1", "cat-2", "cat-3", "cat-4", "cat-5", "cat-6", "graph-edge", "link"].map(key => [key, css.getPropertyValue(`--color-${key}`).trim()]));
     this.scene.background = new Color(this.colors.surface);
     this.rebuild();
   }
@@ -220,6 +226,7 @@ export class SpatialGraphRenderer {
 
   private rebuild() {
     this.clearObjects(); this.neighbors = new Set(); this.degrees = new Map();
+    this.showCategory = new Set(this.nodes.map(categoryOf)).size > 1;
     for (const edge of this.edges) {
       this.degrees.set(edge.source, (this.degrees.get(edge.source) ?? 0) + 1);
       this.degrees.set(edge.target, (this.degrees.get(edge.target) ?? 0) + 1);
@@ -239,9 +246,10 @@ export class SpatialGraphRenderer {
       nodes.forEach((node, i) => {
         const active = node.uri === this.selected, nearby = this.neighbors.has(node.uri);
         const hop = this.hops?.get(node.uri);
+        const group = this.groupTokens && (this.groupTokens.get(node.group ?? "") ?? "cat-6");
         const color = new Color(this.colors[this.hops
           ? HOP_TOKENS[Math.min(hop ?? HOP_TOKENS.length - 1, HOP_TOKENS.length - 1)]
-          : kind === "document" ? "cat-1" : kind === "table" ? "cat-3" : "cat-4"]);
+          : group ?? (kind === "document" ? "cat-1" : kind === "table" ? "cat-3" : "cat-4")]);
         if (this.weak.has(node.uri) && !active) color.lerp(background, 0.55);
         if (this.selected && !active && !nearby) color.lerp(background, 0.65);
         mesh.setColorAt(i, color);
@@ -270,6 +278,8 @@ export class SpatialGraphRenderer {
         const active = edge.source === this.selected || edge.target === this.selected || this.isInspected(edge);
         const color = new Color(this.colors[active ? "link" : "graph-edge"]);
         if (!active) color.lerp(background, 0.25);
+        // Around a focus the walk's backbone carries the picture; other strong edges among the kept resources stay as faint context.
+        if (!active && this.tree && edgeStrength(edge) === "strong" && !this.tree.has(edgeId(edge))) color.lerp(background, 0.85);
         if (this.selected && !active) color.lerp(background, 0.82);
         for (let i = 0; i < points.length - 1; i++) {
           const from = points[i], to = points[i + 1];
@@ -283,6 +293,17 @@ export class SpatialGraphRenderer {
       const lines = new LineSegments(geometry, material); lines.computeLineDistances(); this.edgeObjects.set(lines, indices); this.resources.add(lines);
     }
     this.draw();
+  }
+
+  /** Label priority without a selection: around a focus by distance (focus, then hop 1, 2, 3; weak last), else by connections. */
+  private labelRank(uri: string) {
+    if (this.neighbors.has(uri)) return 70;
+    if (this.hops) {
+      if (this.weak.has(uri)) return 10;
+      const hop = this.hops.get(uri);
+      return hop === undefined ? 5 : [95, 80, 60, 40][Math.min(hop, 3)];
+    }
+    return (this.pinned.has(uri) ? 20 : 0) + Math.min(19, this.degrees.get(uri) ?? 0);
   }
 
   private isInspected(edge: GraphEdge) { return !!this.edge && edge.source === this.edge.source && edge.target === this.edge.target && edge.relation === this.edge.relation && edge.kind === this.edge.kind; }
@@ -323,12 +344,21 @@ export class SpatialGraphRenderer {
       const width = this.host.clientWidth, height = this.host.clientHeight;
       this.faceDotsToCamera(height);
       this.renderer.render(this.scene, this.camera);
+      const screen = (p: SpatialPoint) => { const v = new Vector3(p.x, p.y, p.z).project(this.camera); return { x: (v.x + 1) / 2 * width, y: (-v.y + 1) / 2 * height, z: v.z }; };
+      // Around a focus each label sits on the far side of its resource, away from the focus, so ring labels do not pile onto the centre.
+      const focusUri = this.hops && [...this.hops].find(([, hop]) => hop === 0)?.[0];
+      const focusPoint = focusUri && this.positions.get(focusUri) ? screen(this.positions.get(focusUri)!) : undefined;
       const labels = this.nodes.flatMap(node => {
         const p = this.positions.get(node.uri); if (!p) return [];
-        const projected = new Vector3(p.x, p.y, p.z).project(this.camera);
-        const labelOffset = this.dotRadius(node) + 3;
-        return [{ uri: node.uri, x: (projected.x + 1) / 2 * width, y: (-projected.y + 1) / 2 * height + labelOffset, depth: projected.z,
-          priority: node.uri === this.selected ? 100 : node.uri === this.hovered ? 90 : this.neighbors.has(node.uri) ? 50 : this.pinned.has(node.uri) ? 20 : 0 }];
+        const at = screen(p), gap = this.dotRadius(node) + 3;
+        const chars = displayName(node).length + (this.showCategory ? categoryOf(node).length + 1 : 0);
+        const size = { width: Math.min(224, 16 + chars * 6.5), lines: chars * 6.5 > 224 ? 2 : 1 };
+        const priority = node.uri === this.selected ? 100 : node.uri === this.hovered ? 90 : this.labelRank(node.uri);
+        const dx = focusPoint ? at.x - focusPoint.x : 0, dy = focusPoint ? at.y - focusPoint.y : 0, len = Math.hypot(dx, dy);
+        if (!focusPoint || node.uri === focusUri || len < 1) return [{ uri: node.uri, x: at.x, y: at.y + gap, depth: at.z, ...size, ax: -0.5, ay: 0, priority }];
+        const ux = dx / len, uy = dy / len;
+        return [{ uri: node.uri, x: at.x + ux * gap, y: at.y + uy * gap, depth: at.z, ...size, priority,
+          ax: ux > 0.35 ? 0 : ux < -0.35 ? -1 : -0.5, ay: uy < -0.35 ? -1 : uy > 0.35 ? 0 : -0.5 }];
       });
       // Reserve the helper/empty-relationship notice and camera-control areas.
       const readable = labels.filter(label => label.y > (this.edges.length ? 44 : 110)
@@ -342,12 +372,21 @@ export class SpatialGraphRenderer {
     this.renderer.setSize(width, height); this.camera.aspect = width / height; this.camera.updateProjectionMatrix(); this.draw();
   }
 
+  /** Height of the floating tools over the top of the canvas; a fit keeps the map below them. */
+  setTopInset(px: number) { this.topInset = Math.max(0, px); }
+
   fit() {
-    const view = cameraForPoints(this.nodes.flatMap(n => this.positions.has(n.uri) ? [this.positions.get(n.uri)!] : []), this.camera.aspect,
+    const height = Math.max(1, this.host.clientHeight), free = Math.max(height * 0.5, height - this.topInset);
+    const view = cameraForPoints(this.nodes.flatMap(n => this.positions.has(n.uri) ? [this.positions.get(n.uri)!] : []), this.camera.aspect * height / free,
       this.dimension === 2 ? TOP_VIEW : CORNER_VIEW);
     this.adjusting = true;
-    this.camera.position.set(view.position.x, view.position.y, view.position.z); this.controls.target.set(view.target.x, view.target.y, view.target.z);
-    this.controls.update(); this.adjusting = false; this.draw();
+    const target = new Vector3(view.target.x, view.target.y, view.target.z);
+    // Fit into the area below the tools: back off by the lost height, then shift the map down by half of it.
+    const position = new Vector3(view.position.x, view.position.y, view.position.z).sub(target).multiplyScalar(height / free).add(target);
+    this.camera.position.copy(position); this.controls.target.copy(target);
+    this.controls.update(); this.adjusting = false;
+    if (height > free) this.pan(0, (height - free) / 2, false);
+    this.draw();
   }
 
   focus(uri: string) {

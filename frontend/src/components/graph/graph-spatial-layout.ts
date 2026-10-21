@@ -1,4 +1,4 @@
-import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation } from "d3-force-3d";
+import { forceCenter, forceCollide, forceLink, forceManyBody, forceRadial, forceSimulation } from "d3-force-3d";
 
 export interface SpatialPoint { x: number; y: number; z: number }
 
@@ -11,6 +11,15 @@ export interface SpatialLayoutInput {
   pinned: string[];
   /** Absent means 3, the layout's original volume. */
   dimensions?: GraphDimension;
+  /** Around a focus: the ring radius each resource is pulled to (the focus 0, then by hop), so distance reads as position. */
+  rings?: Record<string, number>;
+}
+
+/** Ring radius of a hop around a focus; weak neighbours sit on their own ring just outside the deepest strong one. */
+export function ringRadius(hop: number | undefined, weak: boolean, deepest = 1): number {
+  const rings = [0, 170, 300, 410];
+  if (weak || hop === undefined) return rings[Math.min(Math.max(deepest, 1), 3)] + 120;
+  return rings[Math.min(hop, 3)];
 }
 
 function hashId(id: string): number {
@@ -125,12 +134,16 @@ export function layoutSpatialGraph(input: SpatialLayoutInput): Record<string, Sp
       .randomSource(seededRandom(0x51a7))
       .alphaDecay(1 - Math.pow(0.001, 1 / 200))
       .velocityDecay(0.35)
-      .force("links", forceLink<SimulationNode>(links).id(node => node.id).distance(130).strength(0.16))
+      .force("links", forceLink<SimulationNode>(links).id(node => node.id).distance(130).strength(input.rings ? 0.05 : 0.16))
       .force("charge", forceManyBody<SimulationNode>().strength(-220).distanceMax(1200))
       .force("collision", forceCollide<SimulationNode>(28).strength(0.8));
     // Centering translates positions before fixed coordinates are restored.
     // With pins, that would move only free neighbors away from their anchors.
-    if (pinned.size === 0) simulation.force("center", forceCenter<SimulationNode>(0, 0, 0));
+    const rings = input.rings;
+    if (rings) {
+      // Concentric placement: each resource is drawn to its hop's ring around the origin (the focus at the centre).
+      simulation.force("rings", forceRadial<SimulationNode>(node => rings[node.id] ?? 470, 0, 0, 0).strength(0.75));
+    } else if (pinned.size === 0) simulation.force("center", forceCenter<SimulationNode>(0, 0, 0));
     simulation.tick(200);
     return Object.fromEntries(nodes.map(({ id, x, y, z }) => {
       const depth = dimensions === 2 ? 0 : z;

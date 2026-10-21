@@ -10,8 +10,8 @@ import { GraphListView } from "@/components/graph/GraphListView";
 import { GraphToolbar, type GraphDisplayMode } from "@/components/graph/GraphToolbar";
 import { queryToView, viewToQuery } from "@/components/graph/graph-state";
 import { graphCoverage } from "@/components/graph/graph-scene";
-import { ALL_NODE_KINDS, ALL_RELATIONS, RELATION_LABEL, edgeStrength, kindToSegment, type GraphEdge, type GraphNode, type GraphView, type RelatedRef } from "@/components/graph/graph-types";
-import { degreeMap, docIdFromUri, fetchNeighbors, hopDistances, mergeGraph, strongNeighborhood, useFullGraph, useNeighborhood, visibleGraph, type GraphPayload } from "@/components/graph/use-graph-data";
+import { ALL_NODE_KINDS, ALL_RELATIONS, RELATION_LABEL, displayName, edgeStrength, kindToSegment, type GraphEdge, type GraphNode, type GraphView, type RelatedRef } from "@/components/graph/graph-types";
+import { degreeMap, docIdFromUri, fetchNeighbors, hopDistances, mergeGraph, strongNeighborhood, useFullGraph, useNeighborhood, visibleGraph, type GraphPayload, type StrongScene } from "@/components/graph/use-graph-data";
 import type { GraphDimension } from "@/components/graph/graph-spatial-layout";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
@@ -102,16 +102,32 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
   const entryNode = merged.nodes.find(n => n.uri === view.entry || docIdFromUri(n.uri) === view.entry);
   // Strong membership is decided on the whole loaded map, before display filters, so hiding a resource
   // cannot cut the walk; what the reader loaded or followed (the overlay) always stays.
+  // Weak neighbours of a focus are folded into a count unless there are few of them or the reader opens them.
+  const [weakChoice, setWeakChoice] = useState<boolean | undefined>(undefined);
   const scene = useMemo(() => {
+    const empty: StrongScene = { weak: new Set(), strong: false, reach: new Map(), tree: new Set(), perHop: [] };
     const strong = view.entry && entryNode && view.links === "strong"
       ? strongNeighborhood(merged, entryNode.uri, view.hops, overlay.nodes.map(n => n.uri))
-      : { ...merged, weak: new Set<string>(), strong: false };
-    return { ...visibleGraph(strong, view, hidden, hideOrphans), weak: strong.weak, strong: strong.strong };
+      : { ...merged, ...empty };
+    const visible = visibleGraph(strong, view, hidden, hideOrphans);
+    if (!view.entry && view.links === "strong" && visible.edges.some(e => edgeStrength(e) === "strong")) {
+      // The whole Vault draws its strong structure; body links would bury it.
+      return { ...visible, ...empty, strong: true, edges: visible.edges.filter(e => edgeStrength(e) === "strong"), overview: true };
+    }
+    return { ...visible, weak: strong.weak, strong: strong.strong, reach: strong.reach, tree: strong.tree, perHop: strong.perHop, overview: false };
   },
     // Selection is deliberately excluded: it cannot invalidate renderer data.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [merged, overlay, filterKey, hidden, hideOrphans, view.entry, entryNode, view.links, view.hops]);
-  const displayed = scene;
+  const weakShown = weakChoice ?? scene.weak.size <= 5;
+  const displayed = useMemo(() => {
+    if (weakShown || !scene.strong || !view.entry) return scene;
+    // Folded: weak neighbours and every weak line go; what the reader loaded or followed stays.
+    const revealed = new Set(overlay.nodes.map(n => n.uri));
+    const fold = new Set([...scene.weak].filter(uri => !revealed.has(uri)));
+    return { ...scene, nodes: scene.nodes.filter(n => !fold.has(n.uri)),
+      edges: scene.edges.filter(e => !fold.has(e.source) && !fold.has(e.target) && (edgeStrength(e) === "strong" || revealed.has(e.source) || revealed.has(e.target))) };
+  }, [scene, weakShown, overlay, view.entry]);
   const selected = view.selected ? displayed.nodes.find(n => n.uri === view.selected || n.doc_id === view.selected || docIdFromUri(n.uri) === view.selected) : undefined;
   const edge = displayed.edges.find(item => edgeSelection && item.source === edgeSelection.source && item.target === edgeSelection.target && item.relation === edgeSelection.relation && item.kind === edgeSelection.kind);
   const selectedId = selected && (selected.doc_id || docIdFromUri(selected.uri));
@@ -119,10 +135,26 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
   const orphanCount = merged.nodes.filter(n => n.degree === 0).length;
   const degree = useMemo(() => degreeMap(displayed.edges), [displayed.edges]);
   const hubs = useMemo(() => [...displayed.nodes].sort((a, b) => (degree.get(b.uri) ?? 0) - (degree.get(a.uri) ?? 0)).slice(0, 8), [displayed.nodes, degree]);
-  const focusTitle = entryNode?.name;
-  // Colour by distance only around a focused resource; the whole Vault keeps kind colours.
-  const hops = useMemo(() => view.entry && entryNode ? hopDistances(displayed.edges, entryNode.uri) : undefined,
-    [view.entry, entryNode, displayed.edges]);
+  const focusTitle = entryNode && displayName(entryNode);
+  // Colour by distance only around a focused resource. In strong mode the distance is the strong walk's
+  // (weak neighbours sit at 1, faded); otherwise any loaded connection counts.
+  const hops = useMemo(() => {
+    if (!view.entry || !entryNode) return undefined;
+    if (!scene.strong) return hopDistances(displayed.edges, entryNode.uri);
+    const map = new Map(scene.reach);
+    for (const uri of scene.weak) if (!map.has(uri)) map.set(uri, 1);
+    return map;
+  }, [view.entry, entryNode, displayed.edges, scene]);
+  // The whole Vault colours resources by collection: the four largest get their own colour, the rest share grey.
+  const collections = useMemo(() => {
+    if (view.entry) return undefined;
+    const counts = new Map<string, number>();
+    for (const n of displayed.nodes) { const key = n.group ?? ""; counts.set(key, (counts.get(key) ?? 0) + 1); }
+    const ranked = [...counts.entries()].filter(([key]) => key).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    // One collection says nothing by colour; the kind colours stay.
+    if (ranked.length < 2) return undefined;
+    return ranked.map(([key, count], index) => ({ key, count, token: index < 4 ? `cat-${index + 1}` : "cat-6" }));
+  }, [view.entry, displayed.nodes]);
 
   function select(uri: string | undefined) {
     const node = merged.nodes.find(item => item.uri === uri);
@@ -189,6 +221,8 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
           if (!displayed.nodes.some(node => node.uri === uri)) setHideOrphans(false);
         }}
         nodeCount={displayed.nodes.length} edgeCount={displayed.edges.length}
+        strongWalk={view.entry && scene.strong ? { perHop: scene.perHop, weak: scene.weak.size, weakShown, onToggleWeak: () => setWeakChoice(!weakShown) } : undefined}
+        collections={collections}
         focusTitle={focusTitle} displayMode={mode} onDisplayModeChange={next => {
           setMode(next);
           if (next === "graph" && !graphRevealed.current) {
@@ -205,7 +239,8 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
       <div className={cn("absolute inset-0", mode === "list" && "invisible pointer-events-none")} aria-hidden={mode === "list" || undefined}>
         <Suspense fallback={<div role="status" className="p-4 text-sm text-foreground-muted">Loading graph viewer…</div>}>
         <GraphCanvas ref={canvas} nodes={displayed.nodes} edges={displayed.edges} selected={selected?.uri} inspectedEdge={edge ?? undefined} pinned={pinned} topInset={toolsBottom}
-          dimension={dimension} hops={hops} weak={scene.weak}
+          dimension={dimension} hops={hops} weak={scene.weak} tree={scene.strong && view.entry ? scene.tree : undefined}
+          groupTokens={collections ? new Map(collections.map(c => [c.key, c.token])) : undefined}
           onUseList={() => setMode("list")}
           onSelect={select} onExpand={expand} onContextMenu={(node, x, y) => setMenu({ node, x, y })}
           onSelectEdge={value => { setView({ ...view, selected: undefined }); setEdge(value); }} />

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   layoutSpatialGraph,
+  ringRadius,
   seedSpatialPositions,
   type SpatialLayoutInput,
   type SpatialPoint,
@@ -215,5 +216,21 @@ describe("flat map layout", () => {
       [{ source: "akb://fixture/doc/a.md", target: "akb://fixture/doc/b.md" }], 2);
     expect(seeded.get("akb://fixture/doc/b.md")!.z).toBe(0);
     expect(seeded.get("akb://fixture/doc/a.md")).toEqual({ x: 10, y: 20, z: 0 });
+  });
+});
+
+describe("concentric layout around a focus", () => {
+  it("puts each resource on its hop's ring and the weak ones just outside the deepest", () => {
+    const ids = ["f", "a", "b", "c", "d", "g", "w"];
+    const seeded = seedSpatialPositions(ids, new Map(), [], 2);
+    const rings: Record<string, number> = { f: ringRadius(0, false), a: ringRadius(1, false), b: ringRadius(1, false), c: ringRadius(1, false),
+      d: ringRadius(1, false), g: ringRadius(2, false), w: ringRadius(undefined, true, 2) };
+    const placed = layoutSpatialGraph({ nodes: ids.map(id => ({ id, position: seeded.get(id)! })),
+      edges: [["f", "a"], ["f", "b"], ["f", "c"], ["f", "d"], ["a", "g"]].map(([source, target]) => ({ source, target })), pinned: [], dimensions: 2, rings });
+    const radius = (id: string) => Math.hypot(placed[id].x, placed[id].y);
+    expect(radius("f")).toBeLessThan(15);
+    for (const id of ["a", "b", "c", "d"]) expect(Math.abs(radius(id) - 170)).toBeLessThan(25);
+    expect(Math.abs(radius("g") - 300)).toBeLessThan(25);
+    expect(radius("w")).toBeGreaterThan(radius("g"));
   });
 });

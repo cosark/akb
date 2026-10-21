@@ -66,12 +66,20 @@ export function edgeCurvePoints(start: SpatialPoint, end: SpatialPoint, index: n
   });
 }
 
-export interface ProjectedLabel { uri: string; x: number; y: number; depth: number; priority: number }
+/** ``x``/``y`` is the label's anchor; ``ax``/``ay`` say where the box sits relative to it, as fractions of its size
+ *  (-0.5 centred, 0 to the right/below, -1 to the left/above). */
+export interface ProjectedLabel { uri: string; x: number; y: number; depth: number; priority: number; width?: number; lines?: number; ax?: number; ay?: number }
 export function visibleLabels<T extends ProjectedLabel>(labels: T[], width: number, height: number): T[] {
   const result: T[] = [];
   for (const label of [...labels].sort((a, b) => b.priority - a.priority || a.depth - b.depth)) {
     if (label.depth < -1 || label.depth > 1 || label.x < 20 || label.x > width - 20 || label.y < 8 || label.y > height - 62) continue;
-    if (result.some(other => Math.abs(other.x - label.x) < 160 && Math.abs(other.y - label.y) < 28)) continue;
+    // Keep label boxes apart by their own size (up to 224 px wide, one or two lines).
+    const box = (l: ProjectedLabel) => {
+      const w = l.width ?? 160, h = (l.lines ?? 1) * 16 + 8;
+      return { w, h, cx: l.x + w * ((l.ax ?? -0.5) + 0.5), cy: l.y + h * ((l.ay ?? 0) + 0.5) };
+    };
+    const mine = box(label);
+    if (result.some(other => { const theirs = box(other); return Math.abs(theirs.cx - mine.cx) < (mine.w + theirs.w) / 2 && Math.abs(theirs.cy - mine.cy) < (mine.h + theirs.h) / 2; })) continue;
     result.push(label);
     if (result.length === 30) break;
   }

@@ -61,3 +61,15 @@ describe("flat map edge curves", () => {
     expect(edgeCurvePoints(a, a, 0, 1, true).every(point => point.z === 0)).toBe(true);
   });
 });
+
+describe("label boxes", () => {
+  it("collide by their own size and anchor, so a label beside its dot does not hide one below another", () => {
+    const base = { depth: 0, priority: 1, width: 120, lines: 1 };
+    const kept = visibleLabels([
+      { uri: "a", x: 500, y: 300, ...base, ax: -0.5, ay: 0, priority: 2 },
+      { uri: "b", x: 560, y: 300, ...base, ax: 0, ay: -0.5 },
+      { uri: "c", x: 520, y: 305, ...base, ax: -0.5, ay: 0 },
+    ], 1200, 800);
+    expect(kept.map(l => l.uri)).toEqual(["a", "b"]);
+  });
+});

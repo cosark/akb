@@ -927,10 +927,15 @@ test.describe("flat map (the default view)", () => {
     await frames(page);
     const before = await labelPositions(page);
     const host = (await page.getByTestId("graph-canvas").boundingBox())!;
-    const target = before.find(label => label.x > host.x + 200 && label.x < host.x + host.width - 420 && label.y > host.y + 160 && label.y < host.y + host.height - 200)!;
+    // The dot sits just above its projected label; pick one whose dot is bare canvas (no other label over it).
+    const candidates = before.filter(label => label.x > host.x + 200 && label.x < host.x + host.width - 420 && label.y > host.y + 160 && label.y < host.y + host.height - 200);
+    let target: (typeof before)[number] | undefined, dot = { x: 0, y: 0 };
+    for (const label of candidates) {
+      const point = { x: label.x, y: label.y - label.height / 2 - 8 };
+      if (await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.tagName === "CANVAS", point)) { target = label; dot = point; break; }
+    }
     expect(target, "A resource away from the floating controls").toBeDefined();
-    // The dot sits just above its projected label.
-    const dot = { x: target.x, y: target.y - target.height / 2 - 8 };
+    if (!target) return;
     await page.mouse.move(dot.x, dot.y);
     await page.mouse.down();
     await page.mouse.move(dot.x - 90, dot.y + 70, { steps: 12 });
