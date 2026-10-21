@@ -1871,6 +1871,49 @@ test("graph link facade sends edge_type only when the caller sets it", async () 
   assert.equal(strong.throwOnError().data.edge_type, "strong");
 });
 
+test("graph, relations and link responses from a server that predates edge_type, labels and truncated reach the caller as they are", async () => {
+  // None of these fields exists in what an older server sends, and the SDK adds
+  // nothing. The types therefore must not promise them (see the
+  // `older*` values in graph-consumer-types.ts and relations-provenance-consumer-types.ts).
+  const older = {
+    neighbors: {
+      kind: "graph_neighbors",
+      nodes: [{ uri: "akb://eng/doc/a", name: "a", resource_type: "doc", depth: 0 }],
+      edges: [{ source: "akb://eng/doc/a", target: "akb://eng/doc/b", relation: "related_to", kind: "explicit" }],
+    },
+    relations: {
+      kind: "relations",
+      uri: "akb://eng/doc/a",
+      relations: [{ direction: "outgoing", relation: "related_to", uri: "akb://eng/doc/b", resource_type: "doc", kind: "explicit", name: "b" }],
+    },
+    link: { kind: "relation_link", linked: true, source: "akb://eng/doc/a", target: "akb://eng/doc/b", relation: "related_to" },
+  };
+  const client = createClient("https://akb.test/api/v1/", {
+    fetch: async (input, init) => {
+      const { pathname } = new URL(String(input));
+      if (!pathname.endsWith("/relations")) return responseJson(older.neighbors);
+      return responseJson(init?.method === "POST" ? older.link : older.relations);
+    },
+  });
+
+  const neighbors = (await client.graph.neighbors("akb://eng/doc/a")).throwOnError().data;
+  const relations = (await client.graph.relations("akb://eng/doc/a")).throwOnError().data;
+  const link = (await client.graph.link({
+    source: "akb://eng/doc/a", target: "akb://eng/doc/b", relation: "related_to",
+  })).throwOnError().data;
+
+  assert.deepEqual(neighbors, older.neighbors);
+  assert.deepEqual(relations, older.relations);
+  assert.deepEqual(link, older.link);
+  assert.equal(neighbors.edges[0].edge_type, undefined);
+  assert.equal(neighbors.truncated, undefined);
+  assert.equal(neighbors.nodes[0].title, undefined);
+  assert.equal(neighbors.nodes[0].updated_at, undefined);
+  assert.equal(relations.relations[0].edge_type, undefined);
+  assert.equal(relations.relations[0].path, undefined);
+  assert.equal(link.edge_type, undefined);
+});
+
 test("storage upload sends contentHash to presign so the same bytes are not stored twice", async () => {
   const contentHash = "a".repeat(64);
   const seen = [];

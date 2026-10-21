@@ -40,7 +40,7 @@ import os
 import tempfile
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -1197,6 +1197,38 @@ async def test_a_wide_frontmatter_hub_is_dated_by_the_second_read_too(native_wor
 
     assert len(counting.label_statements()) == 2  # the wider read really happened
     assert _times(graph["nodes"]) == {world.uri("hub/index.md"): stamp(T3), world.uri(B): stamp(T1)}
+
+
+async def test_a_hub_the_wider_read_cap_leaves_unread_still_states_its_time(
+    native_world, native_clock, monkeypatch,
+):
+    """The wider read is capped in documents. Past the cap a hub is named by its
+    path, but the first statement already fetched its time: the label keeps it."""
+    world = native_world
+    monkeypatch.setattr(kg_service, "_LABEL_RETRY_MAX_ROWS", 2)
+    children = [f"akb://{world.vault}/coll/hub/doc/child-{i:04d}.md" for i in range(300)]
+    hubs = [f"hub/wide-{i}.md" for i in range(5)]
+    moments = {hub: T1 + timedelta(minutes=i) for i, hub in enumerate(hubs)}
+    await world.add_doc(A, "Center", at=T3)
+    for hub in hubs:
+        await world.add_doc(hub, f"Title of {hub}", "index", at=moments[hub], related_to=children)
+        await world.link(A, hub)
+
+    counting = world.counted()
+    graph = await world.graph(A, hops=1)
+
+    assert len(counting.label_statements()) == 2  # the first read, and one capped wider read
+    by_uri = {n["uri"]: n for n in graph["nodes"]}
+    assert set(by_uri) == {world.uri(A), *(world.uri(hub) for hub in hubs)}
+    assert {uri: n["updated_at"] for uri, n in by_uri.items()} == {
+        world.uri(A): stamp(T3), **{world.uri(hub): stamp(moments[hub]) for hub in hubs},
+    }
+    titled = [hub for hub in hubs if by_uri[world.uri(hub)].get("title") == f"Title of {hub}"]
+    unread = [hub for hub in hubs if hub not in titled]
+    assert len(titled) == 2 and len(unread) == 3
+    for hub in unread:  # named by the path, with everything the first read knew
+        node = by_uri[world.uri(hub)]
+        assert (node["name"], node["path"], "title" in node) == (hub, hub, False)
 
 
 async def test_an_orphan_document_is_dated_by_the_ledger_not_by_its_frozen_row(native_world, native_clock):

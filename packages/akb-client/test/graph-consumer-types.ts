@@ -1,9 +1,11 @@
 import {
   createClient,
   type AkbGraphDirection,
+  type AkbGraphEdge,
   type AkbGraphEnvelope,
   type AkbGraphHealthEnvelope,
   type AkbGraphNeighborsEnvelope,
+  type AkbGraphNode,
   type AkbGraphOverviewEnvelope,
 } from "@akb/client";
 
@@ -39,6 +41,38 @@ overviewData.kind satisfies "graph_overview";
 overviewData.nodes_total satisfies number;
 healthData.kind satisfies "graph_health";
 healthData.orphans.sample[0]?.degree satisfies number | null | undefined;
+
+// The SDK returns a response unchanged, and a server that predates a field never
+// sends it. What such a server answers has to be a value of these types, and
+// using one of these fields without checking it first has to be an error: every
+// line here compiles only while the field is optional.
+const olderNode: AkbGraphNode = { uri: "akb://proof/doc/a", name: "a", resource_type: "doc" };
+const olderEdge: AkbGraphEdge = {
+  source: "akb://proof/doc/a",
+  target: "akb://proof/doc/b",
+  relation: "related_to",
+  kind: "implicit",
+};
+const olderNeighbors: AkbGraphNeighborsEnvelope = {
+  kind: "graph_neighbors",
+  nodes: [olderNode],
+  edges: [olderEdge],
+};
+// @ts-expect-error an older server sends no edge_type, so it has to be checked before it is used.
+olderEdge.edge_type.toUpperCase();
+// @ts-expect-error title is absent for a document without one and from an older server.
+olderNode.title.length;
+// @ts-expect-error doc_type is absent from an older server.
+olderNode.doc_type.length;
+// @ts-expect-error tags are absent from an older server.
+olderNode.tags.length;
+// @ts-expect-error path is absent from an older server.
+olderNode.path.length;
+// @ts-expect-error updated_at is absent from an older server and when the store has no time.
+olderNode.updated_at.length;
+// @ts-expect-error truncated is absent from an older server's neighbourhood.
+olderNeighbors.truncated.valueOf();
+olderEdge.edge_type satisfies "strong" | "weak" | undefined;
 
 // @ts-expect-error hops outside 1..5 are rejected.
 client.graph.neighbors("akb://proof/doc/a", { hops: 0 });

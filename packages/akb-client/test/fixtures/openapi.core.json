@@ -846,14 +846,20 @@
             "title": "Metadata"
           },
           "edge_type": {
-            "type": "string",
-            "enum": [
-              "strong",
-              "weak"
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "strong",
+                  "weak"
+                ]
+              },
+              {
+                "type": "null"
+              }
             ],
             "title": "Edge Type",
-            "description": "Connection strength: strong (default) or weak; body links are always weak. Stored under the reserved `edge_type` key of `metadata`.",
-            "default": "strong"
+            "description": "Connection strength: strong or weak; body links are always weak. Omit it to keep an existing link's strength (a new link is strong). Stored under the reserved `edge_type` key of `metadata`."
           }
         },
         "type": "object",

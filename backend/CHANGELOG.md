@@ -12,8 +12,8 @@ specifically; the proxy has its own log in
 - How strongly two resources are connected is now its own attribute, separate
   from the relation name (`related_to`, `derived_from`, … say what a link means
   and are too ambiguous to imply strength) and from `kind` (`implicit` = derived
-  from a document's frontmatter or body, `explicit` = made with `akb_link`). An
-  explicit relation is `strong` by default; `akb_link` and `POST /relations`
+  from a document's frontmatter or body, `explicit` = made with `akb_link`). A
+  new explicit relation is `strong` by default; `akb_link` and `POST /relations`
   take an optional `edge_type` of `strong` or `weak`, and any other value is
   rejected with `invalid_argument` (REST: 422). An implicit edge is always
   `weak`; that value is computed when the edge is served and never stored.
@@ -21,16 +21,30 @@ specifically; the proxy has its own log in
   `/graph`, `/graph/overview` and `/provenance` routes return `edge_type` on every
   edge, next to `kind`, and the link result echoes the value it stored. The
   OpenAPI contract and the `@akb/client` types declare it, and the SDK's
-  `graph.link` forwards it.
+  `graph.link` forwards it. The server always sends it; the `@akb/client` types
+  mark it optional on the edges, relation rows and link result they read,
+  because the SDK hands back a response unchanged and a server that predates
+  this change omits it.
 - No migration and no backfill. An explicit edge keeps the value in
   `edges.metadata->>'edge_type'`; a row without the key, which is every
   `akb_link` edge made before this change, reads as `strong`.
-- Linking an edge that already exists updates it in place, `edge_type` included.
-  A re-link that names no `edge_type` states the default again, so it makes the
-  edge `strong`. The stored metadata object is now merged with the one sent,
-  the new keys winning, instead of being replaced; this is what keeps a REST
-  caller's `metadata` when only the strength changes. The reserved `edge_type`
-  key in a request's `metadata` is overridden by the `edge_type` argument.
+- Linking an edge that already exists updates it in place. A re-link that names
+  an `edge_type` sets it, up or down. One that names none (the field left out, or
+  `null`) says nothing about strength and leaves the stored value as it is, so a
+  REST client that predates the field, an older MCP proxy, or a caller that only
+  updates `metadata` cannot promote a weak edge by omission; a new edge that
+  names none is `strong`. The link result reports the strength now stored, not
+  the one asked for. For the same reason the REST `LinkRequest` and the
+  `akb_link` tool schema advertise no default for `edge_type` and describe the
+  omission instead: a client that fills schema defaults into a call would
+  otherwise send `strong` every time. `edge_type` is nullable in the OpenAPI
+  `LinkRequest` and the `@akb/client` type, and a REST `null`, which was a 422
+  before, now means "not specified", as it always did for `akb_link`. Linking
+  over an implicit edge makes a new explicit edge, which is `strong` unless
+  named. The stored metadata object is now merged with the one sent, the new
+  keys winning, instead of being replaced; this is what keeps a REST caller's
+  `metadata` when only the strength changes. The reserved `edge_type` key in a
+  request's `metadata` is ignored in favour of the `edge_type` argument.
 - Rolling back to an earlier backend leaves the stored key unused, and that
   backend replaces an edge's whole metadata object when it re-links the edge.
   A weak edge re-linked there loses its key and reads as strong again once this
@@ -61,7 +75,9 @@ specifically; the proxy has its own log in
   document statement reads at most an 8 KiB window of each head body; a
   document whose frontmatter does not close inside it (a hub that lists hundreds
   of relations) gets one wider read, capped at 128 KiB and 50 documents per
-  call, and past that is named by its path.
+  call. A document the wider read does not reach, or whose frontmatter outgrows
+  it, is named by its path (or by the title of the catalog row it kept at
+  cutover) and still carries `path` and the `updated_at` the first read fetched.
 - Not changed: the overview's orphan nodes and `/graph/health`'s orphan sample are
   still enumerated from the legacy `documents` catalog, so a native installation
   does not list its unlinked documents there; `/provenance` and `akb_provenance`

@@ -688,6 +688,14 @@ async def test_unicode_graph_grep_and_ownership(
         {"source": first["uri"], "target": second["uri"], "relation": "depends_on", "edge_type": "weak"},
     )
     assert relinked["edge_type"] == "weak"
+    # ... and a re-link that names no strength leaves it where it is.
+    bare_relink = await _call_json(
+        mcp_client,
+        runtime_session,
+        "akb_link",
+        {"source": first["uri"], "target": second["uri"], "relation": "depends_on"},
+    )
+    assert bare_relink["edge_type"] == "weak"
     weak_relations = await _call_json(
         mcp_client,
         runtime_session,

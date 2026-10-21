@@ -480,11 +480,18 @@ async def test_a_frontmatter_wider_than_the_second_window_falls_back_to_the_path
 
 @pytest.mark.asyncio
 async def test_the_wider_read_is_bounded_in_rows(monkeypatch):
-    """A writer must not be able to turn a label into an unbounded read."""
+    """A writer must not be able to turn a label into an unbounded read — and the
+    documents the bound leaves unread keep what the first read already fetched,
+    their time included."""
     _authority(monkeypatch, native=True)
     count = kg_service._LABEL_RETRY_MAX_ROWS + 10
     paths = [f"hub/wide-{i:03d}.md" for i in range(count)]
-    conn = _LabelConn(native={p: _wide_body(f"Title {p}", entries=300) for p in paths})
+    # Every document has a moment of its own, so a label that lost its time cannot
+    # pass for one that kept a neighbour's. Written out here, not by the code under test.
+    moments = {p: T1 + timedelta(seconds=i) for i, p in enumerate(paths)}
+    conn = _LabelConn(
+        native={p: _wide_body(f"Title {p}", entries=300) for p in paths}, native_times=moments,
+    )
 
     labels = await _labels(conn, *[_doc(p) for p in paths])
 
@@ -492,6 +499,39 @@ async def test_the_wider_read_is_bounded_in_rows(monkeypatch):
     assert len(conn.native_windows[1][1]) == kg_service._LABEL_RETRY_MAX_ROWS
     unread = [uri for uri, label in labels.items() if "title" not in label]
     assert len(unread) == 10 and all(labels[uri]["name"] == labels[uri]["path"] for uri in unread)
+    # The first statement fetched every document's time whether or not its
+    # frontmatter closed inside the window. The ten the cap left unread still state it.
+    assert {uri: label.get("updated_at") for uri, label in labels.items()} == {
+        doc_uri(VAULT, p): moments[p].strftime("%Y-%m-%dT%H:%M:%SZ") for p in paths
+    }
+    assert all(labels[doc_uri(VAULT, p)]["path"] == p for p in paths)
+
+
+@pytest.mark.asyncio
+async def test_a_document_the_cap_leaves_unread_keeps_what_the_first_read_knew(monkeypatch):
+    """The retained catalog row and the resource's time both come out of the first
+    statement. A document that never gets the wider read is named by that row,
+    exactly as one whose frontmatter outgrows the wider window is."""
+    _authority(monkeypatch, native=True)
+    count = kg_service._LABEL_RETRY_MAX_ROWS + 5
+    paths = [f"hub/wide-{i:03d}.md" for i in range(count)]
+    conn = _LabelConn(
+        native={p: _wide_body(f"Body title {p}", entries=300) for p in paths},
+        native_times={p: T2 for p in paths},
+        legacy=[_catalog(p, f"Catalog title {p}", "decision", ["kept"]) for p in paths],
+    )
+
+    labels = await _labels(conn, *[_doc(p) for p in paths])
+
+    read = [label for label in labels.values() if label.get("title", "").startswith("Body title")]
+    unread = [label for label in labels.values() if label.get("title", "").startswith("Catalog title")]
+    assert (len(read), len(unread)) == (kg_service._LABEL_RETRY_MAX_ROWS, 5)
+    for label in read:  # the body states its own type; the row fills the tags it leaves out
+        assert (label["doc_type"], label["tags"]) == ("index", ["kept"])
+    for label in unread:  # no body was read: the row says everything it knows
+        assert (label["doc_type"], label["tags"]) == ("decision", ["kept"])
+    assert {label["updated_at"] for label in labels.values()} == {T2_STAMP}
+    assert {label["name"] for label in unread} == {label["title"] for label in unread}
 
 
 # ── When the resource last changed ───────────────────────────────────────

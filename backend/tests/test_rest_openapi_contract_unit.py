@@ -486,9 +486,16 @@ def test_graph_rest_openapi_contract_is_codegen_typed():
     link_schema = schemas["LinkRequest"]
     assert "links_to" not in link_schema["properties"]["relation"]["enum"]
     link_edge_type = link_schema["properties"]["edge_type"]
-    assert link_edge_type["enum"] == edge_types
-    assert link_edge_type["default"] == "strong"
+    link_options = link_edge_type.get("anyOf") or [link_edge_type]
+    assert next(option["enum"] for option in link_options if "enum" in option) == edge_types
+    # `null` reads as "not specified", like leaving the field out.
+    assert any(option.get("type") == "null" for option in link_options)
+    # No advertised default and not required: a field left out keeps an existing
+    # edge's strength (strong for a new one), and a client or generator that
+    # materialised a default into the request would turn that into a promotion.
+    assert link_edge_type.get("default") is None
     assert "edge_type" not in link_schema["required"]
+    assert "keep" in link_edge_type["description"]
 
 
 def test_document_openapi_contract_is_codegen_typed():

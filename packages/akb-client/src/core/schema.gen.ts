@@ -379,7 +379,8 @@ export interface AkbGraphEdge {
   target: string;
   relation: AkbRelationType;
   kind: "implicit" | "explicit";
-  edge_type: AkbEdgeType;
+  /** Connection strength; absent from a server that predates it. */
+  edge_type?: AkbEdgeType;
   [key: string]: unknown;
 }
 
@@ -439,7 +440,8 @@ export interface AkbRelation {
   relation: AkbRelationType;
   uri: string;
   resource_type: "doc" | "table" | "file";
-  edge_type: AkbEdgeType;
+  /** Connection strength; absent from a server that predates it. */
+  edge_type?: AkbEdgeType;
   name?: string | null;
   /** A document's real title (absent when it has none); a table's or file's name. */
   title?: string;
@@ -467,7 +469,8 @@ export interface AkbRelationLinkEnvelope {
   source: string;
   target: string;
   relation: AkbWritableRelationType;
-  edge_type: AkbEdgeType;
+  /** The strength now stored on the edge; absent from a server that predates it. */
+  edge_type?: AkbEdgeType;
   [key: string]: unknown;
 }
 
@@ -521,7 +524,7 @@ export type AkbSuccessEnvelope =
   | AkbRelationUnlinkEnvelope
   | AkbProvenanceEnvelope;
 
-export type LinkRequest = { source: string; target: string; relation: "depends_on" | "related_to" | "implements" | "references" | "attached_to" | "derived_from"; metadata?: { [key: string]: unknown } | null; edge_type?: "strong" | "weak" };
+export type LinkRequest = { source: string; target: string; relation: "depends_on" | "related_to" | "implements" | "references" | "attached_to" | "derived_from"; metadata?: { [key: string]: unknown } | null; edge_type?: "strong" | "weak" | null };
 
 export type CreateCollectionRequest = { path: string; summary?: string | null };
 

@@ -38,7 +38,6 @@ from app.services import template_registry
 from app.services.vault_creation_capabilities import get_vault_creation_capabilities
 from app.services.grep_replace import DEFAULT_MAX_REPLACEMENTS, MAX_REPLACEMENTS
 from app.services.kg_service import (
-    DEFAULT_EDGE_TYPE,
     DEFAULT_GRAPH_DIRECTION,
     EDGE_TYPES,
     GRAPH_DIRECTIONS,
@@ -706,7 +705,8 @@ TOOLS = [
             "Create a relation between any two resources (documents, tables, files). "
             "Source and target are AKB URIs in the same vault. "
             f"Relation types: {_REL_LIST}. "
-            "Optional `edge_type`: strong (default) or weak; body links are always weak. "
+            "Optional `edge_type`: strong or weak; body links are always weak. "
+            "Omit it to keep an existing link's strength (a new link is strong). "
             "Example: link a design doc to its data table, or attach a diagram file to a spec."
         ),
         input_schema={
@@ -719,11 +719,16 @@ TOOLS = [
                     "description": "Relation type",
                     "enum": _REL_ENUM,
                 },
+                # No `default`: a client that fills schema defaults into a call would
+                # turn "name nothing" into "strong" and promote every weak edge it
+                # links again.
                 "edge_type": {
                     "type": "string",
-                    "description": "Connection strength: strong (default) or weak; body links are always weak.",
+                    "description": (
+                        "Connection strength: strong or weak; body links are always weak. "
+                        "Omit it to keep an existing link's strength (a new link is strong)."
+                    ),
                     "enum": _EDGE_TYPE_ENUM,
-                    "default": DEFAULT_EDGE_TYPE,
                 },
             },
             "required": ["source", "target", "relation"],

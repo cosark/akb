@@ -454,8 +454,9 @@ akb_link(
   relation="attached_to")
 ```
 
-An explicit link is `strong` by default. Pass `edge_type="weak"` for a looser
-connection; linking the same edge again with another `edge_type` updates it.
+A new explicit link is `strong` unless you pass `edge_type="weak"` for a looser
+connection. Linking the same edge again with an `edge_type` sets it; linking it
+again with none leaves its strength as it is.
 Links AKB derives from document metadata or Markdown body content are always
 `weak`.
 
@@ -1835,7 +1836,7 @@ The vault is inferred from the URIs — no separate `vault` arg.
 | source | ✓ | Source AKB URI |
 | target | ✓ | Target AKB URI |
 | relation | ✓ | depends_on, related_to, implements, references, attached_to, derived_from |
-| edge_type | | strong (default) or weak; body links are always weak |
+| edge_type | | strong or weak; body links are always weak. Omit it to keep an existing link's strength (a new link is strong) |
 
 ## URI Format
 - `akb://{vault}/doc/{path}` — document
@@ -1870,8 +1871,9 @@ akb_link(
   edge_type="weak")
 ```
 
-Linking an edge that already exists updates it, including its `edge_type`; an
-omitted `edge_type` means `strong`.
+Linking an edge that already exists updates it. A given `edge_type` sets its
+strength, up or down; an omitted one leaves the stored strength as it is (a new
+edge is `strong`), so a link that only adds metadata cannot promote a weak edge.
 
 💡 Browse results include `uri` for each item — use those directly.""",
 
