@@ -2138,7 +2138,7 @@ export interface GraphNeighborsResponse {
   edges: GraphApiEdge[];
   truncated?: boolean;
 }
-export const getGraph = (vault: string, docPath?: string, hops = 2, limit = 50) => {
+export const getGraph = (vault: string, docPath?: string, hops = 2, limit = 50, edgeType?: "strong" | "weak") => {
   // Backend 0.3.0 renamed the graph traversal radius from `depth`
   // to `hops` to disambiguate it from `browse?depth` (collection-tree
   // depth). The frontend mirrors the rename so call sites stay
@@ -2149,6 +2149,8 @@ export const getGraph = (vault: string, docPath?: string, hops = 2, limit = 50) 
   // canonical URI so the same backend endpoint can center the BFS correctly.
   if (docPath) p.set("uri", docPath.startsWith("akb://") ? docPath : _docUri(vault, docPath));
   else p.set("vault", vault);
+  // A neighbourhood walk of one strength (server 0.18+); an older server ignores it and returns every edge.
+  if (docPath && edgeType) p.set("edge_type", edgeType);
   return api<GraphNeighborsResponse>(`/graph?${p}`);
 };
 
