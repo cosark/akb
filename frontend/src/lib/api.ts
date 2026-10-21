@@ -2114,6 +2114,10 @@ export interface GraphApiNode {
   doc_type?: string;
   tags?: string[];
   path?: string;
+  // When the resource last changed: ISO 8601 in UTC to the second
+  // (`2026-10-20T13:08:25Z`). Absent when the server has no time for it (or is
+  // older than this field), so a time filter must decide what absent means.
+  updated_at?: string;
 }
 export interface GraphApiEdge {
   source: string;
@@ -2226,6 +2230,7 @@ export interface RelationRow {
   doc_type?: string;
   tags?: string[];
   path?: string;
+  updated_at?: string;
 }
 export const getRelations = (vault: string, docPath: string) => {
   // The relations endpoint accepts any typed resource URI. Document callers

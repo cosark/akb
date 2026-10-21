@@ -17,6 +17,7 @@ PostgreSQL in ``test_graph_node_labels_postgres.py``.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -34,6 +35,13 @@ A, B, C = "specs/a.md", "specs/b.md", "notes/c.md"
 # a document with a very long frontmatter gets.
 FIRST_WINDOW = 8 * 1024 + 1
 RETRY_WINDOW = 128 * 1024
+
+# Two moments a store can date a resource by, and what the label serves for them
+# (UTC to the second, truncated). T1 carries microseconds on purpose.
+T1 = datetime(2026, 10, 20, 13, 8, 25, 987654, tzinfo=UTC)
+T1_STAMP = "2026-10-20T13:08:25Z"
+T2 = datetime(2026, 10, 21, 2, 0, 0, tzinfo=UTC)
+T2_STAMP = "2026-10-21T02:00:00Z"
 
 
 class _Acquire:
@@ -76,12 +84,14 @@ class _LabelConn:
     path, by path when none does.
     """
 
-    def __init__(self, *, legacy=(), native=None, tables=(), files=()) -> None:
+    def __init__(self, *, legacy=(), native=None, native_times=None, tables=(), files=()) -> None:
         self.legacy = {row["path"]: row for row in legacy}
         self.native: dict[str, dict] = {
             path: {"resource_id": uuid.uuid4(), "body": body}
             for path, body in (native or {}).items()
         }
+        # `native_resources.updated_at` by path; a path left out has no time.
+        self.native_times: dict[str, datetime] = dict(native_times or {})
         self.tables = list(tables)
         self.files = list(files)
         self.queries: list[str] = []
@@ -117,6 +127,12 @@ class _LabelConn:
         row = {
             "path": path,
             "resource_id": resource["resource_id"] if resource else None,
+            # COALESCE(r.updated_at, dp.updated_at): the resource's time when the
+            # ledger holds the path, else the catalog row's (which only joins then).
+            "updated_at": (
+                self.native_times.get(path) if resource
+                else (catalog.get("updated_at") if catalog is not None else None)
+            ),
             "body_size": len(body) if body is not None else None,
             "body_slice": body[:window] if body is not None else None,
             "legacy_id": None,
@@ -134,8 +150,8 @@ class _LabelConn:
         return row
 
 
-def _catalog(path: str, title: str, doc_type: str | None = None, tags=None) -> dict:
-    return {"path": path, "title": title, "doc_type": doc_type, "tags": tags}
+def _catalog(path: str, title: str, doc_type: str | None = None, tags=None, updated_at=None) -> dict:
+    return {"path": path, "title": title, "doc_type": doc_type, "tags": tags, "updated_at": updated_at}
 
 
 async def _labels(conn, *uris_and_types: tuple[str, str], vault: str = VAULT) -> dict:
@@ -478,6 +494,233 @@ async def test_the_wider_read_is_bounded_in_rows(monkeypatch):
     assert len(unread) == 10 and all(labels[uri]["name"] == labels[uri]["path"] for uri in unread)
 
 
+# ── When the resource last changed ───────────────────────────────────────
+#
+# `updated_at` rides in the same statements as the rest of the label. What it
+# means on each authority is pinned against real rows in the PostgreSQL file;
+# here: the shape of the stamp, which store dates which resource, and that a
+# resource with no time states none.
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        # UTC to the second, and truncated, never rounded up past the change.
+        (T1, T1_STAMP),
+        (datetime(2026, 10, 20, 13, 8, 25, 999999, tzinfo=UTC), T1_STAMP),
+        (datetime(2026, 10, 20, 13, 8, 25, tzinfo=UTC), T1_STAMP),
+        # Another offset is converted, not printed as it came.
+        (datetime(2026, 10, 20, 22, 8, 25, 1, tzinfo=timezone(timedelta(hours=9))), T1_STAMP),
+        (datetime(2026, 10, 20, 8, 8, 25, tzinfo=timezone(timedelta(hours=-5))), T1_STAMP),
+        # A naive value is UTC, whatever the host zone is.
+        (datetime(2026, 10, 20, 13, 8, 25, 5), T1_STAMP),
+        # No time to give: unknown stays unknown instead of becoming a string.
+        (None, None),
+        (T1_STAMP, None),
+        (1_760_965_705, None),
+        # PostgreSQL's `infinity` / `-infinity` come through as the ends of the range
+        # and name no moment.
+        (datetime.max, None),
+        (datetime.min, None),
+        (datetime.max.replace(tzinfo=UTC), None),
+        (datetime.min.replace(tzinfo=UTC), None),
+        # A value whose offset pushes it out of range does not convert; that is
+        # "unknown", not an error.
+        (datetime(9999, 12, 31, 23, 0, 0, tzinfo=timezone(timedelta(hours=-5))), None),
+        (datetime(1, 1, 1, 1, 0, 0, tzinfo=timezone(timedelta(hours=5))), None),
+    ],
+)
+def test_a_time_is_served_as_utc_to_the_second_or_not_at_all(value, expected):
+    assert kg_service._utc_stamp(value) == expected
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_document_carries_its_catalog_time(monkeypatch):
+    _authority(monkeypatch, native=False)
+    conn = _LabelConn(legacy=[_catalog(A, "Alpha spec", "spec", ["x"], updated_at=T1)])
+
+    labels = await _labels(conn, _doc(A))
+
+    assert labels == {
+        doc_uri(VAULT, A): {
+            "name": "Alpha spec",
+            "title": "Alpha spec",
+            "doc_type": "spec",
+            "tags": ["x"],
+            "path": A,
+            "updated_at": T1_STAMP,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_native_document_is_dated_by_its_resource_not_by_its_body(monkeypatch):
+    """A body kept byte for byte from Git, or one that simply says so, states a
+    time of its own; the moment the head was published is the resource's."""
+    _authority(monkeypatch, native=True)
+    conn = _LabelConn(
+        native={A: _body("Alpha design", updated_at="1999-01-01T00:00:00Z", created_at="1998-01-01T00:00:00Z")},
+        native_times={A: T1},
+    )
+
+    label = (await _labels(conn, _doc(A)))[doc_uri(VAULT, A)]
+
+    assert label["updated_at"] == T1_STAMP
+    assert label["name"] == "Alpha design"
+
+
+@pytest.mark.asyncio
+async def test_a_retained_catalog_row_never_dates_a_native_document(monkeypatch):
+    """The row a document kept at cutover is frozen; the resource's time is not.
+    It stays the answer whether the row says earlier or later."""
+    _authority(monkeypatch, native=True)
+    conn = _LabelConn(
+        native={A: _body("Alpha"), B: _body("Beta")},
+        native_times={A: T2, B: T1},
+        legacy=[_catalog(A, "Frozen A", updated_at=T1), _catalog(B, "Frozen B", updated_at=T2)],
+    )
+
+    labels = await _labels(conn, _doc(A), _doc(B))
+
+    assert labels[doc_uri(VAULT, A)]["updated_at"] == T2_STAMP
+    assert labels[doc_uri(VAULT, B)]["updated_at"] == T1_STAMP
+
+
+@pytest.mark.asyncio
+async def test_a_pre_cutover_document_only_the_catalog_holds_is_dated_by_its_row(monkeypatch):
+    _authority(monkeypatch, native=True)
+    conn = _LabelConn(legacy=[_catalog(C, "Old note", "note", ["t"], updated_at=T1)])
+
+    label = (await _labels(conn, _doc(C)))[doc_uri(VAULT, C)]
+
+    assert label["updated_at"] == T1_STAMP
+
+
+@pytest.mark.asyncio
+async def test_a_wider_read_of_a_wide_frontmatter_keeps_the_resource_time(monkeypatch):
+    """The second window re-selects the document; its time comes with it."""
+    _authority(monkeypatch, native=True)
+    conn = _LabelConn(
+        native={"hub/index.md": _wide_body("Hub index", entries=300), A: _body("Alpha")},
+        native_times={"hub/index.md": T1, A: T2},
+    )
+
+    labels = await _labels(conn, _doc("hub/index.md"), _doc(A))
+
+    assert len(conn.native_windows) == 2  # the wide one really was read twice
+    assert labels[doc_uri(VAULT, "hub/index.md")]["updated_at"] == T1_STAMP
+    assert labels[doc_uri(VAULT, A)]["updated_at"] == T2_STAMP
+
+
+@pytest.mark.asyncio
+async def test_tables_and_files_are_dated_by_their_own_rows(monkeypatch):
+    _authority(monkeypatch, native=False)
+    file_id = str(uuid.uuid4())
+    conn = _LabelConn(
+        tables=[
+            {"name": "metrics", "description": "Key metrics", "updated_at": T1},
+            {"name": "plain", "description": None, "updated_at": T2},
+        ],
+        files=[{"id": file_id, "name": "diagram.png", "updated_at": T2}],
+    )
+
+    labels = await _labels(
+        conn,
+        (table_uri(VAULT, "metrics"), "table"),
+        (table_uri(VAULT, "plain"), "table"),
+        (file_uri(VAULT, file_id), "file"),
+    )
+
+    assert labels[table_uri(VAULT, "metrics")] == {
+        "name": "Key metrics", "title": "Key metrics", "updated_at": T1_STAMP,
+    }
+    assert labels[table_uri(VAULT, "plain")]["updated_at"] == T2_STAMP
+    assert labels[file_uri(VAULT, file_id)] == {
+        "name": "diagram.png", "title": "diagram.png", "updated_at": T2_STAMP,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True], ids=["legacy", "native"])
+async def test_a_resource_with_no_time_states_none(monkeypatch, native):
+    """Absent, never null and never a made-up date: the row is the only source."""
+    _authority(monkeypatch, native=native)
+    file_id = str(uuid.uuid4())
+    conn = _LabelConn(
+        legacy=[] if native else [_catalog(A, "Alpha", updated_at=None)],
+        native={A: _body("Alpha")} if native else None,  # no entry in native_times
+        tables=[{"name": "metrics", "description": None, "updated_at": None}],
+        files=[{"id": file_id, "name": "diagram.png"}],  # no `updated_at` key at all reads like a null
+    )
+
+    labels = await _labels(
+        conn, _doc(A), (table_uri(VAULT, "metrics"), "table"), (file_uri(VAULT, file_id), "file"),
+    )
+
+    assert len(labels) == 3
+    assert all("updated_at" not in label for label in labels.values()), labels
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True], ids=["legacy", "native"])
+async def test_a_resource_the_vault_does_not_hold_states_no_time(monkeypatch, native):
+    _authority(monkeypatch, native=native)
+    conn = _LabelConn(
+        legacy=[_catalog(B, "Other", updated_at=T1)],
+        native={B: _body("Other")} if native else None,
+        native_times={B: T1},
+    )
+
+    labels = await _labels(
+        conn, _doc(A), (table_uri(VAULT, "ghost"), "table"), (file_uri(VAULT, "no-such-file"), "file"),
+    )
+
+    assert labels == {
+        doc_uri(VAULT, A): {"name": A, "path": A},
+        table_uri(VAULT, "ghost"): {"name": "ghost"},
+        file_uri(VAULT, "no-such-file"): {"name": "no-such-file"},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [1, 7, 200])
+@pytest.mark.parametrize("native", [False, True], ids=["legacy", "native"])
+async def test_times_cost_no_statement_however_many_nodes(monkeypatch, native, count):
+    """The time is one more column of the statements that already name the nodes."""
+    _authority(monkeypatch, native=native)
+    paths = [f"bulk/doc-{i}.md" for i in range(count)]
+    names = [f"t{i}" for i in range(count)]
+    file_ids = [str(uuid.uuid4()) for _ in range(count)]
+    conn = _LabelConn(
+        legacy=[] if native else [_catalog(p, f"Title {p}", updated_at=T1) for p in paths],
+        native={p: _body(f"Title {p}") for p in paths} if native else None,
+        native_times={p: T1 for p in paths},
+        tables=[{"name": n, "description": None, "updated_at": T2} for n in names],
+        files=[{"id": fid, "name": fid, "updated_at": T2} for fid in file_ids],
+    )
+
+    labels = await _labels(
+        conn,
+        *[_doc(p) for p in paths],
+        *[(table_uri(VAULT, n), "table") for n in names],
+        *[(file_uri(VAULT, fid), "file") for fid in file_ids],
+    )
+
+    assert len(labels) == 3 * count
+    assert len(conn.queries) == 3, conn.queries  # documents, tables, files — as before
+    assert {labels[doc_uri(VAULT, p)]["updated_at"] for p in paths} == {T1_STAMP}
+    assert {labels[table_uri(VAULT, n)]["updated_at"] for n in names} == {T2_STAMP}
+    assert {labels[file_uri(VAULT, fid)]["updated_at"] for fid in file_ids} == {T2_STAMP}
+
+
+def test_every_label_statement_selects_the_time():
+    """A guard on the SQL text itself: a column dropped from a statement would
+    leave the fakes above agreeing with themselves."""
+    assert "COALESCE(r.updated_at, dp.updated_at) AS updated_at" in kg_service._NATIVE_DOC_LABELS_SQL
+    # The retained catalog row (`dn`) must never be the source of a native document's time.
+    assert "dn.updated_at" not in kg_service._NATIVE_DOC_LABELS_SQL
+
+
 # ── The label reaches every projection ───────────────────────────────────
 
 
@@ -650,3 +893,167 @@ async def test_orphan_nodes_are_labelled_like_connected_ones(monkeypatch):
     assert "title" not in untitled
     assert by_uri[table_uri(VAULT, "metrics")]["title"] == "Key metrics"
     assert by_uri[file_uri(VAULT, "f1")]["title"] == "diagram.png"
+
+
+# ── The time reaches every projection ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True], ids=["legacy", "native"])
+async def test_a_relation_row_carries_the_time_of_the_other_end(monkeypatch, native):
+    _authority(monkeypatch, native=native)
+    conn = _GraphConn(
+        edges=[(doc_uri(VAULT, A), doc_uri(VAULT, B), "references")],
+        legacy=[] if native else [_catalog(B, "Beta notes", "note", ["n"], updated_at=T1)],
+        native={B: _body("Beta notes", tags=["n"])} if native else None,
+        native_times={B: T1},
+    )
+    _use_connection(monkeypatch, conn)
+
+    (outgoing,) = await kg_service.get_resource_relations(VAULT, doc_uri(VAULT, A), vault_id=VAULT_ID)
+    # Seen from the other end, the row describes A — which has no time in this world.
+    (incoming,) = await kg_service.get_resource_relations(VAULT, doc_uri(VAULT, B), vault_id=VAULT_ID)
+
+    assert outgoing == {
+        "direction": "outgoing", "relation": "references", "uri": doc_uri(VAULT, B),
+        "resource_type": "doc", "kind": "explicit", "edge_type": "strong",
+        "name": "Beta notes", "title": "Beta notes", "doc_type": "note", "tags": ["n"], "path": B,
+        "updated_at": T1_STAMP,
+    }
+    assert incoming["uri"] == doc_uri(VAULT, A) and "updated_at" not in incoming
+    assert len(conn.document_queries) == 2  # one batch per call, never one per row
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True], ids=["legacy", "native"])
+async def test_neighbourhood_and_overview_nodes_carry_their_own_times(monkeypatch, native):
+    _authority(monkeypatch, native=native)
+    ghost = doc_uri(VAULT, "gone/ghost.md")
+    conn = _GraphConn(
+        edges=[
+            (doc_uri(VAULT, A), doc_uri(VAULT, B), "references"),
+            (doc_uri(VAULT, A), ghost, "references"),
+        ],
+        legacy=[] if native else [
+            _catalog(A, "Alpha", "spec", ["a"], updated_at=T2), _catalog(B, "Beta", updated_at=T1),
+        ],
+        native={A: _body("Alpha", type="spec", tags=["a"]), B: _body("Beta")} if native else None,
+        native_times={A: T2, B: T1},
+    )
+    _use_connection(monkeypatch, conn)
+
+    graph = await kg_service.get_graph(VAULT, doc_uri(VAULT, A), hops=1, vault_id=VAULT_ID)
+    overview = await kg_service.get_overview(VAULT, vault_id=VAULT_ID, include_orphans=False)
+
+    for nodes in (graph["nodes"], overview["nodes"]):
+        by_uri = {n["uri"]: n for n in nodes}
+        assert by_uri[doc_uri(VAULT, A)]["updated_at"] == T2_STAMP
+        assert by_uri[doc_uri(VAULT, B)]["updated_at"] == T1_STAMP
+        # An edge whose document is gone is still drawn, and claims no time.
+        assert "updated_at" not in by_uri[ghost]
+    # Existing node fields are untouched.
+    assert {n["uri"]: n["depth"] for n in graph["nodes"]} == {
+        doc_uri(VAULT, A): 0, doc_uri(VAULT, B): 1, ghost: 1,
+    }
+    assert {n["degree"] for n in overview["nodes"]} == {1, 2}
+
+
+@pytest.mark.asyncio
+async def test_the_overview_dates_all_its_nodes_in_the_one_batch(monkeypatch):
+    _authority(monkeypatch, native=True)
+    hub = doc_uri(VAULT, "hub.md")
+    spokes = [f"spokes/s-{i}.md" for i in range(60)]
+    conn = _GraphConn(
+        edges=[(hub, doc_uri(VAULT, s), "references") for s in spokes],
+        native={"hub.md": _body("Hub"), **{s: _body(f"Spoke {s}") for s in spokes}},
+        native_times={"hub.md": T2, **{s: T1 for s in spokes}},
+    )
+    _use_connection(monkeypatch, conn)
+
+    overview = await kg_service.get_overview(VAULT, vault_id=VAULT_ID, include_orphans=False)
+
+    assert len(overview["nodes"]) == 61
+    assert {n["updated_at"] for n in overview["nodes"] if n["uri"] != hub} == {T1_STAMP}
+    assert next(n for n in overview["nodes"] if n["uri"] == hub)["updated_at"] == T2_STAMP
+    assert len(conn.document_queries) == 1
+
+
+@pytest.mark.asyncio
+async def test_health_hubs_carry_their_time_too(monkeypatch):
+    _authority(monkeypatch, native=False)
+    hub = doc_uri(VAULT, A)
+    spokes = [doc_uri(VAULT, f"s/{i}.md") for i in range(5)]
+
+    class _HealthConn(_GraphConn):
+        async def fetch(self, query: str, *args):
+            if "FROM documents WHERE vault_id" in query:  # the orphan scan
+                return []
+            return await super().fetch(query, *args)
+
+    conn = _HealthConn(
+        edges=[(hub, s, "references") for s in spokes],
+        legacy=[_catalog(A, "Alpha spec", "spec", ["x"], updated_at=T1)],
+    )
+    _use_connection(monkeypatch, conn)
+
+    health = await kg_service.get_health(VAULT, vault_id=VAULT_ID, hub_threshold=5)
+
+    (top,) = health["hubs"]
+    assert (top["uri"], top["name"], top["degree"], top["updated_at"]) == (hub, "Alpha spec", 5, T1_STAMP)
+
+
+class _OrphanRows:
+    """Answers the three orphan statements and records the SQL it was sent."""
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    async def fetch(self, query: str, *_args):
+        self.queries.append(query)
+        if "FROM documents" in query:
+            return [
+                {"path": A, "title": "Alpha spec", "doc_type": "spec", "tags": ["x"], "updated_at": T1},
+                {"path": B, "title": "", "doc_type": None, "tags": None, "updated_at": None},
+            ]
+        if "FROM vault_tables" in query:
+            return [{"name": "metrics", "description": "Key metrics", "updated_at": T2, "coll": None}]
+        return [{"id": "f1", "name": "diagram.png", "updated_at": T2, "coll": None}]
+
+
+@pytest.mark.asyncio
+async def test_orphan_nodes_carry_the_time_of_their_row(monkeypatch):
+    _authority(monkeypatch, native=False)
+    conn = _OrphanRows()
+
+    nodes, _truncated = await kg_service._fetch_orphan_nodes(
+        conn, VAULT, VAULT_ID, doc_paths=set(), table_names=set(), file_ids=set(), limit=10,
+    )
+
+    by_uri = {n["uri"]: n for n in nodes}
+    assert by_uri[doc_uri(VAULT, A)]["updated_at"] == T1_STAMP
+    assert "updated_at" not in by_uri[doc_uri(VAULT, B)]  # its row had none
+    assert by_uri[table_uri(VAULT, "metrics")]["updated_at"] == T2_STAMP
+    assert by_uri[file_uri(VAULT, "f1")]["updated_at"] == T2_STAMP
+    assert len(conn.queries) == 3  # documents, tables, files: no lookup per orphan
+
+
+@pytest.mark.asyncio
+async def test_orphan_documents_follow_the_installation_authority(monkeypatch):
+    """Legacy never names a native table; native lets the ledger's time win over
+    the catalog row that survived cutover, in the same statement."""
+    _authority(monkeypatch, native=False)
+    legacy = _OrphanRows()
+    await kg_service._fetch_orphan_nodes(
+        legacy, VAULT, VAULT_ID, doc_paths=set(), table_names=set(), file_ids=set(), limit=10,
+    )
+    assert not any("native_" in query for query in legacy.queries)
+
+    _authority(monkeypatch, native=True)
+    native = _OrphanRows()
+    await kg_service._fetch_orphan_nodes(
+        native, VAULT, VAULT_ID, doc_paths=set(), table_names=set(), file_ids=set(), limit=10,
+    )
+    doc_query = next(q for q in native.queries if "FROM documents" in q)
+    assert "COALESCE(r.updated_at, d.updated_at) AS updated_at" in doc_query
+    assert "r.resource_id = d.id" in doc_query and "r.lifecycle = 'live'" in doc_query
+    assert len(native.queries) == 3

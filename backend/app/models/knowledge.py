@@ -50,6 +50,8 @@ class GraphNode(KnowledgeResponse):
     ``title`` / ``doc_type`` / ``tags`` / ``path`` are set only when the
     resource resolves in the vault: a document carries all four (``title``
     only if it has a real one), a table or file just ``title``.
+    ``updated_at`` (UTC, ``YYYY-MM-DDTHH:MM:SSZ``) says when the resource last
+    changed and is left out when that is unknown.
     """
 
     uri: str
@@ -61,6 +63,7 @@ class GraphNode(KnowledgeResponse):
     doc_type: str | None = None
     tags: list[str] | None = None
     path: str | None = None
+    updated_at: str | None = None
 
 
 class GraphEdge(KnowledgeResponse):
@@ -85,6 +88,7 @@ class RelationItem(KnowledgeResponse):
     doc_type: str | None = None
     tags: list[str] | None = None
     path: str | None = None
+    updated_at: str | None = None
 
 
 class OrphanSummary(KnowledgeResponse):

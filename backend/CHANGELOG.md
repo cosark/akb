@@ -66,6 +66,32 @@ specifically; the proxy has its own log in
   still enumerated from the legacy `documents` catalog, so a native installation
   does not list its unlinked documents there; `/provenance` and `akb_provenance`
   still look the document up in that catalog.
+- A node and a relation row also carry `updated_at`, when their resource last
+  changed, so a client can offer a "changed in the last 1 / 7 / 30 days" view
+  without asking per node. It is ISO 8601 in UTC to the second
+  (`2026-10-20T13:08:25Z`, truncated, never rounded up), an optional addition to
+  the OpenAPI contract, the `@akb/client` types and the bundled web app's types,
+  and left out (never `null`) when the store has no time for the resource: the
+  far end of a dangling edge, a resource the vault does not hold. It rides in the
+  statements that already name the nodes, so it costs no statement, and the
+  server filters nothing by it. Whose time it is depends on the resource:
+  - a document on a native installation: the moment its head revision was
+    published by a create, edit, restore or move (`native_resources.updated_at`).
+    Every native write sets it together with the head revision's `occurred_at`,
+    and it is the value the native document API reports as `updated_at`. The row a
+    document kept at cutover and any `updated_at` its body states do not date it; a
+    pre-cutover document only the catalog holds is dated by its catalog row;
+  - a document on a legacy installation: `documents.updated_at` (create, update,
+    edit and move);
+  - a table: `vault_tables.updated_at`, set at creation and by every schema change
+    (columns, unique keys, indexes). Writing rows does not move it, so a table whose
+    rows change every day can read as old;
+  - a file: `vault_files.updated_at` (upload confirmation, replaced bytes, size or
+    integrity-metadata updates).
+- The overview's orphan nodes carry it too, from the rows that enumerate them; on a
+  native installation a catalog row that survived cutover is dated by the resource
+  that shares its id, in the same statement. `/graph/health`'s orphan sample is
+  unchanged.
 
 ### The graph neighbourhood can follow one strength
 

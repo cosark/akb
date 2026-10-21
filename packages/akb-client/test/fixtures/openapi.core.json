@@ -878,7 +878,8 @@
           "title": { "type": "string" },
           "doc_type": { "type": "string" },
           "tags": { "type": "array", "items": { "type": "string" } },
-          "path": { "type": "string" }
+          "path": { "type": "string" },
+          "updated_at": { "type": "string", "format": "date-time" }
         },
         "additionalProperties": { "$ref": "#/components/schemas/AkbJsonValue" }
       },
@@ -961,7 +962,8 @@
           "title": { "type": "string" },
           "doc_type": { "type": "string" },
           "tags": { "type": "array", "items": { "type": "string" } },
-          "path": { "type": "string" }
+          "path": { "type": "string" },
+          "updated_at": { "type": "string", "format": "date-time" }
         },
         "additionalProperties": { "$ref": "#/components/schemas/AkbJsonValue" }
       },

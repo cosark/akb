@@ -1174,7 +1174,8 @@ def _resource_label_properties() -> dict[str, Any]:
 
     Set only when the resource resolves in the vault. ``name`` (a separate,
     always-present property) is the title when the resource has one; these add
-    the parts a client needs to draw it without a second request.
+    the parts a client needs to draw it without a second request, and when it
+    last changed (``updated_at``, absent when the store has no time for it).
     """
     return {
         "title": {
@@ -1196,6 +1197,17 @@ def _resource_label_properties() -> dict[str, Any]:
         "path": {
             "type": "string",
             "description": "Vault-relative path. Documents only.",
+        },
+        "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": (
+                "When the resource last changed, UTC to the second (`2026-10-20T13:08:25Z`); "
+                "absent when unknown. A document: its head revision's time on a native "
+                "installation, its catalog `updated_at` otherwise. A table: its creation or last "
+                "schema change (writing rows does not move it). A file: its last confirmed "
+                "upload, replacement or size update."
+            ),
         },
     }
 
