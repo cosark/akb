@@ -6,7 +6,7 @@ import {
   type Material, type Object3D,
 } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { HOP_TOKENS, categoryOf, displayName, edgeId, edgeStrength, type GraphEdge, type GraphNode } from "./graph-types";
+import { HOP_TOKENS, categoryOf, edgeId, edgeStrength, shortName, type GraphEdge, type GraphNode } from "./graph-types";
 import type { GraphDimension, SpatialPoint } from "./graph-spatial-layout";
 import { CORNER_VIEW, TOP_VIEW, cameraForPoints, edgeCurvePoints, focusSpatialCamera, visibleLabels, type ProjectedLabel } from "./graph-spatial-view";
 
@@ -351,8 +351,8 @@ export class SpatialGraphRenderer {
       const labels = this.nodes.flatMap(node => {
         const p = this.positions.get(node.uri); if (!p) return [];
         const at = screen(p), gap = this.dotRadius(node) + 3;
-        const chars = displayName(node).length + (this.showCategory ? categoryOf(node).length + 1 : 0);
-        const size = { width: Math.min(224, 16 + chars * 6.5), lines: chars * 6.5 > 224 ? 2 : 1 };
+        const chars = [...shortName(node)].length + (this.showCategory ? categoryOf(node).length + 1 : 0);
+        const size = { width: 16 + chars * 6.8, lines: 1 };
         const priority = node.uri === this.selected ? 100 : node.uri === this.hovered ? 90 : this.labelRank(node.uri);
         const dx = focusPoint ? at.x - focusPoint.x : 0, dy = focusPoint ? at.y - focusPoint.y : 0, len = Math.hypot(dx, dy);
         if (!focusPoint || node.uri === focusUri || len < 1) return [{ uri: node.uri, x: at.x, y: at.y + gap, depth: at.z, ...size, ax: -0.5, ay: 0, priority }];

@@ -3,7 +3,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/hooks/use-theme";
 import { cn } from "@/lib/utils";
-import { categoryOf, displayName, edgeId, type GraphEdge, type GraphNode } from "./graph-types";
+import { categoryOf, displayName, edgeId, shortName, type GraphEdge, type GraphNode } from "./graph-types";
 import { ringRadius, seedSpatialPositions, type GraphDimension, type SpatialPoint } from "./graph-spatial-layout";
 import { SpatialGraphRenderer } from "./graph-spatial-renderer";
 import type { ProjectedLabel } from "./graph-spatial-view";
@@ -179,10 +179,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
         return <button key={node.uri} type="button" data-graph-node={node.uri} aria-label={`Inspect ${displayName(node)}`} aria-description={node.kind} title={`${displayName(node)} · ${node.name} · ${node.kind}`}
           onClick={() => props.onSelect(node.uri)} onDoubleClick={() => props.onExpand(node)}
           style={{ left: label.x, top: label.y, transform: `translate(${(label.ax ?? -0.5) * 100}%, ${(label.ay ?? 0) * 100}%)` }}
-          className={cn("pointer-events-auto absolute flex min-h-6 max-w-56 items-center gap-1 rounded-[var(--radius-xs)] px-1 text-xs text-foreground-muted [text-shadow:0_0_4px_var(--color-surface),0_0_2px_var(--color-surface)] hover:text-link focus-visible:bg-surface focus-visible:outline-2 focus-visible:outline-ring", props.selected === node.uri && "font-semibold text-link") }>
-          <span className={cn("text-center leading-tight [overflow-wrap:anywhere]", props.hops?.get(node.uri) === 0 ? "line-clamp-3" : "line-clamp-2")}>
+          className={cn("pointer-events-auto absolute flex h-6 items-center gap-1 rounded-[var(--radius-xs)] px-1 text-xs text-foreground-muted [text-shadow:0_0_4px_var(--color-surface),0_0_2px_var(--color-surface)] hover:text-link focus-visible:bg-surface focus-visible:outline-2 focus-visible:outline-ring", props.selected === node.uri && "font-semibold text-link") }>
+          <span className="whitespace-nowrap leading-tight">
             {showCategory && categoryOf(node) && <span className="mr-1 text-[10px] uppercase tracking-wide text-foreground-muted/80">{categoryOf(node)}</span>}
-            {displayName(node)}
+            {shortName(node)}
           </span>{props.pinned.has(node.uri) && <Pin className="h-3 w-3 shrink-0" aria-label="Position pinned" />}
         </button>;
       })}

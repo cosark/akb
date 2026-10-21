@@ -24,6 +24,8 @@ export interface GraphNode {
   name: string;
   /** The document's own title when the server reports one; labels prefer it over ``name``. */
   title?: string;
+  /** When the resource last changed (ISO 8601), when the server reports it. */
+  updated_at?: string;
   kind: NodeKind;
   doc_id?: string;
   doc_type?: string;
@@ -85,6 +87,8 @@ export interface GraphView {
   /** Around a focus: follow explicit relations only ("strong", the default)
    *  or every loaded connection, body links included ("all"). */
   links: "strong" | "all";
+  /** Only resources changed within the last N days ("all" = any time). */
+  since: GraphSince;
   types: Set<NodeKind>;
   relations: Set<RelationKind>;
   selected?: string;
@@ -108,9 +112,20 @@ export function categoryOf(node: Pick<GraphNode, "doc_type" | "group">): string 
   return node.doc_type?.trim() || node.group?.split("/").at(-1) || "";
 }
 
+export type GraphSince = "all" | "1" | "7" | "30";
+export const GRAPH_SINCE: GraphSince[] = ["1", "7", "30", "all"];
+
+/** Labels on the map are kept short; the inspector and tooltips carry the full title. */
+export const LABEL_MAX_CHARS = 15;
+export function shortName(node: Pick<GraphNode, "name" | "title">): string {
+  const full = displayName(node), chars = [...full];
+  return chars.length > LABEL_MAX_CHARS ? chars.slice(0, LABEL_MAX_CHARS).join("") + "…" : full;
+}
+
 export const DEFAULT_VIEW: GraphView = {
   hops: 1,
   links: "strong",
+  since: "all",
   types: new Set(ALL_NODE_KINDS),
   relations: new Set(ALL_RELATIONS),
 };

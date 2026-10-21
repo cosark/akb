@@ -75,6 +75,7 @@ export function apiToPayload(resp: GraphOverviewResponse): GraphPayload {
     name: n.name || n.uri,
     ...optionalText("title", (n as unknown as { title?: unknown }).title),
     ...optionalText("doc_type", (n as unknown as { doc_type?: unknown }).doc_type),
+    ...optionalText("updated_at", (n as unknown as { updated_at?: unknown }).updated_at),
     kind: normalizeKind(n.resource_type),
     group: groupOf(n.uri),
     degree: n.degree ?? undefined,
@@ -153,7 +154,7 @@ export function strongNeighborhood(
   revealed: Iterable<string> = [],
 ): GraphPayload & StrongScene {
   const explicit = p.edges.filter(e => edgeStrength(e) === "strong" && e.source !== e.target);
-  if (!focus || explicit.length === 0) return { ...p, weak: new Set(), strong: false, reach: new Map(), tree: new Set(), perHop: [] };
+  if (!focus || explicit.length === 0) return { ...p, weak: new Set(), weakDepth: new Map(), strong: false, reach: new Map(), tree: new Set(), perHop: [] };
   const reach = new Map<string, number>([[focus, 0]]);
   // The edge by which the walk first reached each resource: the backbone the map draws at full weight.
   const tree = new Set<string>();
@@ -169,26 +170,50 @@ export function strongNeighborhood(
   }
   // How many resources each step adds, for an honest hop control (the walk may end before the chosen depth).
   const perHop = Array.from({ length: hops }, (_, i) => [...reach.values()].filter(d => d === i + 1).length);
-  const weak = new Set<string>();
+  // Weak neighbours are each strongly reached resource's own: within the chosen depth, a resource's body links show
+  // one step further out (faded), and are never walked.
+  const weakDepth = new Map<string, number>();
   for (const e of p.edges) {
     if (edgeStrength(e) === "strong") continue;
-    const other = e.source === focus ? e.target : e.target === focus ? e.source : undefined;
-    if (other !== undefined && !reach.has(other)) weak.add(other);
+    for (const [from, to] of [[e.source, e.target], [e.target, e.source]] as const) {
+      const depth = reach.get(from);
+      if (depth === undefined || depth >= hops || reach.has(to)) continue;
+      weakDepth.set(to, Math.min(weakDepth.get(to) ?? Infinity, depth + 1));
+    }
   }
+  const weak = new Set(weakDepth.keys());
   const extra = new Set([...revealed].filter(uri => !reach.has(uri) && !weak.has(uri)));
   const keep = new Set([...reach.keys(), ...weak, ...extra]);
   const edges = p.edges.filter(e => {
     if (!keep.has(e.source) || !keep.has(e.target)) return false;
     if (extra.has(e.source) || extra.has(e.target)) return true;
     if (edgeStrength(e) === "strong") return reach.has(e.source) && reach.has(e.target);
-    return e.source === focus || e.target === focus;
+    const near = (a: string, b: string) => (reach.get(a) ?? Infinity) < hops && weak.has(b);
+    return near(e.source, e.target) || near(e.target, e.source);
   });
-  return { nodes: p.nodes.filter(n => keep.has(n.uri)), edges, meta: p.meta, weak, strong: true, reach, tree, perHop };
+  return { nodes: p.nodes.filter(n => keep.has(n.uri)), edges, meta: p.meta, weak, weakDepth, strong: true, reach, tree, perHop };
+}
+
+/** Only resources changed within the last ``since`` days; ``keep`` (the focus, what the reader selected or revealed)
+ *  and resources whose time the server does not report always stay. Applied before the walk, so it never passes
+ *  through a resource outside the window. */
+export function changedWithin(p: GraphPayload, since: GraphView["since"], keep: Iterable<string>, now = Date.now()): GraphPayload {
+  if (since === "all") return p;
+  const cutoff = now - Number(since) * 24 * 60 * 60 * 1000, kept = new Set(keep);
+  const nodes = p.nodes.filter(n => {
+    if (kept.has(n.uri) || !n.updated_at) return true;
+    const at = Date.parse(n.updated_at);
+    return Number.isNaN(at) || at >= cutoff;
+  });
+  const ids = new Set(nodes.map(n => n.uri));
+  return { ...p, nodes, edges: p.edges.filter(e => ids.has(e.source) && ids.has(e.target)) };
 }
 
 export interface StrongScene {
-  /** Resources joined to the focus by a weak connection only (never walked). */
+  /** Resources joined to a strongly reached resource by a weak connection only (never walked). */
   weak: Set<string>;
+  /** Hop at which each weak resource shows: one past the resource whose body link it is. */
+  weakDepth: Map<string, number>;
   /** False when the map has no strong connection, so everything loaded is shown. */
   strong: boolean;
   /** Hop distance of every strongly reached resource (the focus is 0). */
@@ -387,14 +412,20 @@ export async function fetchNeighbors(
 /** Strong links around a focus: the server walks strong edges only, so its node budget goes to the strong
  *  neighbourhood, and one hop of every edge adds the focus's own weak neighbours. */
 export async function fetchStrongNeighbors(vault: string, id: string, hops: 1 | 2 | 3, limit = 200): Promise<GraphPayload> {
-  const [strong, around] = await Promise.all([
-    getGraph(vault, id, hops, limit, "strong"),
-    getGraph(vault, id, 1, 150),
-  ]);
-  const merged = mergeGraph(apiToPayload(strong), apiToPayload(around));
+  const strong = await getGraph(vault, id, hops, limit, "strong");
+  // Every strongly reached resource short of the chosen depth brings its own weak links: one hop of every edge around
+  // it (the focus first; bounded so a large strong neighbourhood stays a handful of requests).
+  const around = [...new Map(strong.nodes.map(n => [n.uri, n.depth ?? 0])).entries()]
+    .filter(([, depth]) => depth < hops).sort((a, b) => a[1] - b[1]).slice(0, WEAK_SOURCES).map(([uri]) => uri);
+  if (!around.includes(id)) around.unshift(id);
+  const rings = await Promise.all(around.map(uri => getGraph(vault, uri, 1, 150)));
+  const merged = rings.reduce((all, ring) => mergeGraph(all, apiToPayload(ring)), apiToPayload(strong));
   const truncated = (strong as { truncated?: unknown }).truncated === true;
   return truncated ? { ...merged, meta: { ...merged.meta, truncated: true } } : merged;
 }
+
+/** How many strongly reached resources contribute their weak links to one neighbourhood. */
+const WEAK_SOURCES = 12;
 
 export function useNeighborhood(
   vault: string,

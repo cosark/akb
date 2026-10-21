@@ -228,6 +228,13 @@ async function expectReadableLabels(page: Page) {
   await expect(page.getByLabel("Pan map", { exact: true })).toBeVisible();
 }
 
+/** The inspector's connections start folded per direction; open both. */
+async function openConnections(inspector: ReturnType<Page["getByRole"]>) {
+  const toggles = inspector.getByRole("button", { expanded: false, name: /^(Outgoing|Incoming)/ });
+  await expect(toggles.first()).toBeVisible();
+  for (let count = await toggles.count(); count > 0; count = await toggles.count()) await toggles.first().click();
+}
+
 async function selectFromSearch(page: Page, name: string) {
   await page.getByRole("combobox", { name: "Find a resource" }).fill(name);
   await page.getByRole("option").filter({ hasText: name }).first().click();
@@ -602,7 +609,8 @@ test("mobile starts in List and offers a usable 3D Graph and inspector", async (
   }
   await list.getByRole("button", { name: /API Gateway/ }).click();
   const inspector = page.getByRole("complementary", { name: "Inspector for API Gateway", exact: true });
-  await expect(inspector.getByRole("button", { name: "Open in vault", exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(inspector.getByRole("button", { name: "Focus", exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(inspector.getByRole("link", { name: "API Gateway", exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("graph-mobile-inspector.png"), animations: "disabled" });
   await inspector.getByRole("button", { name: "Close inspector", exact: true }).click();
   await page.getByRole("button", { name: "Graph", exact: true }).click();
@@ -662,7 +670,7 @@ test("an expansion arriving after focus changes cannot join the new scene", asyn
   await page.getByRole("button", { name: "Load connections", exact: true }).click();
   await expect.poll(() => Boolean(pending)).toBe(true);
   await selectFromSearch(page, scene.nodes[1].name);
-  await page.getByRole("button", { name: "Explore connections", exact: true }).click();
+  await page.getByRole("button", { name: "Focus", exact: true }).click();
   await graphReady(page, 2);
   await expect(page).toHaveURL(new RegExp("entry=" + encodeURIComponent(scene.nodes[1].uri)));
   const lateUri = "akb://fixture/doc/late-response.md";
@@ -686,10 +694,11 @@ test("List stays selected when exploring connections and changing traversal dept
   await graphReady(page, 30);
   await page.getByRole("button", { name: "List", exact: true }).click();
   await selectFromSearch(page, "Service metrics");
-  await page.getByRole("button", { name: "Explore connections", exact: true }).click();
+  await page.getByRole("button", { name: "Focus", exact: true }).click();
   await expect(page).toHaveURL(/entry=/);
   await expect(page.getByRole("button", { name: "List", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "2 hop neighborhood", exact: true }).click();
+  await page.getByRole("button", { name: "Neighborhood depth", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "2 hops", exact: true }).click();
   await expect(page).toHaveURL(/hops=2/);
   await expect(page.getByRole("button", { name: "List", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("region", { name: "Relationship index", exact: true })).toBeVisible();
@@ -707,6 +716,7 @@ test("following a relationship restores its hidden target to the scene", async (
   await expect(page.getByLabel("Visible graph labels", { exact: true }).getByRole("button", { name: "Inspect Service metrics", exact: true })).toHaveCount(0);
   await selectFromSearch(page, "API Gateway");
   const inspector = page.getByRole("complementary", { name: "Inspector for API Gateway", exact: true });
+  await openConnections(inspector);
   await inspector.getByRole("button", { name: "Service metrics", exact: true }).first().click();
   await expect(page.getByRole("complementary", { name: "Inspector for Service metrics", exact: true })).toBeVisible();
   await graphReady(page, 30);
@@ -736,13 +746,15 @@ for (const direction of ["outgoing", "incoming"] as const) {
     await selectFromSearch(page, start.name);
     const inspector = page.getByRole("complementary", { name: `Inspector for ${start.name}`, exact: true });
     // A body link that repeats a strong (explicit) relation with the same resource is listed and drawn once, as the relation.
+    await openConnections(inspector);
     const rows = inspector.getByRole("button", { name: target.name, exact: true });
     await expect(rows).toHaveCount(1);
     await expect(rows).toHaveText(/Explicit relation/);
     await rows.click();
     await expect(canvas).toHaveAccessibleName(/2 resources, 1 relationships/);
-    await page.getByRole("complementary", { name: `Inspector for ${target.name}`, exact: true })
-      .getByRole("button", { name: start.name, exact: true }).filter({ hasText: "Explicit relation" }).click();
+    const targetInspector = page.getByRole("complementary", { name: `Inspector for ${target.name}`, exact: true });
+    await openConnections(targetInspector);
+    await targetInspector.getByRole("button", { name: start.name, exact: true }).filter({ hasText: "Explicit relation" }).click();
     // Loading the server versions (including a repeated load) must not add copies or the repeated body link.
     for (let attempt = 0; attempt < 2; attempt++) {
       await page.getByRole("button", { name: "Load connections", exact: true }).click();
