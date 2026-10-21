@@ -2299,7 +2299,8 @@ export const getGraph = (vault: string, docPath?: string, hops = 2, limit = 50, 
   if (docPath) p.set("uri", docPath.startsWith("akb://") ? docPath : _docUri(vault, docPath));
   else p.set("vault", vault);
   // A neighbourhood walk of one strength (server 0.18+); an older server ignores it and returns every edge.
-  if (docPath && edgeType) p.set("edge_type", edgeType);
+  // A strong walk goes outward (outgoing edges, plus what was derived from a resource), like the map's own walk.
+  if (docPath && edgeType) { p.set("edge_type", edgeType); if (edgeType === "strong") p.set("direction", "outward"); }
   return api<{ nodes: GraphApiNode[]; edges: GraphApiEdge[] }>(`/graph?${p}`);
 };
 
