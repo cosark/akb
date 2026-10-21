@@ -172,7 +172,8 @@ async function expectQuietVaultTrail(page: Page, label: string) {
   await expect(trail.locator('[aria-current="page"]')).toHaveText(isRoot ? "fixture" : label);
   const vault = trail.getByRole("link", { name: isFocusedPage ? "Back to fixture" : "fixture", exact: true });
   await expect(vault).toHaveAttribute("href", "/vault/fixture");
-  await expect(vault.locator(isFocusedPage ? ".lucide-arrow-left" : ".lucide-box")).toBeVisible();
+  await expect(vault.locator(".lucide-box")).toBeVisible();
+  if (isFocusedPage) await expect(page.getByRole("link", { name: "Back to vault fixture", exact: true })).toHaveAttribute("href", "/vault/fixture");
   await expect(trail.getByRole("button")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Navigate in fixture", exact: true })).toHaveCount(0);
   await expect(trail.locator("svg")).toHaveCount(1);

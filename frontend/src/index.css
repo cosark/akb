@@ -1048,6 +1048,12 @@ body::before {
   .document-reader-status { grid-column: 1 / -1; grid-row: 2; min-height: 1.5rem; }
   .document-reader-status:empty { display: none; }
 }
+/* Copy remains available in the actions menu. Reserve the narrowest reader
+   row for its modes, editing, details and the menu without shrinking targets. */
+@container resource-commands (max-width: 20rem) {
+  .document-unified-toolbar:not(.document-edit-toolbar) .document-copy-button { display: none; }
+  .document-unified-toolbar:not(.document-edit-toolbar) [data-slot="resource-command-actions"] { flex-wrap: wrap; justify-content: flex-start; }
+}
 @media (prefers-reduced-motion: reduce) { .document-read-modes::before, .document-panel-sections summary svg { transition: none; } }
 
 /* Presentation-only metadata uses the same measure as the intact Markdown. */

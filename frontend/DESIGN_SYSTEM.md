@@ -1307,6 +1307,9 @@ an `sr-only` summary, never the only signal.
   Failed clipboard access offers manual copying and returns to the invoking
   control. Keep one persistent toolbar copy control across Preview / Raw so
   failed clipboard access retains its manual-copy dialog and return focus.
+  At reader command widths of 20rem or less, the copy shortcut yields to its
+  existing overflow action. Keep the menu visible with full touch targets;
+  allow command wrapping when text scaling needs more room.
   Reading width has no user-facing control. Preview, Raw and loading use one
   automatic centered 52rem measure with container-responsive 16–32px side insets
   and 16px block padding. The first authored block has no extra top margin.
