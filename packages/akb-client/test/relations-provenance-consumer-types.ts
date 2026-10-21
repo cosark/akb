@@ -25,6 +25,7 @@ row?.title satisfies string | undefined;
 row?.doc_type satisfies string | undefined;
 row?.tags satisfies string[] | undefined;
 row?.path satisfies string | undefined;
+row?.updated_at satisfies string | undefined;
 
 const linked: AkbRelationLinkEnvelope = (await client.graph.link({
   source: "akb://proof/doc/a",

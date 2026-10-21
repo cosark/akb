@@ -31,6 +31,8 @@ neighborsData.nodes[0]?.title satisfies string | undefined;
 neighborsData.nodes[0]?.doc_type satisfies string | undefined;
 neighborsData.nodes[0]?.tags satisfies string[] | undefined;
 neighborsData.nodes[0]?.path satisfies string | undefined;
+// When the resource last changed (UTC); a node whose store has no time states none.
+neighborsData.nodes[0]?.updated_at satisfies string | undefined;
 neighborsData.nodes[0]?.resource_type satisfies "doc" | "table" | "file" | undefined;
 neighborsData.edges[0]?.relation satisfies "depends_on" | "related_to" | "implements" | "references" | "attached_to" | "derived_from" | "links_to" | undefined;
 overviewData.kind satisfies "graph_overview";

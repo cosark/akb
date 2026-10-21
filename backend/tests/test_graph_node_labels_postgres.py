@@ -17,6 +17,11 @@ lookup learned to read the head revision's frontmatter.
   states no ``title``; tables and files keep their name;
 * the lookup is one batched statement per call — a graph of 25 neighbours costs
   the same as one of 3;
+* every resolved resource also carries ``updated_at``, when its own store says it
+  last changed, out of those same statements: the head revision's time on a
+  native installation (equal to the resource row's and to what the native
+  document API serves), ``documents.updated_at`` on a legacy one, a table's and a
+  file's own row; a newer write moves it and an unresolved resource states none;
 * a native vault is read through the head revision, a document migrated at
   cutover may lean on its retained catalog row for what its body does not say,
   and a pre-cutover document only the catalog holds still resolves;
@@ -35,6 +40,7 @@ import os
 import tempfile
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +58,8 @@ settings.git_storage_path = tempfile.mkdtemp(prefix="akb-graph-labels-pg-")
 
 from app.api.deps import get_current_user
 from app.api.routes import knowledge
-from app.services import document_counters, kg_service
+from app.repositories.document_repo import DocumentRepository
+from app.services import document_counters, kg_service, native_revision_service
 from app.services.document_service import _compose_markdown
 from app.services.m1_pg_body_store import M1PgBodyStore
 from app.services.native_revision_service import NativeRevisionService
@@ -69,6 +76,31 @@ _DSN = os.environ.get(
 )
 
 A, B, C = "specs/a.md", "specs/b.md", "notes/c.md"
+
+
+# ── Moments ──────────────────────────────────────────────────────────────
+
+# Distinct, with microseconds on the first so truncation shows.
+T1 = datetime(2026, 10, 20, 13, 8, 25, 987654, tzinfo=UTC)
+T2 = datetime(2026, 10, 21, 2, 30, 0, tzinfo=UTC)
+T3 = datetime(2026, 10, 22, 9, 0, 59, 500000, tzinfo=UTC)
+OLD = datetime(2020, 1, 2, 3, 4, 5, tzinfo=UTC)
+
+
+def stamp(moment: datetime) -> str:
+    """The wire form of a moment, written out here and not by the code under test."""
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class _Clock:
+    """Stands in for ``datetime`` inside the native service, so each write the
+    ledger publishes is stamped with a moment the test chose."""
+
+    def __init__(self, moment: datetime) -> None:
+        self.moment = moment
+
+    def now(self, _tz=None) -> datetime:
+        return self.moment
 
 
 # ── Worlds: one vault on each document authority ─────────────────────────
@@ -130,28 +162,35 @@ class World:
     native: NativeRevisionService | None = None
     resource_ids: dict[str, uuid.UUID] = field(default_factory=dict)
     counting: _CountingPool | None = None
+    clock: _Clock | None = None
 
     def uri(self, path: str) -> str:
         return doc_uri(self.vault, path)
 
     async def add_doc(
         self, path: str, title: str | None = "", doc_type: str | None = None, tags: list[str] | None = None,
-        *, vault_id: uuid.UUID | None = None, **frontmatter: Any,
+        *, vault_id: uuid.UUID | None = None, at: datetime | None = None, **frontmatter: Any,
     ) -> None:
         """A document with the given metadata on this world's authority.
 
         ``title=""`` (the default) is a document that has none: the legacy row
-        stores an empty title, the native body states no ``title``.
+        stores an empty title, the native body states no ``title``. ``at`` is the
+        moment the store dates the write by: the row's ``updated_at`` on a legacy
+        world, the clock the ledger reads on a native one (the ``clock`` fixture).
         """
         vault_id = vault_id or self.vault_id
         if self.authority == "legacy":
             async with self.pool.acquire() as conn:
                 await conn.execute(
-                    "INSERT INTO documents (id, vault_id, path, title, doc_type, tags) VALUES ($1, $2, $3, $4, $5, $6)",
-                    uuid.uuid4(), vault_id, path, title or "", doc_type, tags,
+                    "INSERT INTO documents (id, vault_id, path, title, doc_type, tags, updated_at) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, NOW()))",
+                    uuid.uuid4(), vault_id, path, title or "", doc_type, tags, at,
                 )
             return
         assert self.native is not None
+        if at is not None:
+            assert self.clock is not None, "date a native write with the `clock` fixture"
+            self.clock.moment = at
         meta: dict[str, Any] = dict(frontmatter)
         if title:
             meta["title"] = title
@@ -443,6 +482,8 @@ async def test_a_graph_costs_one_label_statement_and_the_same_total_however_many
         graph = await world.graph(hub, hops=1, limit=50)
         assert len(graph["nodes"]) == leaves + 1
         assert {n["name"] for n in graph["nodes"]} == {f"Hub {hub}", *(f"Leaf {i} of {hub}" for i in range(leaves))}
+        # The time of every node came out of that same statement.
+        assert all(isinstance(n.get("updated_at"), str) for n in graph["nodes"])
         walked[hub] = (len(counting.statements), len(counting.label_statements()))
 
     assert walked["small.md"] == walked["big.md"], walked
@@ -581,11 +622,16 @@ async def test_orphan_documents_in_the_overview_are_labelled_like_connected_ones
     await world.add_doc(C, "Lonely note", "reference", ["solo"])
 
     overview = await kg_service.get_overview(world.vault, vault_id=world.vault_id)
+    async with world.pool.acquire() as conn:
+        stored = await conn.fetchval(
+            "SELECT updated_at FROM documents WHERE vault_id = $1 AND path = $2", world.vault_id, C,
+        )
 
     lonely = next(n for n in overview["nodes"] if n["uri"] == world.uri(C))
     assert lonely == {
         "uri": world.uri(C), "resource_type": "doc", "degree": 0, "name": "Lonely note",
         "title": "Lonely note", "doc_type": "reference", "tags": ["solo"], "path": C,
+        "updated_at": stamp(stored),  # its catalog row's time, like a connected document's
     }
     assert overview["orphans_returned"] == 1
 
@@ -602,6 +648,26 @@ async def native_world(monkeypatch):
         built = World("native", pool, name, vault_id, native=NativeRevisionService(pool, payload_store=M1PgBodyStore(pool)))
         built.counting = _route_through(monkeypatch, pool)
         yield built
+
+
+def _pin_clock(world: World, monkeypatch) -> _Clock:
+    """Make every native write on ``world`` land at ``clock.moment``."""
+    clock = _Clock(T1)
+    monkeypatch.setattr(native_revision_service, "datetime", clock)
+    world.clock = clock
+    return clock
+
+
+@pytest.fixture
+def clock(world, monkeypatch) -> _Clock:
+    """The ledger's clock on the ``world`` fixture (inert on a legacy world, which
+    dates a write by the row it inserts)."""
+    return _pin_clock(world, monkeypatch)
+
+
+@pytest.fixture
+def native_clock(native_world, monkeypatch) -> _Clock:
+    return _pin_clock(native_world, monkeypatch)
 
 
 async def test_a_native_vault_has_no_catalog_rows_so_the_title_can_only_come_from_the_body(native_world):
@@ -648,11 +714,15 @@ async def _head(world: World, path: str) -> str:
         )
 
 
-async def _retain_catalog_row(world: World, path: str, title: str, doc_type: str | None, tags: list[str], *, resource_id) -> None:
+async def _retain_catalog_row(
+    world: World, path: str, title: str, doc_type: str | None, tags: list[str], *, resource_id,
+    updated_at: datetime | None = None,
+) -> None:
     async with world.pool.acquire() as conn:
         await conn.execute(
-            "INSERT INTO documents (id, vault_id, path, title, doc_type, tags) VALUES ($1, $2, $3, $4, $5, $6)",
-            resource_id, world.vault_id, path, title, doc_type, tags,
+            "INSERT INTO documents (id, vault_id, path, title, doc_type, tags, updated_at) "
+            "VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, NOW()))",
+            resource_id, world.vault_id, path, title, doc_type, tags, updated_at,
         )
 
 
@@ -765,3 +835,395 @@ async def test_a_legacy_installation_does_not_read_the_native_ledger(monkeypatch
 
     assert {n["name"] for n in graph["nodes"]} == {"Alpha design", "Beta notes"}
     assert not any("native_" in statement for statement in counting.statements)
+
+
+# ── When the resource last changed ───────────────────────────────────────
+#
+# Every resolved resource carries `updated_at`, out of the statements that name
+# it. The store it comes from depends on the resource and on the installation's
+# document authority; what each means is pinned below against real rows.
+
+
+async def _stored_time(world: World, path: str) -> datetime:
+    """When this world's own store says the document at ``path`` last changed."""
+    async with world.pool.acquire() as conn:
+        if world.authority == "legacy":
+            return await conn.fetchval(
+                "SELECT updated_at FROM documents WHERE vault_id = $1 AND path = $2", world.vault_id, path,
+            )
+        return await conn.fetchval(
+            "SELECT updated_at FROM native_resources "
+            "WHERE namespace_id = $1 AND current_path = $2 AND lifecycle = 'live'",
+            world.vault_id, path,
+        )
+
+
+async def _write_newer(world: World, path: str, at: datetime, title: str = "Edited") -> None:
+    """A later edit of an existing document, made the way this authority makes one."""
+    if world.authority == "legacy":
+        async with world.pool.acquire() as conn:
+            doc_id = await conn.fetchval(
+                "SELECT id FROM documents WHERE vault_id = $1 AND path = $2", world.vault_id, path,
+            )
+        await DocumentRepository(world.pool).update(doc_id, title=title, now=at)
+        return
+    assert world.native is not None and world.clock is not None
+    world.clock.moment = at
+    await world.native.replace_text(
+        namespace_id=world.vault_id, surface="document", path=path,
+        payload=_compose_markdown({"title": title}, "edited"), actor="labels-test",
+        mutation_id=uuid.uuid4(), expected_revision_id=await _head(world, path),
+        expected_resource_id=world.resource_ids[path],
+    )
+
+
+async def _add_table_and_file(world: World, *, table_at: datetime, file_at: datetime) -> tuple[str, str]:
+    """A described table and a confirmed file with the given row times; their URIs."""
+    file_id = uuid.uuid4()
+    async with world.pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO vault_tables (vault_id, name, description, updated_at) "
+            "VALUES ($1, 'metrics', 'Key metrics', $2)",
+            world.vault_id, table_at,
+        )
+        await conn.execute(
+            "INSERT INTO vault_files (id, vault_id, kind, upload_state, name, s3_key, updated_at) "
+            "VALUES ($1, $2, 'file', 'confirmed', 'diagram.png', $3, $4)",
+            file_id, world.vault_id, f"k/{file_id}", file_at,
+        )
+    return table_uri(world.vault, "metrics"), file_uri(world.vault, str(file_id))
+
+
+def _times(nodes: list[dict]) -> dict[str, str | None]:
+    return {n["uri"]: n.get("updated_at") for n in nodes}
+
+
+async def test_every_graph_surface_carries_the_time_its_own_store_holds(world, clock):
+    await world.add_doc(A, "Alpha design", "spec", at=T1)
+    await world.add_doc(B, "Beta notes", at=T2)
+    table, file = await _add_table_and_file(world, table_at=T3, file_at=OLD)
+    await world.link(A, B)
+    await world.link(world.uri(A), table, "references")
+    await world.link(world.uri(A), file, "attached_to")
+    want = {
+        world.uri(A): stamp(T1), world.uri(B): stamp(T2), table: stamp(T3), file: stamp(OLD),
+    }
+    assert stamp(T1) == "2026-10-20T13:08:25Z"  # microseconds truncated, not rounded
+
+    neighbourhood = await world.graph(A, hops=1)
+    overview = await kg_service.get_overview(world.vault, vault_id=world.vault_id, include_orphans=False)
+    whole_vault = await kg_service.get_graph(world.vault, None, vault_id=world.vault_id)
+    rows = await world.relations(A)
+    health = await kg_service.get_health(world.vault, vault_id=world.vault_id, hub_threshold=3)
+
+    assert _times(neighbourhood["nodes"]) == want
+    assert _times(overview["nodes"]) == want
+    assert _times(whole_vault["nodes"]) == want
+    assert {row["uri"]: row["updated_at"] for row in rows} == {k: v for k, v in want.items() if k != world.uri(A)}
+    (hub,) = health["hubs"]
+    assert (hub["uri"], hub["updated_at"]) == (world.uri(A), stamp(T1))
+    # The store really holds what the label says (no second source in play).
+    assert stamp(await _stored_time(world, A)) == stamp(T1)
+    assert stamp(await _stored_time(world, B)) == stamp(T2)
+
+
+async def test_a_newer_write_moves_the_time_and_leaves_the_neighbours_alone(world, clock):
+    await world.add_doc(A, "First title", at=T1)
+    await world.add_doc(B, "Beta notes", at=T1)
+    await world.link(A, B)
+    first = _times((await world.graph(A, hops=1))["nodes"])
+    assert first == {world.uri(A): stamp(T1), world.uri(B): stamp(T1)}
+
+    await _write_newer(world, A, T3, title="Second title")
+
+    second = await world.graph(A, hops=1)
+    assert _times(second["nodes"]) == {world.uri(A): stamp(T3), world.uri(B): stamp(T1)}
+    assert next(n for n in second["nodes"] if n["uri"] == world.uri(A))["name"] == "Second title"
+    (seen_from_b,) = await world.relations(B)
+    assert (seen_from_b["uri"], seen_from_b["updated_at"]) == (world.uri(A), stamp(T3))
+    assert stamp(await _stored_time(world, A)) == stamp(T3)
+
+
+async def test_a_move_counts_as_a_change_on_both_authorities(world, clock):
+    """`documents.updated_at` moves with the path, and so does the resource row."""
+    new_path = "moved/a.md"
+    await world.add_doc(A, "Alpha design", at=T1)
+    if world.authority == "legacy":
+        async with world.pool.acquire() as conn:
+            doc_id = await conn.fetchval(
+                "SELECT id FROM documents WHERE vault_id = $1 AND path = $2", world.vault_id, A,
+            )
+            await DocumentRepository(world.pool).update_path(
+                doc_id, new_path, collection_id=None, now=T2, commit_hash="0" * 40, conn=conn,
+            )
+    else:
+        assert world.native is not None
+        clock.moment = T2
+        await world.native.move_text(
+            namespace_id=world.vault_id, surface="document", path=A, path_to=new_path,
+            actor="labels-test", mutation_id=uuid.uuid4(), expected_revision_id=await _head(world, A),
+            expected_resource_id=world.resource_ids[A],
+        )
+
+    graph = await world.graph(new_path, hops=1)
+
+    (node,) = graph["nodes"]
+    assert (node["path"], node["updated_at"]) == (new_path, stamp(T2))
+
+
+# ── REST and MCP: the time is served, and absent where it is unknown ─────
+
+
+async def _delete_behind_the_edge(world: World, path: str) -> None:
+    """The document disappears, its edge stays (nothing has cleaned it up yet)."""
+    if world.authority == "legacy":
+        async with world.pool.acquire() as conn:
+            await conn.execute("DELETE FROM documents WHERE vault_id = $1 AND path = $2", world.vault_id, path)
+        return
+    assert world.native is not None
+    await world.native.delete_resource(
+        namespace_id=world.vault_id, surface="document", path=path, actor="labels-test",
+        mutation_id=uuid.uuid4(), expected_revision_id=await _head(world, path),
+    )
+
+
+async def test_rest_and_mcp_serve_the_time_and_leave_it_out_when_unknown(world, clock, rest, mcp):
+    await world.add_doc(A, "Alpha design", "spec", at=T1)
+    await world.add_doc(B, "Beta notes", at=T2)
+    await world.add_doc(C, "Gone soon", at=T3)
+    await world.link(A, B)
+    await world.link(A, C)
+    await _delete_behind_the_edge(world, C)
+    ghost = world.uri(C)
+    want = {world.uri(A): stamp(T1), world.uri(B): stamp(T2), ghost: None}
+
+    neighbours = (await rest.get("/api/v1/graph", params={"uri": world.uri(A), "hops": 1})).json()
+    whole_vault = (await rest.get("/api/v1/graph", params={"vault": world.vault})).json()
+    overview = (await rest.get("/api/v1/graph/overview", params={"vault": world.vault})).json()
+    relations = (await rest.get("/api/v1/relations", params={"uri": world.uri(A)})).json()
+    health = (await rest.get("/api/v1/graph/health", params={"vault": world.vault, "hub_threshold": 2})).json()
+    mcp_neighbours = await mcp("akb_graph", uri=world.uri(A), hops=1)
+    mcp_whole_vault = await mcp("akb_graph", vault=world.vault)
+    mcp_relations = await mcp("akb_relations", uri=world.uri(A))
+
+    for payload in (neighbours, whole_vault, overview, mcp_neighbours, mcp_whole_vault):
+        assert _times(payload["nodes"]) == want
+        # Left out, not null: a client that tests for the key is not misled.
+        assert "updated_at" not in next(n for n in payload["nodes"] if n["uri"] == ghost)
+    for payload in (relations, mcp_relations):
+        rows = {row["uri"]: row for row in payload["relations"]}
+        assert rows[world.uri(B)]["updated_at"] == stamp(T2)
+        assert "updated_at" not in rows[ghost]
+    (hub,) = health["hubs"]
+    assert (hub["uri"], hub["updated_at"]) == (world.uri(A), stamp(T1))
+
+
+async def test_a_row_time_of_infinity_names_no_moment(legacy_world):
+    """PostgreSQL can hold `infinity`; asyncpg hands it back as the far end of the
+    calendar. Serving that as a date would invent a change in the year 9999."""
+    world = legacy_world
+    await world.add_doc(A, "Alpha design", at=T1)
+    await world.add_doc(B, "Beta notes")
+    async with world.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE documents SET updated_at = 'infinity' WHERE vault_id = $1 AND path = $2", world.vault_id, B,
+        )
+    await world.link(A, B)
+
+    graph = await world.graph(A, hops=1)
+
+    by_uri = {n["uri"]: n for n in graph["nodes"]}
+    assert by_uri[world.uri(A)]["updated_at"] == stamp(T1)
+    assert "updated_at" not in by_uri[world.uri(B)]
+    assert by_uri[world.uri(B)]["name"] == "Beta notes"  # everything else about it is served
+
+
+# ── Table and file: their own rows, authority-independent ────────────────
+
+
+async def test_a_table_and_a_file_are_dated_by_their_own_rows_not_the_ledger(world):
+    """Tables are not documents and the File catalogue is the authority for files
+    on either installation, so neither is dated through the document lookup."""
+    await world.add_doc(A, "Alpha design")
+    table, file = await _add_table_and_file(world, table_at=T3, file_at=T2)
+    await world.link(world.uri(A), table, "references")
+    await world.link(world.uri(A), file, "attached_to")
+
+    graph = await world.graph(A, hops=1)
+
+    by_uri = {n["uri"]: n for n in graph["nodes"]}
+    assert by_uri[table]["updated_at"] == stamp(T3)
+    assert by_uri[file]["updated_at"] == stamp(T2)
+    assert (by_uri[table]["name"], by_uri[file]["name"]) == ("Key metrics", "diagram.png")  # labels unchanged
+
+
+# ── Orphans in the overview ──────────────────────────────────────────────
+
+
+async def test_orphan_tables_and_files_carry_their_own_times_too(world):
+    table, file = await _add_table_and_file(world, table_at=T3, file_at=T2)
+
+    overview = await kg_service.get_overview(world.vault, vault_id=world.vault_id)
+
+    by_uri = {n["uri"]: n for n in overview["nodes"]}
+    assert by_uri[table]["updated_at"] == stamp(T3)
+    assert by_uri[file]["updated_at"] == stamp(T2)
+    assert overview["orphans_returned"] >= 2
+
+
+async def test_a_legacy_overview_with_orphans_never_reads_the_native_ledger(legacy_world):
+    world = legacy_world
+    await world.add_doc(A, "Alpha design")
+    await world.add_doc(C, "Lonely note")  # an orphan
+    await _add_table_and_file(world, table_at=T3, file_at=T2)
+
+    counting = world.counted()
+    overview = await kg_service.get_overview(world.vault, vault_id=world.vault_id)
+
+    assert {n["uri"] for n in overview["nodes"]} >= {world.uri(A), world.uri(C)}
+    assert all("updated_at" in n for n in overview["nodes"])
+    assert not any("native_" in statement for statement in counting.statements)
+
+
+# ── Native authority: where the time comes from ──────────────────────────
+
+
+async def test_the_native_time_is_one_instant_for_the_label_the_head_revision_and_the_document_api(
+    native_world, native_clock,
+):
+    """One value, four readers. The label reads the resource row; the head
+    revision's own `occurred_at` and the time the native document API serves as
+    `updated_at` are the same instant (exact, not to the second), after a create,
+    an edit and a move alike."""
+    world = native_world
+    assert world.native is not None
+
+    async def agree(path: str, at: datetime, action: str) -> None:
+        async with world.pool.acquire() as conn:
+            head = await conn.fetchrow(
+                "SELECT r.updated_at AS resource_time, nr.occurred_at AS head_time, nr.action "
+                "FROM native_resources r JOIN native_revisions nr "
+                "  ON nr.resource_id = r.resource_id AND nr.revision_id = r.head_revision_id "
+                "WHERE r.namespace_id = $1 AND r.current_path = $2 AND r.lifecycle = 'live'",
+                world.vault_id, path,
+            )
+        snapshot = await world.native.get_current_reference(
+            namespace_id=world.vault_id, surface="document", reference=path,
+        )
+        (node,) = (await world.graph(path, hops=1))["nodes"]
+        assert head["action"] == action
+        assert head["resource_time"] == head["head_time"] == snapshot.resource_updated_at == at
+        assert node["updated_at"] == stamp(at)
+
+    await world.add_doc(A, "Alpha design", at=T1)
+    await agree(A, T1, "create")
+
+    native_clock.moment = T2
+    await world.native.replace_text(
+        namespace_id=world.vault_id, surface="document", path=A,
+        payload=_compose_markdown({"title": "Alpha design v2"}, "edited"), actor="labels-test",
+        mutation_id=uuid.uuid4(), expected_revision_id=await _head(world, A),
+        expected_resource_id=world.resource_ids[A],
+    )
+    await agree(A, T2, "replace")
+
+    native_clock.moment = T3
+    await world.native.move_text(
+        namespace_id=world.vault_id, surface="document", path=A, path_to="moved/a.md",
+        actor="labels-test", mutation_id=uuid.uuid4(), expected_revision_id=await _head(world, A),
+        expected_resource_id=world.resource_ids[A],
+    )
+    await agree("moved/a.md", T3, "move")
+
+
+async def test_a_body_that_states_its_own_updated_at_does_not_date_the_node(native_world, native_clock):
+    """A body kept byte for byte from Git states its own `updated_at`; so does any
+    frontmatter an author writes. The moment the head was published is what counts."""
+    world = native_world
+    await world.add_doc(
+        A, "Alpha design", at=T2, updated_at="1999-01-01T00:00:00Z", created_at="1998-01-01T00:00:00Z",
+    )
+
+    node = next(n for n in (await world.graph(A, hops=1))["nodes"] if n["uri"] == world.uri(A))
+
+    assert node["updated_at"] == stamp(T2)
+
+
+async def test_a_retained_catalog_row_never_dates_a_native_document(native_world, native_clock):
+    """Once the ledger holds a document, the row it kept at cutover (frozen) dates
+    nothing, whether that row says earlier or later than the resource."""
+    world = native_world
+    await world.add_doc(A, "Alpha design", at=T2)
+    await world.add_doc(B, "Beta notes", at=T2)
+    await world.link(A, B)
+    await _retain_catalog_row(world, A, "Frozen A", "note", [], resource_id=world.resource_ids[A], updated_at=OLD)
+    future = datetime(2030, 1, 1, tzinfo=UTC)
+    await _retain_catalog_row(world, B, "Frozen B", "note", [], resource_id=world.resource_ids[B], updated_at=future)
+
+    graph = await world.graph(A, hops=1)
+
+    assert _times(graph["nodes"]) == {world.uri(A): stamp(T2), world.uri(B): stamp(T2)}
+
+
+async def test_a_pre_cutover_document_only_the_catalog_holds_is_dated_by_its_row(native_world, native_clock):
+    world = native_world
+    await world.add_doc(A, "Alpha design", at=T2)
+    async with world.pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO documents (id, vault_id, path, title, doc_type, tags, updated_at) "
+            "VALUES ($1, $2, $3, 'Old note', 'note', '{t}', $4)",
+            uuid.uuid4(), world.vault_id, C, OLD,
+        )
+        await conn.execute(
+            "INSERT INTO edges (vault_id, source_uri, target_uri, relation_type, source_type, target_type, kind) "
+            "VALUES ($1, $2, $3, 'related_to', 'doc', 'doc', 'explicit')",
+            world.vault_id, world.uri(A), world.uri(C),
+        )
+
+    graph = await world.graph(A, hops=1)
+
+    assert _times(graph["nodes"]) == {world.uri(A): stamp(T2), world.uri(C): stamp(OLD)}
+
+
+async def test_a_wide_frontmatter_hub_is_dated_by_the_second_read_too(native_world, native_clock):
+    world = native_world
+    children = [f"akb://{world.vault}/coll/hub/doc/child-{i:04d}.md" for i in range(300)]
+    await world.add_doc("hub/index.md", "Hub index", "index", at=T3, related_to=children)
+    await world.add_doc(B, "Beta notes", at=T1)
+    await world.link("hub/index.md", B)
+
+    counting = world.counted()
+    graph = await world.graph("hub/index.md", hops=1)
+
+    assert len(counting.label_statements()) == 2  # the wider read really happened
+    assert _times(graph["nodes"]) == {world.uri("hub/index.md"): stamp(T3), world.uri(B): stamp(T1)}
+
+
+async def test_an_orphan_document_is_dated_by_the_ledger_not_by_its_frozen_row(native_world, native_clock):
+    """The overview enumerates orphan documents from the catalog; on a native
+    installation the row that survived cutover is frozen, so the resource that
+    shares its id dates it — in the same statement. A row the ledger never
+    received keeps its own time."""
+    world = native_world
+    await world.add_doc(A, "Alpha design", at=T1)
+    await world.add_doc(B, "Beta notes", at=T1)
+    await world.link(A, B)
+    await world.add_doc(C, "Lonely note", at=T3)  # edited natively after cutover
+    await _retain_catalog_row(world, C, "Frozen lonely note", "note", [], resource_id=world.resource_ids[C], updated_at=OLD)
+    async with world.pool.acquire() as conn:  # a catalog row the ledger never received
+        await conn.execute(
+            "INSERT INTO documents (id, vault_id, path, title, doc_type, tags, updated_at) "
+            "VALUES ($1, $2, 'notes/never-migrated.md', 'Never migrated', 'note', '{}', $3)",
+            uuid.uuid4(), world.vault_id, T2,
+        )
+
+    counting = world.counted()
+    overview = await kg_service.get_overview(world.vault, vault_id=world.vault_id)
+
+    by_uri = {n["uri"]: n for n in overview["nodes"]}
+    assert by_uri[world.uri(C)]["updated_at"] == stamp(T3)  # not the frozen row's OLD
+    assert by_uri[world.uri("notes/never-migrated.md")]["updated_at"] == stamp(T2)
+    assert by_uri[world.uri(C)]["degree"] == 0 and overview["orphans_returned"] == 2
+    # Three statements enumerate the orphans (documents, tables, files): no lookup per orphan.
+    orphan_statements = [s for s in counting.statements if "ORDER BY" in s and "LIMIT" in s and "scoped_edges" not in s]
+    assert len(orphan_statements) == 3, orphan_statements

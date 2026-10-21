@@ -369,6 +369,8 @@ export interface AkbGraphNode {
   tags?: string[];
   /** Documents only: the vault-relative path. */
   path?: string;
+  /** When the resource last changed, UTC to the second (`2026-10-20T13:08:25Z`); absent when unknown. */
+  updated_at?: string;
   [key: string]: unknown;
 }
 
@@ -447,6 +449,8 @@ export interface AkbRelation {
   tags?: string[];
   /** Documents only: the vault-relative path. */
   path?: string;
+  /** When the resource last changed, UTC to the second (`2026-10-20T13:08:25Z`); absent when unknown. */
+  updated_at?: string;
   [key: string]: unknown;
 }
 

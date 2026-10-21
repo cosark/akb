@@ -18,6 +18,7 @@ import json
 import logging
 import re
 import uuid
+from datetime import UTC, datetime
 from itertools import zip_longest
 from typing import Literal, NamedTuple, cast, get_args
 
@@ -922,7 +923,9 @@ async def get_resource_relations(
     A row also names the resource at its other end: ``name`` is its title when
     it has one, and a document additionally carries ``title`` / ``doc_type`` /
     ``tags`` / ``path`` (see :func:`_batch_resolve_labels`, one batch for the
-    whole result — never a lookup per row).
+    whole result — never a lookup per row). Any resolved resource also carries
+    ``updated_at``, when it last changed (UTC); a row whose resource has no time
+    to give states none.
     """
     if not uri_is_in_vault(resource_uri, vault):
         return []
@@ -1030,7 +1033,8 @@ async def get_graph(
     ``kind`` (implicit | explicit) and ``edge_type`` (strong | weak). Every
     node is named by its title when it has one (``name``); a document also
     carries ``title`` / ``doc_type`` / ``tags`` / ``path`` — see
-    :func:`_batch_resolve_labels`.
+    :func:`_batch_resolve_labels`. A node also carries ``updated_at``, when its
+    resource last changed (UTC), and states none when that is unknown.
 
     ``hops`` is the BFS traversal radius in edge hops — distinct from
     ``akb_browse.depth`` which counts collection-tree levels. 0.3.0
@@ -1128,6 +1132,27 @@ async def get_graph(
     }
 
 
+# The overview's orphan documents are enumerated from the `documents` catalog on
+# either authority (see the CHANGELOG), so their time is the catalog row's — except
+# on a native installation, where a row that survived cutover is no longer written
+# by document edits: the resource that shares its id holds the newer, true time.
+# Nothing native is read on a legacy installation.
+_ORPHAN_DOCS_LEGACY_SQL = (
+    "SELECT path, title, doc_type, tags, updated_at FROM documents "
+    "WHERE vault_id = $1 AND status != 'archived' AND path != ALL($2::text[]) "
+    "ORDER BY created_at DESC LIMIT $3"
+)
+_ORPHAN_DOCS_NATIVE_SQL = (
+    "SELECT d.path, d.title, d.doc_type, d.tags, "
+    "COALESCE(r.updated_at, d.updated_at) AS updated_at "
+    "FROM documents d LEFT JOIN native_resources r "
+    "ON r.resource_id = d.id AND r.namespace_id = d.vault_id "
+    "AND r.surface = 'document' AND r.lifecycle = 'live' "
+    "WHERE d.vault_id = $1 AND d.status != 'archived' AND d.path != ALL($2::text[]) "
+    "ORDER BY d.created_at DESC LIMIT $3"
+)
+
+
 async def _fetch_orphan_nodes(
     conn, vault: str, vault_id, *,
     doc_paths: set[str], table_names: set[str], file_ids: set[str], limit: int,
@@ -1153,21 +1178,21 @@ async def _fetch_orphan_nodes(
     orphan docs never starves orphan tables/files (the motivating case).
     """
     per = max(0, limit)
+    from app.services.document_counters import native_documents_are_authoritative
+
     doc_rows = await conn.fetch(
-        "SELECT path, title, doc_type, tags FROM documents "
-        "WHERE vault_id = $1 AND status != 'archived' AND path != ALL($2::text[]) "
-        "ORDER BY created_at DESC LIMIT $3",
+        _ORPHAN_DOCS_NATIVE_SQL if native_documents_are_authoritative() else _ORPHAN_DOCS_LEGACY_SQL,
         vault_id, list(doc_paths), per,
     )
     tbl_rows = await conn.fetch(
-        "SELECT t.name, t.description, c.path AS coll "
+        "SELECT t.name, t.description, t.updated_at, c.path AS coll "
         "FROM vault_tables t LEFT JOIN collections c ON t.collection_id = c.id "
         "WHERE t.vault_id = $1 AND t.name != ALL($2::text[]) "
         "ORDER BY t.created_at DESC LIMIT $3",
         vault_id, list(table_names), per,
     )
     file_rows = await conn.fetch(
-        "SELECT f.id::text AS id, f.name, c.path AS coll "
+        "SELECT f.id::text AS id, f.name, f.updated_at, c.path AS coll "
         "FROM vault_files f LEFT JOIN collections c ON f.collection_id = c.id "
         "WHERE f.vault_id = $1 AND " + confirmed_file_predicate("f") + " "
         "AND f.id::text != ALL($2::text[]) "
@@ -1178,12 +1203,15 @@ async def _fetch_orphan_nodes(
     # Labelled exactly like a connected node (`_batch_resolve_labels`), from the
     # rows already in hand — an orphan costs no extra query.
     docs = [{"uri": doc_uri(vault, r["path"]), "resource_type": "doc", "degree": 0,
-             **_doc_label(r["path"], title=r["title"], doc_type=r["doc_type"], tags=r["tags"])}
+             **_doc_label(
+                 r["path"], title=r["title"], doc_type=r["doc_type"], tags=r["tags"],
+                 updated_at=r.get("updated_at"),
+             )}
             for r in doc_rows]
     tables = [{"uri": table_uri(vault, r["name"], r["coll"]), "resource_type": "table", "degree": 0,
-               **_table_label(r["name"], r["description"])} for r in tbl_rows]
+               **_table_label(r["name"], r["description"], r.get("updated_at"))} for r in tbl_rows]
     files = [{"uri": file_uri(vault, r["id"], r["coll"]), "resource_type": "file", "degree": 0,
-              **_file_label(r["id"], r["name"])} for r in file_rows]
+              **_file_label(r["id"], r["name"], r.get("updated_at"))} for r in file_rows]
 
     # Round-robin interleave, then cap at `limit` so each type is represented.
     merged = [n for trio in zip_longest(docs, tables, files) for n in trio if n is not None]
@@ -1564,9 +1592,31 @@ async def get_provenance(doc_id: str, *, vault_id: uuid.UUID) -> dict:
 #                     file's name. ``title`` repeats it, so a consumer can read
 #                     ``title`` on any resolved resource.
 #
+# Every resolved resource may also carry ``updated_at``: when it last changed,
+# as UTC to the second (``YYYY-MM-DDTHH:MM:SSZ``). It comes out of the same
+# batched statement as the rest of the label, from the store that owns the
+# resource, and is left out when that store has no time for it:
+#
+#   document, native authority   `native_resources.updated_at`, the moment the head
+#                     revision was published by a create, replace, restore or
+#                     move. Every writer sets it together with the head revision's
+#                     `occurred_at` (`NativeRevisionRepository.set_head`), so the
+#                     two are one value, and it is what the native document API
+#                     serves as the document's `updated_at`. A document only the
+#                     catalog holds (never copied into the ledger) is dated by its
+#                     catalog row instead.
+#   document, legacy authority   `documents.updated_at`: set by create, update,
+#                     edit and move, and by the metadata worker's backfill.
+#   table             `vault_tables.updated_at`: set at creation and by every
+#                     schema change (columns, unique keys, indexes). Writing rows
+#                     does not touch it; the registry keeps no row-level time.
+#   file              `vault_files.updated_at`: set when the upload is confirmed
+#                     and by every later replacement of the stored bytes and
+#                     every size or integrity-metadata update.
+#
 # A resource the vault does not hold gets its identifier as ``name`` (and, for a
 # document, as ``path``) and nothing the catalog would have told: the label never
-# invents a fact. A URI from another vault gets no label at all.
+# invents a fact, a time included. A URI from another vault gets no label at all.
 #
 # WHERE a document's title lives depends on the installation's document
 # authority (`document_counters.native_documents_are_authoritative`):
@@ -1596,9 +1646,15 @@ _LABEL_RETRY_MAX_ROWS = 50
 # `(vault_id, path)` unique key); the second only applies when no native
 # resource holds the path, so a document the native ledger owns is never labelled
 # from a stale catalog row that happens to share its path.
+#
+# `updated_at` follows the same rule: the native resource's own time when the
+# ledger holds the path, and the catalog row's (`dp`, which joins only when no
+# resource does) when it does not. The retained row `dn` never dates a native
+# document: it is frozen at cutover, and the resource row is not.
 _NATIVE_DOC_LABELS_SQL = """
     SELECT req.path AS path,
            r.resource_id AS resource_id,
+           COALESCE(r.updated_at, dp.updated_at) AS updated_at,
            p.byte_size AS body_size,
            substring(p.canonical_bytes FROM 1 FOR $3::int) AS body_slice,
            COALESCE(dn.id, dp.id) AS legacy_id,
@@ -1647,7 +1703,33 @@ def _tag_list(value: object) -> list[str]:
     return [tag for tag in map(_non_blank, items) if tag is not None]
 
 
-def _doc_label(path: str, *, title: object, doc_type: object, tags: object) -> dict:
+# What asyncpg decodes a timestamptz of `infinity` / `-infinity` as. Neither names
+# a moment, so neither dates anything.
+_PG_INFINITIES = (datetime.max, datetime.min)
+
+
+def _utc_stamp(value: object) -> str | None:
+    """A catalog time as ``YYYY-MM-DDTHH:MM:SSZ`` (UTC, to the second).
+
+    None when there is no usable time, so the label states none: absent means
+    unknown, never "long ago". Truncated rather than rounded, so a stamp is never
+    later than the change it dates. A naive value is read as UTC (a TIMESTAMPTZ
+    column never yields one; this only keeps a stray value from being read as
+    local time).
+    """
+    if not isinstance(value, datetime) or value.replace(tzinfo=None) in _PG_INFINITIES:
+        return None
+    try:
+        moment = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        return moment.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    except (OverflowError, ValueError):
+        # An offset can push a value near either end of the range out of it.
+        return None
+
+
+def _doc_label(
+    path: str, *, title: object, doc_type: object, tags: object, updated_at: object = None,
+) -> dict:
     """The label of a document the vault holds."""
     real_title = _non_blank(title)
     label: dict = {"name": real_title or path}
@@ -1656,17 +1738,29 @@ def _doc_label(path: str, *, title: object, doc_type: object, tags: object) -> d
     label["doc_type"] = _non_blank(doc_type) or "note"
     label["tags"] = _tag_list(tags)
     label["path"] = path
+    _stamp_label(label, updated_at)
     return label
 
 
-def _table_label(name: str, description: str | None) -> dict:
+def _table_label(name: str, description: str | None, updated_at: object = None) -> dict:
     shown = description or name
-    return {"name": shown, "title": shown}
+    label = {"name": shown, "title": shown}
+    _stamp_label(label, updated_at)
+    return label
 
 
-def _file_label(file_id: str, name: str | None) -> dict:
+def _file_label(file_id: str, name: str | None, updated_at: object = None) -> dict:
     shown = name or file_id
-    return {"name": shown, "title": shown}
+    label = {"name": shown, "title": shown}
+    _stamp_label(label, updated_at)
+    return label
+
+
+def _stamp_label(label: dict, updated_at: object) -> None:
+    """Add ``updated_at`` to a label when the catalog row had a time to give."""
+    stamp = _utc_stamp(updated_at)
+    if stamp is not None:
+        label["updated_at"] = stamp
 
 
 def _label_native_row(row, metadata: dict | None) -> dict:
@@ -1680,6 +1774,10 @@ def _label_native_row(row, metadata: dict | None) -> dict:
     """
     path = row["path"]
     has_catalog_row = row["legacy_id"] is not None
+    # The time is the row's own, never the frontmatter's: a body kept byte for
+    # byte from Git states whatever it stated, and a revision's body is not the
+    # moment it was published.
+    updated_at = row.get("updated_at")
     if row["resource_id"] is None:
         if not has_catalog_row:
             return {"name": path, "path": path}
@@ -1688,6 +1786,7 @@ def _label_native_row(row, metadata: dict | None) -> dict:
             title=row["legacy_title"],
             doc_type=row["legacy_doc_type"],
             tags=row["legacy_tags"],
+            updated_at=updated_at,
         )
     fm = metadata or {}
 
@@ -1702,6 +1801,7 @@ def _label_native_row(row, metadata: dict | None) -> dict:
         title=stated("title", "legacy_title"),
         doc_type=stated("type", "legacy_doc_type"),
         tags=stated("tags", "legacy_tags"),
+        updated_at=updated_at,
     )
 
 
@@ -1802,13 +1902,14 @@ async def _batch_resolve_labels(
             found = await _native_doc_labels(conn, vault_id, list(doc_uris))
         else:
             rows = await conn.fetch(
-                "SELECT path, title, doc_type, tags FROM documents "
+                "SELECT path, title, doc_type, tags, updated_at FROM documents "
                 "WHERE path = ANY($1::text[]) AND vault_id = $2",
                 list(doc_uris), vault_id,
             )
             found = {
                 r["path"]: _doc_label(
                     r["path"], title=r["title"], doc_type=r.get("doc_type"), tags=r.get("tags"),
+                    updated_at=r.get("updated_at"),
                 )
                 for r in rows
             }
@@ -1820,23 +1921,25 @@ async def _batch_resolve_labels(
 
     if table_uris:
         rows = await conn.fetch(
-            "SELECT name, description FROM vault_tables "
+            "SELECT name, description, updated_at FROM vault_tables "
             "WHERE name = ANY($1::text[]) AND vault_id = $2",
             list(table_uris), vault_id,
         )
-        tables = {r["name"]: _table_label(r["name"], r["description"]) for r in rows}
+        tables = {
+            r["name"]: _table_label(r["name"], r["description"], r.get("updated_at")) for r in rows
+        }
         for tname, spellings in table_uris.items():
             for uri in spellings:
                 labels[uri] = tables.get(tname) or {"name": tname}
 
     if file_uris:
         rows = await conn.fetch(
-            "SELECT id::text, name FROM vault_files f "
+            "SELECT id::text, name, updated_at FROM vault_files f "
             "WHERE id::text = ANY($1::text[]) AND vault_id = $2 "
             "AND " + confirmed_file_predicate("f"),
             list(file_uris), vault_id,
         )
-        files = {r["id"]: _file_label(r["id"], r["name"]) for r in rows}
+        files = {r["id"]: _file_label(r["id"], r["name"], r.get("updated_at")) for r in rows}
         for fid, spellings in file_uris.items():
             for uri in spellings:
                 labels[uri] = files.get(fid) or {"name": fid}

@@ -1163,7 +1163,8 @@ or Markdown link that generated them. Each row also includes `edge_type`
 Each row names the resource at the other end: `name` is its title when it has
 one (a document without a title is named by its path). A document row also
 carries `title` (only when it has a real one), `doc_type`, `tags` and `path`; a
-table or file row carries `title`.""",
+table or file row carries `title`. Each row also has `updated_at` (UTC, e.g.
+`2026-10-20T13:08:25Z`): when that resource last changed; absent if unknown.""",
 
     "akb_graph": """# akb_graph — Knowledge Graph (Cross-Type)
 
@@ -1187,6 +1188,8 @@ Each edge carries `kind` (`explicit` | `implicit`) and `edge_type` (`strong` |
 Each node's `name` is its title when it has one (a document without a title is
 named by its path). A document node also carries `title` (only when it has a
 real one), `doc_type`, `tags` and `path`; a table or file node carries `title`.
+Each node also has `updated_at` (UTC, e.g. `2026-10-20T13:08:25Z`): when its
+resource last changed; absent when unknown.
 
 `edge_type` restricts the walk itself: a neighbour reachable only through an
 edge of the other strength is not visited, so `limit` is spent on the

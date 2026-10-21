@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import re
 from typing import Any
 
 from mcp import Client
@@ -12,6 +13,10 @@ from mcp import Client
 from .conftest import SecondaryMcpSession
 from .runtime import RuntimeContext
 from .test_product_e2e import _call_json, _create_vault
+
+
+# `updated_at` on a graph node or a relation row: UTC to the second.
+_UTC_STAMP = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
 
 
 async def _search_until_found(
@@ -633,8 +638,10 @@ async def test_unicode_graph_grep_and_ownership(
     )
     assert _relation_count(relations) >= 1
     assert [(row["kind"], row["edge_type"]) for row in relations["relations"]] == [("explicit", "strong")]
-    # A row names the document at the other end by its title, not by its path.
+    # A row names the document at the other end by its title, not by its path,
+    # and says when that document last changed (UTC to the second).
     assert [(row["name"], row["title"]) for row in relations["relations"]] == [("Data Model", "Data Model")]
+    assert all(re.fullmatch(_UTC_STAMP, row["updated_at"]) for row in relations["relations"])
     graph = await _call_json(
         mcp_client,
         runtime_session,
@@ -645,6 +652,7 @@ async def test_unicode_graph_grep_and_ownership(
     assert len(graph.get("edges", [])) >= 1
     assert {(edge["kind"], edge["edge_type"]) for edge in graph["edges"]} == {("explicit", "strong")}
     assert {"API Spec", "Data Model"} <= {node["name"] for node in graph["nodes"]}
+    assert all(re.fullmatch(_UTC_STAMP, node["updated_at"]) for node in graph["nodes"])
     assert graph["truncated"] is False
     # An outward walk follows a resource's own edges: `first` depends on `second`, so
     # it reaches it; `second` only has that edge incoming (and not derived_from), so an

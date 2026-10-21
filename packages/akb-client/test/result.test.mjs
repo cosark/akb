@@ -1642,7 +1642,7 @@ test("graph neighbors sends edge_type only when the caller sets it, and serves t
       return new Response(JSON.stringify({
         kind: "graph_neighbors",
         nodes: [
-          { uri: "akb://eng/doc/a", name: "Alpha design", title: "Alpha design", doc_type: "spec", tags: ["graph"], path: "a", resource_type: "doc", depth: 0 },
+          { uri: "akb://eng/doc/a", name: "Alpha design", title: "Alpha design", doc_type: "spec", tags: ["graph"], path: "a", resource_type: "doc", depth: 0, updated_at: "2026-10-20T13:08:25Z" },
           { uri: "akb://eng/doc/b", name: "b", doc_type: "note", tags: [], path: "b", resource_type: "doc", depth: 1 },
         ],
         edges: [{ source: "akb://eng/doc/a", target: "akb://eng/doc/b", relation: "related_to", kind: "explicit", edge_type: "strong" }],
@@ -1663,6 +1663,9 @@ test("graph neighbors sends edge_type only when the caller sets it, and serves t
   assert.equal(data.nodes[0].title, "Alpha design");
   assert.deepEqual(data.nodes[0].tags, ["graph"]);
   assert.equal(data.nodes[1].title, undefined);
+  // The time passes through as the server wrote it, and a node without one has none.
+  assert.equal(data.nodes[0].updated_at, "2026-10-20T13:08:25Z");
+  assert.equal(data.nodes[1].updated_at, undefined);
   assert.equal(all.throwOnError().data.nodes[1].path, "b");
   assert.equal(weak.throwOnError().data.kind, "graph_neighbors");
 });

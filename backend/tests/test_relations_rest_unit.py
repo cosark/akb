@@ -239,6 +239,22 @@ def test_get_relation_serves_edge_type_next_to_kind(client, monkeypatch):
     ]
 
 
+def test_get_relation_serves_updated_at_when_known_and_leaves_it_out_when_not(client, monkeypatch):
+    async def _relations(*_a, **_kwargs):
+        return [
+            {"direction": "outgoing", "relation": "references", "uri": DOC_B, "resource_type": "doc",
+             "kind": "explicit", "edge_type": "strong", "name": "B", "updated_at": "2026-10-20T13:08:25Z"},
+            {"direction": "incoming", "relation": "references", "uri": DOC_B, "resource_type": "doc",
+             "kind": "explicit", "edge_type": "strong", "name": "gone"},
+        ]
+
+    monkeypatch.setattr(knowledge, "get_resource_relations", _relations)
+    rows = client.get("/api/v1/relations", params={"uri": DOC_A}).json()["relations"]
+
+    assert rows[0]["updated_at"] == "2026-10-20T13:08:25Z"
+    assert "updated_at" not in rows[1]
+
+
 # ── _bridge_service_error unit behaviour (dict guard + unmapped code) ─
 
 def test_bridge_unmapped_code_falls_back_to_400_and_logs(caplog):
