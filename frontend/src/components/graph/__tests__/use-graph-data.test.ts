@@ -14,7 +14,7 @@ import {
   strongerOnly,
 } from "../use-graph-data";
 import { docUri } from "@/lib/uri";
-import { ALL_RELATIONS, DEFAULT_VIEW, categoryOf, displayName, edgeId, edgeStrength, shortName, type GraphNode, type GraphEdge } from "../graph-types";
+import { ALL_RELATIONS, DEFAULT_VIEW, categoryOf, displayName, edgeId, edgeStrength, shortName, type GraphNode, type GraphEdge, type RelationKind } from "../graph-types";
 
 describe("apiToPayload", () => {
   it("preserves server degree, traversal depth, and relation source without guessing missing values", () => {
@@ -442,6 +442,19 @@ describe("hopDistances", () => {
 });
 
 describe("strongNeighborhood", () => {
+  it("walks outgoing, incoming or both ways", () => {
+    const s = (source: string, target: string, relation: RelationKind = "related_to"): GraphEdge => ({ source, target, relation, kind: "explicit" });
+    const nodes = ["svc", "team", "inc1", "inc2", "cluster", "pm"].map(uri => ({ uri, name: uri, kind: "document" as const }));
+    const edges = [s("svc", "team"), s("inc1", "svc"), s("inc2", "svc"), s("inc1", "cluster"), s("pm", "inc1", "derived_from")];
+    const reach = (direction: "outgoing" | "incoming" | "all", hops = 2) =>
+      Object.fromEntries(strongNeighborhood({ nodes, edges }, "svc", hops, [], false, direction).reach);
+    expect(reach("outgoing")).toEqual({ svc: 0, team: 1 });
+    // Incoming follows every strong link back: the incidents naming the service, then the postmortem derived from one.
+    expect(reach("incoming")).toEqual({ svc: 0, inc1: 1, inc2: 1, pm: 2 });
+    expect(reach("all")).toEqual({ svc: 0, team: 1, inc1: 1, inc2: 1, pm: 2 });
+    // Incoming never turns outward: the incident's cluster is not part of the service's incoming map.
+    expect(reach("incoming", 3)).not.toHaveProperty("cluster");
+  });
   const node = (uri: string): GraphNode => ({ uri, name: uri, kind: "document" });
   const strong = (source: string, target: string, relation: GraphEdge["relation"] = "related_to"): GraphEdge => ({ source, target, relation, kind: "explicit" });
   const weak = (source: string, target: string): GraphEdge => ({ source, target, relation: "links_to", kind: "implicit" });

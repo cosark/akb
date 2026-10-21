@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { graphCoverage } from "../graph-scene";
+import { graphCoverage, wholeVaultNote } from "../graph-scene";
 
 describe("graphCoverage", () => {
   it("never compares combined resources to connected-only totals", () => {
@@ -26,5 +26,17 @@ describe("graphCoverage", () => {
     const coverage = graphCoverage({ nodesTotal: 0, returned: 0, truncated: false, orphanReturned: 0, orphanTruncated: false });
     expect(coverage.detail).toContain("0 of 0 connected resources loaded");
     expect(coverage.detail).toContain("0 unconnected resources loaded");
+  });
+});
+
+describe("wholeVaultNote", () => {
+  it("says which resources and links the whole Vault leaves out", () => {
+    const note = wholeVaultNote({ nodesTotal: 300, returned: 200 }, 4647);
+    expect(note).toContain("200 best-connected of 300");
+    expect(note).toContain("4,647 body links are hidden");
+    expect(note).toContain("Focus a resource");
+  });
+  it("says nothing when everything is drawn", () => {
+    expect(wholeVaultNote({ nodesTotal: 20, returned: 20 }, 0)).toBe("");
   });
 });

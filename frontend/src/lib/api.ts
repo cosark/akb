@@ -2287,7 +2287,7 @@ export interface GraphApiEdge {
 // `/coll/<path>/doc/<basename>` form transparently.
 import { docUri as _docUri } from "@/lib/uri";
 
-export const getGraph = (vault: string, docPath?: string, hops = 2, limit = 50, edgeType?: "strong" | "weak") => {
+export const getGraph = (vault: string, docPath?: string, hops = 2, limit = 50, edgeType?: "strong" | "weak", direction: "outward" | "both" = "outward") => {
   // Backend 0.3.0 renamed the graph traversal radius from `depth`
   // to `hops` to disambiguate it from `browse?depth` (collection-tree
   // depth). The frontend mirrors the rename so call sites stay
@@ -2299,8 +2299,9 @@ export const getGraph = (vault: string, docPath?: string, hops = 2, limit = 50, 
   if (docPath) p.set("uri", docPath.startsWith("akb://") ? docPath : _docUri(vault, docPath));
   else p.set("vault", vault);
   // A neighbourhood walk of one strength (server 0.18+); an older server ignores it and returns every edge.
-  // A strong walk goes outward (outgoing edges, plus what was derived from a resource), like the map's own walk.
-  if (docPath && edgeType) { p.set("edge_type", edgeType); if (edgeType === "strong") p.set("direction", "outward"); }
+  // A strong walk goes outward (outgoing edges, plus what was derived from a resource), like the map's own walk,
+  // unless the caller asks for both ways (the links that point at a resource as well).
+  if (docPath && edgeType) { p.set("edge_type", edgeType); if (edgeType === "strong" && direction === "outward") p.set("direction", "outward"); }
   return api<{ nodes: GraphApiNode[]; edges: GraphApiEdge[] }>(`/graph?${p}`);
 };
 

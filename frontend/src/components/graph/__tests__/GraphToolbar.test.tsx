@@ -309,29 +309,41 @@ describe("GraphToolbar commands", () => {
     const user = userEvent.setup();
     const { rerender, props } = setup();
     expect(screen.queryByText("1 resource")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Neighborhood depth" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Hop" })).not.toBeInTheDocument();
     rerender({ view: { ...DEFAULT_VIEW, entry: documentNode.uri } });
-    const depth = screen.getByRole("button", { name: "Neighborhood depth" });
-    expect(depth).toHaveTextContent("1 hop");
+    const depth = screen.getByRole("button", { name: "Hop" });
+    expect(depth).toHaveTextContent("1");
     await user.click(depth);
-    await user.click(screen.getByRole("menuitemradio", { name: "3 hops" }));
+    expect(screen.getAllByRole("menuitemradio").map(item => item.textContent)).toEqual(["1", "2", "3", "4", "5"]);
+    await user.click(screen.getByRole("menuitemradio", { name: "3" }));
     const update = vi.mocked(props.onChange).mock.calls.at(-1)![0] as GraphView | ((view: GraphView) => GraphView);
     expect((typeof update === "function" ? update({ ...DEFAULT_VIEW, entry: documentNode.uri }) : update).hops).toBe(3);
     expect(localStorage.getItem("akb:graph:hops")).toBeNull();
   });
 
+  it("switches the strong walk between outgoing, incoming and all links", async () => {
+    const user = userEvent.setup();
+    const { props } = setup({ view: { ...DEFAULT_VIEW, entry: documentNode.uri } });
+    const group = screen.getByRole("group", { name: "Link direction" });
+    expect(screen.getByRole("button", { name: "Outgoing" })).toHaveAttribute("aria-pressed", "true");
+    expect(group).toHaveTextContent("Incoming");
+    await user.click(screen.getByRole("button", { name: "Incoming" }));
+    const update = vi.mocked(props.onChange).mock.calls.at(-1)![0] as GraphView | ((view: GraphView) => GraphView);
+    expect((typeof update === "function" ? update({ ...DEFAULT_VIEW, entry: documentNode.uri }) : update).direction).toBe("incoming");
+  });
+
   it("chooses how recently changed the shown resources are, around a focus and for the whole Vault", async () => {
     const user = userEvent.setup();
     const { rerender, props } = setup();
-    const since = screen.getByRole("button", { name: "Changed within" });
-    expect(since).toHaveTextContent("Any time");
+    const since = screen.getByRole("button", { name: "Period" });
+    expect(since).toHaveTextContent("All time");
     await user.click(since);
-    expect(screen.getAllByRole("menuitemradio").map(item => item.textContent)).toEqual(["Last day", "Last 7 days", "Last 30 days", "Any time"]);
-    await user.click(screen.getByRole("menuitemradio", { name: "Last 7 days" }));
+    expect(screen.getAllByRole("menuitemradio").map(item => item.textContent)).toEqual(["All time", "1 day", "7 days", "30 days"]);
+    await user.click(screen.getByRole("menuitemradio", { name: "7 days" }));
     const update = vi.mocked(props.onChange).mock.calls.at(-1)![0] as GraphView | ((view: GraphView) => GraphView);
     expect((typeof update === "function" ? update(DEFAULT_VIEW) : update).since).toBe("7");
     rerender({ view: { ...DEFAULT_VIEW, entry: documentNode.uri, since: "30" } });
-    expect(screen.getByRole("button", { name: "Changed within" })).toHaveTextContent("Last 30 days");
+    expect(screen.getByRole("button", { name: "Period" })).toHaveTextContent("30 days");
   });
 
   it("toggles strong links around a focus", () => {

@@ -697,8 +697,8 @@ test("List stays selected when exploring connections and changing traversal dept
   await page.getByRole("button", { name: "Focus", exact: true }).click();
   await expect(page).toHaveURL(/entry=/);
   await expect(page.getByRole("button", { name: "List", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "Neighborhood depth", exact: true }).click();
-  await page.getByRole("menuitemradio", { name: "2 hops", exact: true }).click();
+  await page.getByRole("button", { name: "Hop", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "2", exact: true }).click();
   await expect(page).toHaveURL(/hops=2/);
   await expect(page.getByRole("button", { name: "List", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("region", { name: "Relationship index", exact: true })).toBeVisible();
