@@ -194,7 +194,9 @@ it("ignores an old account's collection completion after the verified identity c
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(browseVault).mockResolvedValue({ vault: "my-v", path: "", items: [] });
+  vi.mocked(browseVault).mockImplementation(async (_vault, _collection, _depth, options) => ({ vault: "my-v", path: "", complete: true, next_cursor: null,
+    items: options?.content_type === "collections" ? ["guides/team", "overview", "overview/nested", "overview/private"].map(path => ({ type: "collection", name: path.split("/").at(-1)!, path })) : [],
+  }));
   authenticatedFetchMock.mockResolvedValue({ ok: false });
   getRecentMock.mockResolvedValue({ changes: [] });
   getVaultActivityMock.mockResolvedValue({ activity: [] });
@@ -526,6 +528,14 @@ describe("vault page guide metadata", () => {
       collection: collection.startsWith("overview") ? "" : collection,
     });
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("withholds header creation for a deleted collection context", async () => {
+    vi.mocked(browseVault).mockResolvedValue({ vault: "my-v", path: "deleted", complete: true, next_cursor: null,
+      context: { type: "collection", uri: "akb://team/coll/deleted", path: "deleted", name: "deleted" }, items: [] });
+    renderVault({ initialEntry: "/vault/my-v?collection=deleted" });
+    await screen.findByText(/This collection is unavailable/);
+    expect(screen.queryByRole("button", { name: "New content" })).toBeNull();
   });
 
   it("creates a child collection, refreshes inventory, and keeps the current directory", async () => {

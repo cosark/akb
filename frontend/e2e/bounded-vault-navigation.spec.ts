@@ -45,7 +45,7 @@ for (const width of [375, 1440]) for (const dark of [false, true]) {
     });
     await page.goto("/vault/alpha");
     if (width < 1024) await page.getByRole("button", { name: "Open vault navigation", exact: true }).click();
-    const first = page.getByRole("treeitem", { name: "Document: First loaded document", exact: true });
+    const first = page.getByRole("link", { name: "Document: First loaded document", exact: true });
     await expect(first).toBeVisible();
     await expect(page.getByText(/Only part of this scope is loaded/)).toBeVisible();
     expect(browseRequests).toHaveLength(1);
@@ -59,7 +59,7 @@ for (const width of [375, 1440]) for (const dark of [false, true]) {
     const retry = page.getByRole("button", { name: "Retry loading more items", exact: true });
     await retry.focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("treeitem", { name: "Document: Second loaded document", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Document: Second loaded document", exact: true })).toBeVisible();
     await expect(first).toBeVisible();
     await expect(page.getByText(/Only part of this scope is loaded/)).toHaveCount(0);
     expect(browseRequests.slice(1).map(url => url.searchParams.get("cursor"))).toEqual(["next-position", "next-position"]);

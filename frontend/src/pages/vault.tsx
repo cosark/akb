@@ -52,6 +52,7 @@ import { TooltipText } from "@/components/ui/tooltip-text";
 import { cn } from "@/lib/utils";
 import { useVaultRefresh } from "@/contexts/vault-refresh-context";
 import { useOpenDocumentCreateDialog } from "@/contexts/document-create-dialog-context";
+import { useCollectionProof } from "@/hooks/use-vault-tree";
 import { WorkspacePageHeader } from "@/components/ui/workspace-page-header";
 import { VaultAddressAction } from "@/components/vault-address-action";
 import { VaultCreateMenu } from "@/components/vault-create-menu";
@@ -200,6 +201,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
   const creationCollection = isReservedCollection(requestedCollection) ? "" : requestedCollection;
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
+  const collectionProof = useCollectionProof(name || "", requestedCollection, !checking);
   const { refetchTree } = useVaultRefresh();
   const openCreateDocument = useOpenDocumentCreateDialog();
   const createButtonRef = useRef<HTMLButtonElement>(null);
@@ -357,7 +359,8 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
   const canWrite =
     info?.role === "writer" || info?.role === "admin" || info?.role === "owner";
   const canCreateContent =
-    canWrite && !info?.is_archived && !info?.is_external_git;
+    canWrite && !info?.is_archived && !info?.is_external_git
+    && (!requestedCollection || collectionProof.verified);
 
   // "Just getting started" = no real content yet. A freshly created vault is
   // auto-seeded with an overview/vault-skill.md scaffold, so that one doc

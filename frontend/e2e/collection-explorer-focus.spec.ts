@@ -39,7 +39,7 @@ async function fixture(page: Page, { dark = false, reader = false } = {}) {
       const pending = nextRead; nextRead = undefined;
       if (pending) await pending;
       if (denied) return route.fulfill({ status: 403, json: { detail: "Forbidden" } });
-      json = { archive_scope: "unarchived", items: [
+      json = { archive_scope: "unarchived", complete: true, next_cursor: null, items: [
         ...paths.filter(candidate => !removed || !candidate.startsWith(root)).map(candidate => ({ type: "collection", path: candidate, name: candidate.split("/").at(-1) })),
         { type: "collection", path: siblingPath, name: "other-branch" },
         { type: "collection", path: "outside", name: "outside" },

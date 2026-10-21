@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { browseVault, type ArchiveScope } from "@/lib/api";
 import { useVaultTree } from "../use-vault-tree";
 
-vi.mock("@/lib/api", () => ({ browseVault: vi.fn() }));
+vi.mock("@/lib/api", async original => ({ ...await original<typeof import("@/lib/api")>(), browseVault: vi.fn() }));
 const browse = vi.mocked(browseVault);
 const response = (scope?: ArchiveScope) => ({
   vault: "v", path: "", archive_scope: scope, complete: true, next_cursor: null,

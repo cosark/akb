@@ -53,7 +53,8 @@ export function useVaultTree(
   const query = useInfiniteQuery({
     queryKey: [...vaultTreeQueryKey(user?.user_id, revision, vault ?? "", archiveScope), options.content_type ?? "all", options.collection ?? "", ...(options.depth === undefined ? [] : [options.depth])],
     initialPageParam: undefined as string | undefined,
-    queryFn: async ({ pageParam, client, queryKey, signal }) => {
+    queryFn: async (context) => {
+      const { pageParam, client, queryKey } = context;
       try {
         return await browseVault(vault!, options.collection, options.depth ?? -1, {
           page_size: 100, archive_scope: archiveScope,
@@ -61,7 +62,7 @@ export function useVaultTree(
           ...(pageParam ? { cursor: pageParam } : {}),
         });
       } catch (error) {
-        if (!signal.aborted && error instanceof ApiError && [401, 403].includes(error.status)) {
+        if (!context.signal.aborted && error instanceof ApiError && [401, 403].includes(error.status)) {
           client.getQueryCache().find({ queryKey, exact: true })?.setState({ data: undefined, dataUpdatedAt: 0 });
         }
         throw error;
@@ -85,12 +86,13 @@ export function useVaultTree(
   }, [queryClient, userId, revision, vault]);
 
   useEffect(() => {
+    if (options.enabled === false) return;
     const refresh = (event: Event) => {
       if ((event as CustomEvent<{ vault?: string }>).detail?.vault === vault) refetch();
     };
     window.addEventListener("akb:document-status-changed", refresh);
     return () => window.removeEventListener("akb:document-status-changed", refresh);
-  }, [vault, refetch]);
+  }, [vault, refetch, options.enabled]);
 
   const accessDenied = query.error instanceof ApiError && [401, 403].includes(query.error.status);
   const data = vault && !checking && !accessDenied ? query.data : undefined;

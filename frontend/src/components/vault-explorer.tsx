@@ -453,16 +453,12 @@ export function VaultExplorer({
 
   const scopedTree = useMemo(() => {
     if (!explorationTree || !collectionScope) return explorationTree;
-    const find = (nodes: TreeNode[]): TreeNode | undefined => {
-      for (const node of nodes) {
-        if (node.kind !== "collection") continue;
-        if (node.path === collectionScope) return node;
-        const child = find(node.children ?? []);
-        if (child) return child;
-      }
-    };
-    const collection = find(explorationTree);
-    return collection ? [collection] : [];
+    const trail = findCollectionTrail(explorationTree, collectionScope);
+    const collection = trail.at(-1);
+    if (!collection) return [];
+    // Keep the bounded scope's ancestor chain available for exploration. A
+    // reader reveal must not strand users at a deep Collection with no way up.
+    return trail.slice(0, -1).reduceRight<TreeNode[]>((children, node) => [{ ...node, children }], [collection]);
   }, [explorationTree, collectionScope]);
 
   const kindFiltered = useMemo(() => {

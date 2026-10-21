@@ -138,6 +138,28 @@ describe("Vault collection workspace", () => {
     expect(within(trail).queryByText("private")).toBeNull();
   });
 
+  it("does not expose a fabricated missing context through search", async () => {
+    vi.mocked(browseVault).mockImplementation(async (_vault, collection) => ({ vault: "team", path: collection || "", complete: true, next_cursor: null,
+      context: { type: "collection", uri: "akb://team/coll/deleted", path: "deleted", name: "deleted" }, items: [],
+    }));
+    mount("/vault/team?collection=deleted");
+    await screen.findByText(/This collection is unavailable/);
+    await userEvent.type(screen.getByRole("textbox", { name: "Find a collection" }), "deleted");
+    expect(screen.getByText(/This collection is unavailable/)).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Open collection deleted" })).toBeNull();
+  });
+
+  it("omits exact inventory for a partial page and loads the next page explicitly", async () => {
+    vi.mocked(browseVault).mockResolvedValueOnce({ vault: "team", path: "", complete: false, next_cursor: "next", items });
+    const user = userEvent.setup();
+    mount();
+    const card = await screen.findByRole("link", { name: "Open collection guides" });
+    expect(card).not.toHaveTextContent("1 document");
+    expect(vi.mocked(browseVault)).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Load more items" }));
+    await waitFor(() => expect(vi.mocked(browseVault)).toHaveBeenLastCalledWith("team", undefined, -1, expect.objectContaining({ page_size: 100, cursor: "next" })));
+  });
+
   it("does not inherit another account's cached tree while access is being verified", async () => {
     const view = mount();
     await screen.findByRole("link", { name: "Open collection guides" });

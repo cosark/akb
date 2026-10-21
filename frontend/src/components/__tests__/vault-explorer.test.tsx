@@ -260,19 +260,21 @@ describe("collection exploration", () => {
     expect(within(context).getByRole("button", { name: "Collection exploration path" })).toHaveTextContent("design");
     expect(within(context).getByRole("button", { name: "Back to collection architecture" })).toHaveFocus();
     expect(container.querySelector('[data-sig="collection:architecture/design"]')).toBeNull();
-    expect(screen.getByRole("link", { name: /Document:\s*Shared decision/ })).toHaveAttribute("aria-current", "page");
+    expect(await screen.findByRole("link", { name: /Document:\s*Shared decision/ })).toHaveAttribute("aria-current", "page");
     expect(screen.queryByRole("link", { name: /Document:\s*Shared old decision/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Reset filters" }));
     expect(context).toBeVisible();
     expect(screen.getByRole("searchbox", { name: "Filter resources" })).toHaveValue("");
     await user.click(within(context).getByRole("button", { name: "Back to collection architecture" }));
-    expect(screen.getByRole("button", { name: "design" })).toHaveFocus();
+    expect(within(context).getByRole("button", { name: "Back to all collections" })).toHaveFocus();
+    await screen.findByRole("button", { name: "design" });
     expect(screen.getByRole("button", { name: "design-old" })).toBeVisible();
     await user.click(within(context).getByRole("button", { name: "Collection exploration path" }));
     await user.click(screen.getByRole("menuitem", { name: "All collections" }));
     expect(screen.queryByRole("navigation", { name: "Collection exploration" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "guides" })).toBeVisible();
-    expect(browseMock.mock.calls.length).toBe(reads);
+    expect(browseMock.mock.calls.length).toBeGreaterThan(reads);
+    expect(browseMock.mock.calls.every(call => call[3]?.page_size === 100 && !call[3]?.cursor)).toBe(true);
   });
 
   it("does not reset explicit exploration because a different document is already open", async () => {
@@ -314,13 +316,20 @@ describe("collection exploration", () => {
     </MemoryRouter>);
     await explore(user, "architecture");
     let finish!: (value: typeof sample) => void;
-    browseMock.mockReturnValueOnce(new Promise<typeof sample>(resolve => { finish = resolve; }));
+    await screen.findByRole("link", { name: /Document:\s*Schema/ });
+    let pending = true;
+    browseMock.mockImplementation((_vault: string, _collection: string, depth: number) => {
+      if (depth === -1 && pending) { pending = false; return new Promise<typeof sample>(resolve => { finish = resolve; }); }
+      return Promise.resolve(sample);
+    });
     await user.click(screen.getByRole("button", { name: "Refresh content" }));
     await user.click(screen.getByRole("link", { name: "Open new resource" }));
     expect(screen.getByRole("navigation", { name: "Collection exploration" })).toBeVisible();
-    await act(async () => finish({ ...sample, items: [...sample.items, { type: "document", name: "New resource", path: "guides/new.md" }] }));
+    const updated = { ...sample, items: [...sample.items, { type: "document", name: "New resource", path: "guides/new.md" }] };
+    browseMock.mockResolvedValue(updated);
+    await act(async () => finish(updated));
     await waitFor(() => expect(screen.queryByRole("navigation", { name: "Collection exploration" })).not.toBeInTheDocument());
-    expect(screen.getByRole("link", { name: /Document:\s*New resource/ })).toHaveAttribute("aria-current", "page");
+    expect(await screen.findByRole("link", { name: /Document:\s*New resource/ })).toHaveAttribute("aria-current", "page");
   });
 });
 
