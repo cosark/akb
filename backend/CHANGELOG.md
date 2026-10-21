@@ -12,7 +12,8 @@ specifically; the proxy has its own log in
 - Bound routine Table browsing to a page plus one row, with an explicit exact
   count action and a schema-only catalog option. Existing counted API defaults
   and row/ACL contracts are unchanged; unknown counts are no longer rendered
-  as zero in Table deletion warnings.
+  as zero in Table deletion warnings. A denied recount discards the previous
+  count snapshot so a later transient failure cannot restore denied metadata.
 - Index live document updates and the default stable Table page order, including
   existing registered tables (migrations 117–118). This avoids catalog-wide
   sorting and large-table sorts during ordinary navigation. Initial index builds

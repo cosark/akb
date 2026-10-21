@@ -175,3 +175,17 @@ for the separate transient/cancellation follow-up, not evidence of a hung DB.
 
 PostgreSQL documents the [linear work of an exact full-table count](https://www.postgresql.org/docs/16/functions-aggregate.html)
 and how a matching [B-tree avoids sorting the complete input for ORDER BY/LIMIT](https://www.postgresql.org/docs/16/indexes-ordering.html).
+
+## Review validation on current main
+
+The integrated branch preserves the shared denied-query cache boundary. A
+recount returning 403/404 now clears the previous successful count, and a later
+503 cannot resurrect it. A fresh authorized count may populate it again;
+regressions cover that sequence without a focus change or access-revision bump.
+
+The six catalog/page/count/CAS/ACL HTTP contracts run in the mandatory
+`backend/tests/mcp_e2e/test_read_capacity_e2e.py` runtime lane. Every case uses a
+new non-admin owner; Reader and Outsider actors are minted through the same
+isolated API. No optional endpoint or actor PAT can skip this coverage. The
+historical large-corpus measurements above are separate from this review's
+focused correctness validation; they are not claimed as newly rerun results.

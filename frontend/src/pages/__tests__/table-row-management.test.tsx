@@ -237,6 +237,41 @@ describe("table row management", () => {
     await screen.findByText("1–1 · 1 row counted");
   });
 
+  it.each([403, 404])("clears a denied count (%i) and does not revive it on transient retry", async status => {
+    vaultInfoMock.mockResolvedValue({ role: "reader" });
+    let counts = 0;
+    listRowsMock.mockImplementation(async (_vault, _table, options) => {
+      if (options.countExact) {
+        counts += 1;
+        if (counts === 2) throw new ApiError("Denied", status, {});
+        if (counts === 3) throw new ApiError("Unavailable", 503, {});
+      }
+      return {
+        kind: "table_query", columns: ["id", "title"],
+        items: options.countExact ? [] : [{ id: rowId, title: "API outage" }],
+        total: options.countExact ? (counts === 1 ? 121 : 122) : 1,
+      };
+    });
+    const user = userEvent.setup();
+    // Access is revoked remotely while this tab stays foreground: no revision
+    // change or navigation can clear the prior successful count for us.
+    renderTable();
+    await user.click(await screen.findByRole("button", { name: "Count rows" }));
+    await screen.findByText("1–1 · 121 rows counted");
+    expect(screen.getByRole("button", { name: "Last counted page" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Recount rows" }));
+    await screen.findByText(/Could not count rows/);
+    await screen.findByText("1–1 · total not counted");
+    expect(screen.queryByRole("button", { name: "Last counted page" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Count rows" }));
+    await waitFor(() => expect(counts).toBe(3));
+    expect(screen.getByText("1–1 · total not counted")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Last counted page" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Count rows" }));
+    await screen.findByText("1–1 · 122 rows counted");
+    expect(screen.getByRole("button", { name: "Last counted page" })).toBeInTheDocument();
+  });
+
   it("does not bounce to an older counted page when another writer added rows", async () => {
     listRowsMock.mockImplementation(async (_vault, _table, options) => ({
       kind: "table_query", columns: ["id", "title"],

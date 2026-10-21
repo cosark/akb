@@ -188,12 +188,12 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
   const countQueryKey = ["vault-table-count", vault, table, accountScope, accessRevision, queryState.filters];
   const countQuery = useQuery({
     queryKey: countQueryKey,
-    queryFn: async ({ signal }) => (await listVaultTableRows(vault!, table!, {
+    queryFn: ({ queryKey, signal }) => readWithAccessBoundary(queryClient, queryKey, async () => (await listVaultTableRows(vault!, table!, {
       limit: 0,
       filters: queryState.filters.map(compileTableFilter),
       countExact: true,
       signal,
-    })).total,
+    })).total, signal),
     enabled: false,
     gcTime: 0,
     retry: false,

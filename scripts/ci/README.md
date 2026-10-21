@@ -121,6 +121,14 @@ authority, credential rotation/revocation and denial of historical reads/replays
 after uninstall even when an unrelated installation becomes active. They use
 the mandatory descriptor/reset/PAT lifecycle without optional credentials.
 
+`test_read_capacity_e2e.py` requires six real HTTP checks for counted and
+schema-only catalogs, page/sentinel ordering, exact and filtered count-only
+requests, row CAS, index/schema compatibility, and Reader/Outsider ACLs.
+Each case uses the descriptor/reset lifecycle and mints a real non-admin owner;
+ACL actors are also created through the isolated API, with no optional PATs or
+endpoint variables. Live-PG tests separately verify that schema-only catalogs
+never call row counting and both fresh/existing Tables receive the page index.
+
 The detailed security suite also covers declarative table constraints and
 indexes, stable permission envelopes, private-document and graph boundaries,
 SQL failure-state integrity, and PAT write scopes. The PG-native ACL backstops
