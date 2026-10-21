@@ -104,6 +104,7 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
   // cannot cut the walk; what the reader loaded or followed (the overlay) always stays.
   // Weak neighbours of a focus are folded into a count unless there are few of them or the reader opens them.
   const [weakChoice, setWeakChoice] = useState<boolean | undefined>(undefined);
+  const dateExempt = view.since === "all" ? undefined : view.selected;
   const scene = useMemo(() => {
     const empty: StrongScene = { weak: new Set(), weakDepth: new Map(), strong: false, reach: new Map(), tree: new Set(), perHop: [] };
     const revealed = overlay.nodes.map(n => n.uri);
@@ -120,10 +121,10 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
     }
     return { ...visible, weak: strong.weak, weakDepth: strong.weakDepth, strong: strong.strong, reach: strong.reach, tree: strong.tree, perHop: strong.perHop, overview: false };
   },
-    // Selection is deliberately excluded: it cannot invalidate renderer data.
+    // Selection is deliberately excluded (it cannot invalidate renderer data), except that the date filter exempts
+    // the selection, so a selection change matters while a window is set (dateExempt).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    // The date filter exempts the selection, so a selection change matters only while a window is set.
-    [merged, overlay, filterKey, hidden, hideOrphans, view.entry, entryNode, view.links, view.hops, view.since, view.since === "all" ? undefined : view.selected]);
+    [merged, overlay, filterKey, hidden, hideOrphans, view.entry, entryNode, view.links, view.hops, view.since, dateExempt]);
   const weakShown = weakChoice ?? scene.weak.size <= 5;
   const displayed = useMemo(() => {
     if (weakShown || !scene.strong || !view.entry) return scene;
