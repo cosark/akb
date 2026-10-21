@@ -64,19 +64,21 @@ def test_other_publications_are_independent():
 
 
 def test_capacity_never_evicts_an_active_ip_lock_or_the_global_budget():
-    budget = rl._Budget(ips={
+    budget = rl._Budget(total=rl._E(failures=20, last=_NOW), ips={
         str(i): rl._E(failures=6, locked_until=_NOW + 30, last=_NOW)
         for i in range(rl._MAX_IP_ENTRIES)
     })
     assert rl._reserve(budget, "new-ip", _NOW) == 30
     assert len(budget.ips) == rl._MAX_IP_ENTRIES
     assert "new-ip" not in budget.ips
+    assert budget.total == rl._E(failures=20, last=_NOW)
     budget.ips["old-unlocked"] = budget.ips.pop("0")
     budget.ips["old-unlocked"].locked_until = _NOW - 1
     assert rl._reserve(budget, "new-ip", _NOW) == 0
     assert len(budget.ips) == rl._MAX_IP_ENTRIES
     assert "old-unlocked" not in budget.ips
     assert "1" in budget.ips
+    assert budget.total == rl._E(failures=21, last=_NOW)
 
 
 def test_serialization_preserves_accounting_without_a_process_cache():

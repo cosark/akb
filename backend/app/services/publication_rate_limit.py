@@ -8,7 +8,9 @@ process-local fallback is used.
 The existing accounting is unchanged: five free per-IP / thirty per-publication
 attempts; the crossing attempt still verifies, and followers back off. Correct
 passwords refund their reservation and unlock the counter. A quiet hour decays
-counts. Manager and HMAC-token bypasses remain at the route layer.
+counts. Managers bypass a returned lockout at the route layer, but reservation
+store failure returns 503 for every password request. Valid HMAC-token reads
+skip password accounting entirely.
 
 Only live protected publications allocate state. Rows cascade with publication
 deletion, and each row holds at most 128 pseudonymized IP entries. Expired IP

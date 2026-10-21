@@ -41,6 +41,32 @@ fails the gate. `EMPTY_COUNT_ALLOWED` is intentionally empty. Hosted CI,
 the isolated runtime, and `scripts/run_canonical_e2e.sh` all execute this same
 runner, so there is no second suite array to keep synchronized.
 
+### Publication replica budget phase
+
+Before the MCP/shell suites, every isolated `gate` runs
+`publication_budget_probe.py` against two distinct runtime-owned API processes
+sharing PostgreSQL. The supervisor starts an API-only replica, checks readiness,
+and holds the fixture reset lock until that replica has acknowledged graceful
+shutdown. Missing setup or failed startup, assertions, replacement or drain fail
+the gate; there are no optional credentials or single-origin fallbacks.
+
+Five required groups check publication-wide attempts distributed 16/15 between
+processes, concurrent admission, correct-password refunds at both boundaries,
+actual replica process replacement with unchanged storage and retained backoff
+escalation, and a deliberately held budget row lock. Contention must return 503
+for both anonymous and manager password attempts while valid-token access and
+another publication continue to work; releasing the lock restores access.
+Completion evidence records routing counts, statuses, PID/launch identities and
+storage generation, never passwords or tokens. Replacement reuses the same
+port and database without a fixture reset. The replica is drained before any
+MCP fixture reset or shell suite starts; failure leaves the fixture unavailable
+and retains process ownership for cleanup.
+
+The live-PG CI lane additionally requires `test_publication_budget_postgres.py`
+for atomic counters, decay, bounded state, deletion/expiry and contention.
+Migration 116 must be installed before serving the new API. A rolling upgrade
+has installation-wide protection only after every old API replica is replaced.
+
 ### MCP pytest behavior suite
 
 The authenticated MCP behavior suite runs through the official Python SDK.
