@@ -761,9 +761,12 @@ an `sr-only` summary, never the only signal.
   still operable. These are independent pressed-state filter buttons,
   not tabs; hidden kinds retain their counts and remain recoverable. Counts
   describe the loaded map, not an assumed complete Vault inventory. A
-  focused-neighborhood breadcrumb and hop control (1–3) appear around a focus;
-  a selection in the whole-Vault map offers the same 1–3 choice, which focuses
-  it. Around a focus the canvas colours each resource by its hop distance —
+  focused-neighborhood breadcrumb and a hop dropdown (1, 2 or 3 hops) appear
+  around a focus; a "Changed within" dropdown (last day, 7 days, 30 days, any
+  time) sits beside it and in the whole-Vault strip, keeping only resources
+  whose `updated_at` falls in the window (the focus, the selection, revealed
+  resources and resources without a reported time always stay), applied
+  before the walk so it never passes through a hidden resource. Around a focus the canvas colours each resource by its hop distance —
   focus `cat-5`, then `cat-1`, `cat-2`, `cat-3` for 1, 2 and 3 hops, a
   lightness-ramped run of the categorical scale — and shape alone carries the
   kind; a compact hop legend beside the control names each colour, and the
@@ -772,17 +775,20 @@ an `sr-only` summary, never the only signal.
   follows explicit relations outward from the focus (and `derived_from` back
   to what was derived from it), so shared context such as a cluster ends the
   walk instead of pulling in every other resource that shares it; the focus's
-  own body links are weak neighbours that are never followed: with more than
+  own body links, and those of every strongly reached resource short of the
+  chosen depth (one step further out), are weak neighbours that are never
+  followed: with more than
   five they fold into a "Show N weak links" control (with five or fewer they
   show, faded), and while folded no weak line is drawn. Around a focus the map
   is concentric: the focus at the centre and each strongly reached resource on
   its hop's ring (weak neighbours just outside the deepest ring); only the
   walk's backbone (the edge that first reached each resource) pulls in the
   layout and draws at full weight, other strong edges among the kept resources
-  stay faint until a resource is selected. Each hop button shows what it adds
-  ("2 +1"), and a note says where the strong walk ends. Labels are titles (the
-  file name without path or extension when the server has no title), at most
-  two lines, prefixed by a muted category (document type, else collection);
+  stay faint until a resource is selected. A note says where the strong walk
+  ends. Labels are titles (the file name without path or extension when the
+  server has no title) cut to 15 characters on one line (the inspector and
+  tooltip carry the full title), prefixed by a muted category (document type,
+  else collection) when the map holds more than one;
   around a focus they sit on the far side of their dot from the focus and are
   prioritised by distance. Turning it off (`links=all`) shows every loaded
   connection. A Vault without explicit relations around the focus shows all
@@ -826,8 +832,9 @@ an `sr-only` summary, never the only signal.
   buttons and canvas keyboard shortcuts provide alternatives. Pinning is
   explicit. WebGL2 initialization/context failure offers List instead
   of silently substituting another renderer. Selecting a node opens a 22rem overlay inspector and never
-  narrows the canvas. The inspector prioritizes title/location, Preview / Open
-  in vault, Explore connections and Load connections; summary and secondary
+  narrows the canvas. The inspector prioritizes the title (a link that opens the resource in the vault)
+  and location, Focus (the primary action: make it the centre of the map),
+  Preview and Load connections; Outgoing and Incoming connections start folded; summary and secondary
   copy/pin/hide tools remain subordinate. Whole-Vault search changes to a focused neighborhood while click
   selection remains highlight-only. A first-class List view is the keyboard and
   assistive-technology source of truth, progressively revealing at most 50 rows

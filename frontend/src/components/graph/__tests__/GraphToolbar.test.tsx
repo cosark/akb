@@ -287,21 +287,33 @@ describe("GraphToolbar commands", () => {
     expect(props.onRearrange).toHaveBeenCalledOnce();
   });
 
-  it("only exposes neighborhood controls when focused, without a permanent resource-count row", () => {
-    const { rerender } = setup();
+  it("only exposes neighborhood controls when focused, without a permanent resource-count row", async () => {
+    const user = userEvent.setup();
+    const { rerender, props } = setup();
     expect(screen.queryByText("1 resource")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "1 hop neighborhood" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Neighborhood depth" })).not.toBeInTheDocument();
     rerender({ view: { ...DEFAULT_VIEW, entry: documentNode.uri } });
-    expect(screen.getByRole("button", { name: "1 hop neighborhood" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "3 hop neighborhood" }));
+    const depth = screen.getByRole("button", { name: "Neighborhood depth" });
+    expect(depth).toHaveTextContent("1 hop");
+    await user.click(depth);
+    await user.click(screen.getByRole("menuitemradio", { name: "3 hops" }));
+    const update = vi.mocked(props.onChange).mock.calls.at(-1)![0] as GraphView | ((view: GraphView) => GraphView);
+    expect((typeof update === "function" ? update({ ...DEFAULT_VIEW, entry: documentNode.uri }) : update).hops).toBe(3);
     expect(localStorage.getItem("akb:graph:hops")).toBeNull();
   });
 
-  it("lets a selection choose its neighborhood depth directly", () => {
-    const { props } = setup({ view: { ...DEFAULT_VIEW, selected: documentNode.uri } });
-    expect(screen.queryByRole("button", { name: "1 hop neighborhood" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "2 hop neighborhood of the selection" }));
-    expect(props.onChange).toHaveBeenCalledWith(expect.objectContaining({ entry: documentNode.uri, hops: 2, selected: documentNode.uri }));
+  it("chooses how recently changed the shown resources are, around a focus and for the whole Vault", async () => {
+    const user = userEvent.setup();
+    const { rerender, props } = setup();
+    const since = screen.getByRole("button", { name: "Changed within" });
+    expect(since).toHaveTextContent("Any time");
+    await user.click(since);
+    expect(screen.getAllByRole("menuitemradio").map(item => item.textContent)).toEqual(["Last day", "Last 7 days", "Last 30 days", "Any time"]);
+    await user.click(screen.getByRole("menuitemradio", { name: "Last 7 days" }));
+    const update = vi.mocked(props.onChange).mock.calls.at(-1)![0] as GraphView | ((view: GraphView) => GraphView);
+    expect((typeof update === "function" ? update(DEFAULT_VIEW) : update).since).toBe("7");
+    rerender({ view: { ...DEFAULT_VIEW, entry: documentNode.uri, since: "30" } });
+    expect(screen.getByRole("button", { name: "Changed within" })).toHaveTextContent("Last 30 days");
   });
 
   it("toggles strong links around a focus", () => {

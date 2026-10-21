@@ -11,7 +11,7 @@ import { GraphToolbar, type GraphDisplayMode } from "@/components/graph/GraphToo
 import { queryToView, viewToQuery } from "@/components/graph/graph-state";
 import { graphCoverage } from "@/components/graph/graph-scene";
 import { ALL_NODE_KINDS, ALL_RELATIONS, RELATION_LABEL, displayName, edgeStrength, kindToSegment, type GraphEdge, type GraphNode, type GraphView, type RelatedRef } from "@/components/graph/graph-types";
-import { degreeMap, docIdFromUri, fetchNeighbors, hopDistances, mergeGraph, strongNeighborhood, useFullGraph, useNeighborhood, visibleGraph, type GraphPayload, type StrongScene } from "@/components/graph/use-graph-data";
+import { changedWithin, degreeMap, docIdFromUri, fetchNeighbors, hopDistances, mergeGraph, strongNeighborhood, useFullGraph, useNeighborhood, visibleGraph, type GraphPayload, type StrongScene } from "@/components/graph/use-graph-data";
 import type { GraphDimension } from "@/components/graph/graph-spatial-layout";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
@@ -105,20 +105,22 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
   // Weak neighbours of a focus are folded into a count unless there are few of them or the reader opens them.
   const [weakChoice, setWeakChoice] = useState<boolean | undefined>(undefined);
   const scene = useMemo(() => {
-    const empty: StrongScene = { weak: new Set(), strong: false, reach: new Map(), tree: new Set(), perHop: [] };
+    const empty: StrongScene = { weak: new Set(), weakDepth: new Map(), strong: false, reach: new Map(), tree: new Set(), perHop: [] };
+    const revealed = overlay.nodes.map(n => n.uri);
+    const recent = changedWithin(merged, view.since, [...revealed, ...(entryNode ? [entryNode.uri] : []), ...(view.selected ? [view.selected] : [])]);
     const strong = view.entry && entryNode && view.links === "strong"
-      ? strongNeighborhood(merged, entryNode.uri, view.hops, overlay.nodes.map(n => n.uri))
-      : { ...merged, ...empty };
+      ? strongNeighborhood(recent, entryNode.uri, view.hops, revealed)
+      : { ...recent, ...empty };
     const visible = visibleGraph(strong, view, hidden, hideOrphans);
     if (!view.entry && view.links === "strong" && visible.edges.some(e => edgeStrength(e) === "strong")) {
       // The whole Vault draws its strong structure; body links would bury it.
       return { ...visible, ...empty, strong: true, edges: visible.edges.filter(e => edgeStrength(e) === "strong"), overview: true };
     }
-    return { ...visible, weak: strong.weak, strong: strong.strong, reach: strong.reach, tree: strong.tree, perHop: strong.perHop, overview: false };
+    return { ...visible, weak: strong.weak, weakDepth: strong.weakDepth, strong: strong.strong, reach: strong.reach, tree: strong.tree, perHop: strong.perHop, overview: false };
   },
     // Selection is deliberately excluded: it cannot invalidate renderer data.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [merged, overlay, filterKey, hidden, hideOrphans, view.entry, entryNode, view.links, view.hops]);
+    [merged, overlay, filterKey, hidden, hideOrphans, view.entry, entryNode, view.links, view.hops, view.since]);
   const weakShown = weakChoice ?? scene.weak.size <= 5;
   const displayed = useMemo(() => {
     if (weakShown || !scene.strong || !view.entry) return scene;
@@ -142,7 +144,7 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
     if (!view.entry || !entryNode) return undefined;
     if (!scene.strong) return hopDistances(displayed.edges, entryNode.uri);
     const map = new Map(scene.reach);
-    for (const uri of scene.weak) if (!map.has(uri)) map.set(uri, 1);
+    for (const [uri, depth] of scene.weakDepth) if (!map.has(uri)) map.set(uri, depth);
     return map;
   }, [view.entry, entryNode, displayed.edges, scene]);
   // The whole Vault colours resources by collection: the four largest get their own colour, the rest share grey.
@@ -164,7 +166,7 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
     if (newTab) window.open(url, "_blank", "noopener");
     else navigate(url, preview && node.kind === "document" ? { state: documentPreviewState(location, "graph-preview-trigger", "graph-workspace") } : undefined);
   }
-  function focus(node: GraphNode) { setView({ ...view, entry: node.uri, hops: 1, selected: undefined }); }
+  function focus(node: GraphNode) { setView({ ...view, entry: node.uri, selected: undefined }); }
   function togglePin(uri: string) { setPinned(current => { const next = new Set(current); if (next.has(uri)) next.delete(uri); else next.add(uri); return next; }); }
   function hide(uri: string) { setHidden(current => new Set(current).add(uri)); select(undefined); }
   async function expand(node: GraphNode) {

@@ -15,11 +15,12 @@ export interface SpatialLayoutInput {
   rings?: Record<string, number>;
 }
 
-/** Ring radius of a hop around a focus; weak neighbours sit on their own ring just outside the deepest strong one. */
+/** Ring radius of a hop around a focus. A weak neighbour sits just outside the ring of the hop it shows at; one with
+ *  no known hop goes outside the deepest strong ring. */
 export function ringRadius(hop: number | undefined, weak: boolean, deepest = 1): number {
   const rings = [0, 170, 300, 410];
-  if (weak || hop === undefined) return rings[Math.min(Math.max(deepest, 1), 3)] + 120;
-  return rings[Math.min(hop, 3)];
+  if (hop === undefined) return rings[Math.min(Math.max(deepest, 1), 3)] + 120;
+  return rings[Math.min(hop, 3)] + (weak ? 70 : 0);
 }
 
 function hashId(id: string): number {

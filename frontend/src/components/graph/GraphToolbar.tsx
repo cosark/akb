@@ -31,6 +31,7 @@ import { viewToQuery } from "./graph-state";
 import {
   ALL_NODE_KINDS,
   ALL_RELATIONS,
+  GRAPH_SINCE,
   RELATION_LABEL,
   type GraphNode,
   type GraphView,
@@ -38,6 +39,7 @@ import {
   type RelationKind,
 } from "./graph-types";
 import { GraphNodeMarker, HopLegend, KindSwatch, RelationSwatch } from "./graph-swatches";
+import { SelectMenu } from "@/components/ui/select-menu";
 import { docIdFromUri } from "./use-graph-data";
 
 export type GraphDisplayMode = "graph" | "list";
@@ -387,19 +389,10 @@ function GraphControls({
               className="min-h-11 font-medium text-link hover:text-link-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/graph-toolbar:min-h-9">Whole Vault</button>
             <ChevronRight className="h-3 w-3 shrink-0 text-foreground-muted" aria-hidden />
             <span className="max-w-44 truncate font-medium text-foreground" title={focusTitle || view.entry}>{focusTitle || view.entry}</span>
-            <div role="group" aria-label="Neighborhood depth" className="flex items-center rounded-[var(--radius-sm)] bg-surface-2">
-              {([1, 2, 3] as const).map(hops => {
-                const added = strongWalk?.perHop[hops - 1];
-                return <button key={hops} type="button"
-                  onClick={() => updateView(current => ({ ...current, hops }))} aria-pressed={view.hops === hops} aria-label={hops + " hop neighborhood"}
-                  title={added === undefined ? undefined : `Hop ${hops} adds ${added} strongly connected resource${added === 1 ? "" : "s"}`}
-                  className={cn("h-11 min-w-11 rounded-[var(--radius-sm)] px-1.5 tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/graph-toolbar:h-9 @min-[40rem]/graph-toolbar:min-w-9",
-                    view.hops === hops ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>
-                  {hops}{added !== undefined && <span className="ml-0.5 text-[10px] text-foreground-muted">+{added}</span>}
-                </button>;
-              })}
-            </div>
-            <span className="text-foreground-muted">hops</span>
+            <SelectMenu aria-label="Neighborhood depth" value={String(view.hops)} className="h-9 w-auto min-w-[6.5rem] text-xs"
+              onValueChange={value => updateView(current => ({ ...current, hops: Number(value) as 1 | 2 | 3 }))}
+              options={[1, 2, 3].map(hops => ({ value: String(hops), label: `${hops} hop${hops === 1 ? "" : "s"}` }))} />
+            <SinceMenu view={view} updateView={updateView} />
             <button type="button" aria-pressed={view.links === "strong"}
               onClick={() => updateView(current => ({ ...current, links: current.links === "strong" ? "all" : "strong" }))}
               title="Strong links are explicit relations, followed outward from the focus. Body links are weak: only the focus's own are shown, faded, and never followed."
@@ -429,6 +422,7 @@ function GraphControls({
                 view.links === "strong" ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>
               Strong links only
             </button>
+            <SinceMenu view={view} updateView={updateView} />
             {collections && collections.length > 0 && <span className="flex flex-wrap items-center gap-2" aria-label="Collection colours">
               {collections.slice(0, 4).map(c => <span key={c.key} className="flex items-center gap-1 text-foreground-muted" title={`${c.count} in ${c.key}`}>
                 <svg viewBox="0 0 16 16" aria-hidden className="h-3 w-3 shrink-0" style={{ color: `var(--color-${c.token})` }}><circle cx="8" cy="8" r="5" fill="currentColor" /></svg>
@@ -441,20 +435,18 @@ function GraphControls({
             </span>}
           </div>
         )}
-        {!view.entry && view.selected && (
-          <div className="pointer-events-auto flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-border bg-surface px-2 py-0.5 text-xs shadow-xs">
-            <span className="text-foreground-muted">Explore from the selection</span>
-            <div role="group" aria-label="Neighborhood depth from the selection" className="flex items-center rounded-[var(--radius-sm)] bg-surface-2">
-              {([1, 2, 3] as const).map(hops => <button key={hops} type="button"
-                onClick={() => updateView(current => ({ ...current, entry: current.selected, hops }))} aria-label={hops + " hop neighborhood of the selection"}
-                className="h-11 min-w-11 rounded-[var(--radius-sm)] px-1.5 tabular-nums text-foreground-muted hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/graph-toolbar:h-9 @min-[40rem]/graph-toolbar:min-w-9">{hops}</button>)}
-            </div>
-            <span className="text-foreground-muted">hops</span>
-          </div>
-        )}
       </div>
     </header>
   );
+}
+
+const SINCE_LABEL: Record<GraphView["since"], string> = { "1": "Last day", "7": "Last 7 days", "30": "Last 30 days", all: "Any time" };
+
+/** Which resources the map shows by when they last changed. */
+function SinceMenu({ view, updateView }: { view: GraphView; updateView: (update: (current: GraphView) => GraphView) => void }) {
+  return <SelectMenu aria-label="Changed within" value={view.since} className="h-9 w-auto min-w-[7.5rem] text-xs"
+    onValueChange={value => updateView(current => ({ ...current, since: value as GraphView["since"] }))}
+    options={GRAPH_SINCE.map(since => ({ value: since, label: SINCE_LABEL[since] }))} />;
 }
 
 function GraphFilterMenu({

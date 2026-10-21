@@ -7,13 +7,14 @@ import {
   docIdFromUri,
   endpointUri,
   degreeMap,
+  changedWithin,
   hopDistances,
   impactCones,
   strongNeighborhood,
   strongerOnly,
 } from "../use-graph-data";
 import { docUri } from "@/lib/uri";
-import { ALL_RELATIONS, DEFAULT_VIEW, categoryOf, displayName, edgeId, edgeStrength, type GraphNode, type GraphEdge } from "../graph-types";
+import { ALL_RELATIONS, DEFAULT_VIEW, categoryOf, displayName, edgeId, edgeStrength, shortName, type GraphNode, type GraphEdge } from "../graph-types";
 
 describe("apiToPayload", () => {
   it("preserves server degree, traversal depth, and relation source without guessing missing values", () => {
@@ -465,7 +466,17 @@ describe("strongNeighborhood", () => {
 
   it("walks a postmortem to its incidents and their context, within the hop limit", () => {
     expect(new Set(strongNeighborhood(payload, "pm", 1).nodes.map(n => n.uri))).toEqual(new Set(["pm", "inc", "service"]));
-    expect(new Set(strongNeighborhood(payload, "pm", 2).nodes.map(n => n.uri))).toEqual(new Set(["pm", "inc", "service", "cluster", "node", "owner"]));
+    // Hop 2 also shows the incident's own weak links (one step past it), faded and never walked.
+    const two = strongNeighborhood(payload, "pm", 2);
+    expect(new Set(two.nodes.map(n => n.uri))).toEqual(new Set(["pm", "inc", "service", "cluster", "node", "owner", "runbook", "secondary", "inc-old"]));
+    expect(Object.fromEntries(two.weakDepth)).toEqual({ runbook: 2, secondary: 2, "inc-old": 2 });
+  });
+
+  it("gives every strongly reached resource its own weak links, within the chosen depth", () => {
+    const one = strongNeighborhood(payload, "inc", 1);
+    expect([...one.weak].sort()).toEqual(["inc-old", "runbook", "secondary"]);
+    // runbook's own body link to inc2 would sit at hop 3, past the depth: never shown.
+    expect(strongNeighborhood(payload, "inc", 2).nodes.some(n => n.uri === "inc2")).toBe(false);
   });
 
   it("always keeps what the reader revealed, with its edges to the scene", () => {
@@ -535,5 +546,28 @@ describe("labels and the strong walk's shape", () => {
     expect(Object.fromEntries(scene.reach)).toEqual({ f: 0, a: 1, b: 1, pm: 1, c: 2 });
     expect(scene.tree.has(edgeId(s("pm", "c")))).toBe(true);
     expect(scene.tree.has(edgeId(s("pm", "a")))).toBe(false);
+  });
+});
+
+describe("changedWithin", () => {
+  const now = Date.parse("2026-10-21T00:00:00Z");
+  const at = (uri: string, updated_at?: string): GraphNode => ({ uri, name: uri, kind: "document", ...(updated_at ? { updated_at } : {}) });
+  const payload = {
+    nodes: [at("focus", "2026-01-01T00:00:00Z"), at("fresh", "2026-10-20T12:00:00Z"), at("week", "2026-10-15T00:00:00Z"), at("old", "2026-09-01T00:00:00Z"), at("unknown")],
+    edges: [{ source: "focus", target: "old", relation: "related_to" as const, kind: "explicit" as const }, { source: "focus", target: "fresh", relation: "related_to" as const, kind: "explicit" as const }],
+  };
+  it("keeps what changed within the window, the kept resources and those without a time", () => {
+    expect(changedWithin(payload, "1", ["focus"], now).nodes.map(n => n.uri)).toEqual(["focus", "fresh", "unknown"]);
+    expect(changedWithin(payload, "7", ["focus"], now).nodes.map(n => n.uri)).toEqual(["focus", "fresh", "week", "unknown"]);
+    expect(changedWithin(payload, "30", [], now).nodes.map(n => n.uri)).toEqual(["fresh", "week", "unknown"]);
+    expect(changedWithin(payload, "all", [], now)).toBe(payload);
+  });
+  it("drops edges to what it removes", () => {
+    expect(changedWithin(payload, "7", ["focus"], now).edges.map(e => e.target)).toEqual(["fresh"]);
+  });
+  it("caps map labels at fifteen characters", () => {
+    expect(shortName({ name: "x", title: "dino-shop/recommendationservice OOMKilled" })).toBe("dino-shop/recom…");
+    expect(shortName({ name: "x", title: "조은우 (dino.jo.eunwoo)" })).toBe("조은우 (dino.jo.eu…");
+    expect(shortName({ name: "x", title: "dino-dc1-poc01" })).toBe("dino-dc1-poc01");
   });
 });
