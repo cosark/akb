@@ -9,10 +9,21 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
-from app import main
 from app.db.transient import transient_error
 from app.repositories import table_data_repo
 from app.util.errors import exception_envelope
+
+
+@pytest.fixture
+def main(monkeypatch, tmp_path):
+    # Importing routes constructs the legacy revision service. Keep focused
+    # test collection independent of deployment paths and test import order.
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "git_storage_path", str(tmp_path / "vaults"))
+    from app import main as application
+
+    return application
 
 
 FAULTS = [
@@ -25,7 +36,7 @@ FAULTS = [
 
 
 @pytest.mark.parametrize(("failure", "code"), FAULTS)
-def test_rest_transient_response_is_sanitized_503(failure, code):
+def test_rest_transient_response_is_sanitized_503(main, failure, code):
     app = FastAPI(exception_handlers=dict(main.app.exception_handlers))
 
     @app.get("/failure")
@@ -62,7 +73,7 @@ async def test_count_rows_keeps_missing_table_fallback():
 
 
 @pytest.mark.asyncio
-async def test_readiness_db_failure_does_not_echo_connection_details(monkeypatch):
+async def test_readiness_db_failure_does_not_echo_connection_details(main, monkeypatch):
     monkeypatch.setattr(main, "get_pool", AsyncMock(side_effect=ConnectionRefusedError("private-host")))
     ok, detail = await main._probe_ready()
     assert ok is False
@@ -71,7 +82,7 @@ async def test_readiness_db_failure_does_not_echo_connection_details(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_readiness_success_ttl_failed_probe_and_soft_vector(monkeypatch):
+async def test_readiness_success_ttl_failed_probe_and_soft_vector(main, monkeypatch):
     pool = SimpleNamespace(fetchval=AsyncMock(return_value=1), get_size=lambda: 2,
                            get_idle_size=lambda: 2, get_max_size=lambda: 2)
     monkeypatch.setattr(main, "get_pool", AsyncMock(return_value=pool))
@@ -86,7 +97,7 @@ async def test_readiness_success_ttl_failed_probe_and_soft_vector(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_readiness_pool_initialization_is_inside_db_deadline(monkeypatch):
+async def test_readiness_pool_initialization_is_inside_db_deadline(main, monkeypatch):
     cancelled = asyncio.Event()
 
     async def unavailable_pool():
@@ -122,7 +133,7 @@ def test_closed_transaction_cleanup_preserves_typed_connection_loss_only():
     assert transient_error(cleanup) is None
 
 
-def test_write_failure_is_not_automatically_replayed_or_given_retry_header():
+def test_write_failure_is_not_automatically_replayed_or_given_retry_header(main, ):
     app = FastAPI(exception_handlers=dict(main.app.exception_handlers))
     calls = []
 
@@ -140,7 +151,7 @@ def test_write_failure_is_not_automatically_replayed_or_given_retry_header():
 
 
 @pytest.mark.asyncio
-async def test_ready_cache_can_outlive_data_availability_but_failure_is_not_cached(monkeypatch):
+async def test_ready_cache_can_outlive_data_availability_but_failure_is_not_cached(main, monkeypatch):
     monkeypatch.setattr(main, "_ready_state", main._ReadyState())
     monkeypatch.setattr(main, "_ready_lock", asyncio.Lock())
     healthy = AsyncMock(return_value=(True, {"db": "ok", "vector_store": "degraded:unreachable"}))
@@ -159,7 +170,7 @@ async def test_ready_cache_can_outlive_data_availability_but_failure_is_not_cach
     assert (await main.livez()) == {"status": "alive"}
 
 
-def test_failed_readiness_uses_unavailable_code_and_preserves_probe_detail(monkeypatch):
+def test_failed_readiness_uses_unavailable_code_and_preserves_probe_detail(main, monkeypatch):
     monkeypatch.setattr(main, "_ready_state", main._ReadyState())
     monkeypatch.setattr(main, "_ready_lock", asyncio.Lock())
     monkeypatch.setattr(main, "_probe_ready", AsyncMock(return_value=(False, {"db": "error:unavailable"})))
@@ -173,7 +184,7 @@ def test_failed_readiness_uses_unavailable_code_and_preserves_probe_detail(monke
 
 
 @pytest.mark.asyncio
-async def test_executor_transient_error_bypasses_sql_enrichment(monkeypatch):
+async def test_executor_transient_error_bypasses_sql_enrichment(main, monkeypatch):
     from contextlib import asynccontextmanager
     from app.services import table_service
     from app.services.user_sql_executor import UserSqlExecutor

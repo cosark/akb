@@ -6,10 +6,21 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app import main
 from app.api.deps import get_current_user
 from app.api.routes import tables
 from app.http_middleware import CancelDisconnectedReadMiddleware, NoStorePublicSurfacesMiddleware
+
+
+@pytest.fixture
+def main(monkeypatch, tmp_path):
+    # Importing routes constructs the legacy revision service. Keep focused
+    # test collection independent of deployment paths and test import order.
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "git_storage_path", str(tmp_path / "vaults"))
+    from app import main as application
+
+    return application
 
 
 def _scope(path, method="GET"):
@@ -20,7 +31,7 @@ def _scope(path, method="GET"):
 
 
 @pytest.mark.asyncio
-async def test_main_read_disconnect_drains_handler(monkeypatch):
+async def test_main_read_disconnect_drains_handler(main, monkeypatch):
     started, drained = asyncio.Event(), asyncio.Event()
     messages = asyncio.Queue()
     await messages.put({"type": "http.request", "body": b"", "more_body": False})
