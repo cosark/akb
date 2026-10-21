@@ -11,7 +11,7 @@ import { GraphToolbar, type GraphDisplayMode } from "@/components/graph/GraphToo
 import { queryToView, viewToQuery } from "@/components/graph/graph-state";
 import { graphCoverage, wholeVaultNote } from "@/components/graph/graph-scene";
 import { ALL_NODE_KINDS, ALL_RELATIONS, RELATION_LABEL, displayName, edgeStrength, kindToSegment, type GraphEdge, type GraphNode, type GraphView, type RelatedRef } from "@/components/graph/graph-types";
-import { changedWithin, degreeMap, docIdFromUri, fetchNeighbors, hopDistances, mergeGraph, strongNeighborhood, useFullGraph, useIncomingNeighborhood, useNeighborhood, visibleGraph, type GraphPayload, type StrongScene } from "@/components/graph/use-graph-data";
+import { changedWithin, degreeMap, docIdFromUri, fetchNeighbors, hopDistances, mergeGraph, strongNeighborhood, useFullGraph, useIncomingNeighborhood, withoutWeak, useNeighborhood, visibleGraph, type GraphPayload, type StrongScene } from "@/components/graph/use-graph-data";
 import type { GraphDimension } from "@/components/graph/graph-spatial-layout";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
@@ -62,11 +62,11 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
     const structural = next.entry !== view.entry || next.hops !== view.hops || next.types !== view.types || next.relations !== view.relations;
     setSearch(new URLSearchParams(viewToQuery(next)), { replace: !structural });
   }, [setSearch, view]);
-  const full = useFullGraph(vault, !view.entry), neighborhood = useNeighborhood(vault, view.entry, view.hops, view.links);
+  const full = useFullGraph(vault, !view.entry), neighborhood = useNeighborhood(vault, view.entry, view.hops, "strong");
   const query = view.entry ? neighborhood : full;
   // Incoming and all directions add the strong links that point at the walked resources, loaded beside the outgoing
   // neighbourhood and merged in when they arrive.
-  const incoming = useIncomingNeighborhood(vault, view.entry, view.hops, view.links === "strong" && view.direction !== "outgoing");
+  const incoming = useIncomingNeighborhood(vault, view.entry, view.hops, view.direction !== "outgoing");
   const incomingData = view.direction === "outgoing" ? undefined : incoming.data;
   const base = useMemo(() => neighborhood.data && incomingData && view.entry ? mergeGraph(neighborhood.data, incomingData) : query.data,
     [neighborhood.data, incomingData, view.entry, query.data]);
@@ -108,13 +108,12 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
   // Strong membership is decided on the whole loaded map, before display filters, so hiding a resource
   // cannot cut the walk; what the reader loaded or followed (the overlay) always stays.
   // Weak neighbours of a focus are folded into a count unless there are few of them or the reader opens them.
-  const [weakChoice, setWeakChoice] = useState<boolean | undefined>(undefined);
   const dateExempt = view.since === "all" ? undefined : view.selected;
   const scene = useMemo(() => {
     const empty: StrongScene = { weak: new Set(), weakDepth: new Map(), strong: false, reach: new Map(), tree: new Set(), perHop: [] };
     const revealed = overlay.nodes.map(n => n.uri);
     const recent = changedWithin(merged, view.since, [...revealed, ...(entryNode ? [entryNode.uri] : []), ...(view.selected ? [view.selected] : [])]);
-    const strong = view.entry && entryNode && view.links === "strong"
+    const strong = view.entry && entryNode
       // The plain-links fallback is decided on the unfiltered map: a date window that removes every strong edge
       // still walks (and so shows only what stays reachable), instead of showing everything left.
       ? strongNeighborhood(recent, entryNode.uri, view.hops, revealed, view.since !== "all" && merged.edges.some(e => edgeStrength(e) === "strong"), view.direction)
@@ -130,15 +129,13 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
     // the selection, so a selection change matters while a window is set (dateExempt).
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [merged, overlay, filterKey, hidden, hideOrphans, view.entry, entryNode, view.links, view.hops, view.since, view.direction, dateExempt]);
-  const weakShown = weakChoice ?? scene.weak.size <= 5;
+  // "Strong links only" is the one strength control: on, no weak line and no resource joined by weak links alone is
+  // drawn, including what "Load connections" brought in; off, every strongly reached resource's body links show, faded.
+  const weakShown = view.links === "all";
   const displayed = useMemo(() => {
     if (weakShown || !scene.strong || !view.entry) return scene;
-    // Folded: weak neighbours and every weak line go; what the reader loaded or followed stays.
-    const revealed = new Set(overlay.nodes.map(n => n.uri));
-    const fold = new Set([...scene.weak].filter(uri => !revealed.has(uri)));
-    return { ...scene, nodes: scene.nodes.filter(n => !fold.has(n.uri)),
-      edges: scene.edges.filter(e => !fold.has(e.source) && !fold.has(e.target) && (edgeStrength(e) === "strong" || revealed.has(e.source) || revealed.has(e.target))) };
-  }, [scene, weakShown, overlay, view.entry]);
+    return { ...scene, ...withoutWeak(scene, scene.reach, view.selected) };
+  }, [scene, weakShown, view.entry, view.selected]);
   const selected = view.selected ? displayed.nodes.find(n => n.uri === view.selected || n.doc_id === view.selected || docIdFromUri(n.uri) === view.selected) : undefined;
   const edge = displayed.edges.find(item => edgeSelection && item.source === edgeSelection.source && item.target === edgeSelection.target && item.relation === edgeSelection.relation && item.kind === edgeSelection.kind);
   const selectedId = selected && (selected.doc_id || docIdFromUri(selected.uri));
@@ -228,7 +225,7 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
         onNavigate={query => navigate({ search: query })}
         nodes={displayed.nodes} resourceCounts={resourceCounts} hubs={hubs} onSelect={select}
         nodeCount={displayed.nodes.length} edgeCount={displayed.edges.length}
-        strongWalk={view.entry && scene.strong ? { perHop: scene.perHop, weak: scene.weak.size, weakShown, onToggleWeak: () => setWeakChoice(!weakShown),
+        strongWalk={view.entry && scene.strong ? { perHop: scene.perHop,
           loadingIncoming: view.direction !== "outgoing" && incoming.isFetching } : undefined}
         collections={collections} dated={merged.nodes.some(n => !!n.updated_at)}
         focusTitle={focusTitle} displayMode={mode} onDisplayModeChange={next => {
@@ -262,7 +259,7 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
           description={merged.nodes.length ? "Reset filters to restore the loaded map." : "Add documents, tables or files to this Vault to begin exploring."}
           action={<Button variant="outline" onClick={merged.nodes.length ? reset : () => navigate(`/vault/${encodeURIComponent(vault)}`)}>{merged.nodes.length ? "Reset filters" : "Back to Overview"}</Button>} /> : null}
       {query.error && base && <div role="alert" className="absolute left-3 right-3 top-[var(--graph-tools-bottom)] rounded-[var(--radius-sm)] border border-border bg-surface p-3 text-sm">Refresh failed. Your loaded map is unchanged. <Button variant="outline" size="sm" onClick={() => query.refetch()}>Retry</Button></div>}
-      {view.entry && view.links === "strong" && base && !scene.strong && mode === "graph" && <p className="pointer-events-none absolute bottom-14 left-4 right-4 max-w-md text-xs text-foreground-muted">
+      {view.entry && base && !scene.strong && mode === "graph" && <p className="pointer-events-none absolute bottom-14 left-4 right-4 max-w-md text-xs text-foreground-muted">
         No explicit relations around this resource, so every loaded connection is shown.</p>}
       {!query.isLoading && !query.error && displayed.nodes.length > 0 && displayed.edges.length === 0 && mode === "graph" && !selected && <p className="pointer-events-none absolute left-4 right-4 top-[var(--graph-tools-bottom)] max-w-sm text-xs text-foreground-muted">No relationships in this map. Select a resource to explore its connections.</p>}
 

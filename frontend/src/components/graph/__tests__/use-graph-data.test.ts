@@ -12,6 +12,7 @@ import {
   impactCones,
   strongNeighborhood,
   strongerOnly,
+  withoutWeak,
 } from "../use-graph-data";
 import { docUri } from "@/lib/uri";
 import { ALL_RELATIONS, DEFAULT_VIEW, categoryOf, displayName, edgeId, edgeStrength, shortName, type GraphNode, type GraphEdge, type RelationKind } from "../graph-types";
@@ -641,3 +642,23 @@ describe("walking dependents", () => {
   });
 });
 
+
+describe("withoutWeak", () => {
+  it("drops weak lines and what only they join, loaded connections included", () => {
+    const n = (uri: string): GraphNode => ({ uri, name: uri, kind: "document" });
+    const payload = {
+      nodes: ["focus", "svc", "runbook", "loaded-strong", "loaded-weak", "picked"].map(n),
+      edges: [
+        { source: "focus", target: "svc", relation: "related_to", kind: "explicit" },
+        { source: "focus", target: "runbook", relation: "links_to", kind: "implicit" },
+        // "Load connections" on svc brought these in.
+        { source: "loaded-strong", target: "svc", relation: "related_to", kind: "explicit" },
+        { source: "svc", target: "loaded-weak", relation: "links_to", kind: "implicit" },
+        { source: "svc", target: "picked", relation: "links_to", kind: "implicit" },
+      ] as GraphEdge[],
+    };
+    const out = withoutWeak(payload, new Map([["focus", 0], ["svc", 1]]), "picked");
+    expect(out.nodes.map(x => x.uri)).toEqual(["focus", "svc", "loaded-strong", "picked"]);
+    expect(out.edges.every(e => edgeStrength(e) === "strong")).toBe(true);
+  });
+});
