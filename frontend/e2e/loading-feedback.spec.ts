@@ -1,5 +1,8 @@
 import { test, expect, type Page } from "@playwright/test";
 
+// These scenarios intercept HTTP; the mock app is instead owned by MSW.
+test.skip(process.env.AKB_FE_E2E_MODE === "mock", "Owns isolated HTTP responses.");
+
 async function fixture(page: Page, options: { infoGate?: Promise<void>; templatesGate?: Promise<void>; activityError?: boolean } = {}) {
   const state = { summaryError: false };
   await page.addInitScript(() => localStorage.setItem('akb_token', 'isolated-loading-audit'));
