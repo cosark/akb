@@ -234,8 +234,10 @@ async def vault_graph(
         None,
         description=(
             "Neighbourhood walk only: `both` (default) follows every edge of a reached node; "
-            "`outward` follows its outgoing edges plus incoming `derived_from` edges, so the walk "
-            "stops at shared context instead of fanning out through hubs. Composes with "
+            "`outward` follows its outgoing edges plus what was derived from it (incoming "
+            "`derived_from` edges) and what depends on it (incoming `depends_on` edges), so the "
+            "walk stops at shared context (any other incoming relation, such as `related_to`, "
+            "`references` or `links_to`) instead of fanning out through hubs. Composes with "
             "`edge_type`. `outward` without `uri` is refused with 400."
         ),
     ),

@@ -655,7 +655,8 @@ TOOLS = [
             "Provide `vault` (without uri) to get the full vault graph. "
             "Each node is named by its title; documents also carry doc_type, tags and path. "
             "With `uri`, `edge_type` (strong or weak) walks only edges of that strength, and "
-            "`direction=outward` follows each node's outgoing edges plus incoming `derived_from` edges only."
+            "`direction=outward` follows each node's outgoing edges plus incoming `derived_from` "
+            "and `depends_on` edges only."
         ),
         input_schema={
             "type": "object",
@@ -690,10 +691,12 @@ TOOLS = [
                     "default": DEFAULT_GRAPH_DIRECTION,
                     "description": (
                         "Only with `uri`: `both` (default) follows every edge of a reached node; "
-                        "`outward` follows its outgoing edges plus incoming `derived_from` edges, "
-                        "so the walk stops at shared context instead of fanning out through "
-                        "hubs. Composes with `edge_type`. `outward` is refused together with "
-                        "`vault` and no `uri`."
+                        "`outward` follows its outgoing edges plus what was derived from it "
+                        "(incoming `derived_from` edges) and what depends on it (incoming "
+                        "`depends_on` edges), so the walk stops at shared context (any other "
+                        "incoming relation, such as `related_to`, `references` or `links_to`) "
+                        "instead of fanning out through hubs. Composes with `edge_type`. "
+                        "`outward` is refused together with `vault` and no `uri`."
                     ),
                 },
             },

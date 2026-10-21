@@ -8,9 +8,10 @@ The vault overview is not strength-aware and a request that pairs it with
 ``edge_type`` is refused.
 
 ``direction`` ("both", the default | "outward") chooses which edges of a reached
-node the walk follows. ``outward`` takes its outgoing edges plus the incoming
-``derived_from`` ones, so the walk stops at shared context instead of fanning out
-through a hub. It composes with ``edge_type`` and, like it, needs ``uri``.
+node the walk follows. ``outward`` takes its outgoing edges plus what was derived
+from it and what depends on it (the incoming ``derived_from`` and ``depends_on``
+ones), so the walk stops at shared context instead of fanning out through a hub.
+It composes with ``edge_type`` and, like it, needs ``uri``.
 
 This file pins what needs no database: the SQL fragments (the twin of
 ``resolve_edge_type``, and the incoming-edge narrowing), that the walk applies
@@ -42,7 +43,7 @@ from app.services.kg_service import (
     EDGE_TYPES,
     GRAPH_DIRECTIONS,
     LINK_RELATION_TYPES,
-    OUTWARD_INCOMING_RELATION,
+    OUTWARD_INCOMING_RELATIONS,
     edge_strength_sql,
     incoming_walk_sql,
     resolve_edge_type,
@@ -113,15 +114,23 @@ def test_the_predicates_partition_the_edges_the_way_resolve_edge_type_does():
 def test_the_direction_vocabulary_is_both_and_outward_and_defaults_to_both():
     assert GRAPH_DIRECTIONS == ("both", "outward")
     assert DEFAULT_GRAPH_DIRECTION == "both"
-    # The one relation `outward` follows against the arrow is one `akb_link` can write.
-    assert OUTWARD_INCOMING_RELATION == "derived_from"
-    assert OUTWARD_INCOMING_RELATION in LINK_RELATION_TYPES
+    # What was derived from a node and what depends on it: the relations `outward` follows
+    # against the arrow, every one of them a relation `akb_link` can write. An ordered
+    # tuple, so the SQL built from it reads the same in every process.
+    assert OUTWARD_INCOMING_RELATIONS == ("derived_from", "depends_on")
+    assert set(OUTWARD_INCOMING_RELATIONS) <= set(LINK_RELATION_TYPES)
 
 
 def test_the_direction_predicate_is_the_documented_rule():
     assert incoming_walk_sql(None) == ""
     assert incoming_walk_sql("both") == ""
-    assert incoming_walk_sql("outward") == "relation_type = 'derived_from'"
+    assert incoming_walk_sql("outward") == "relation_type IN ('derived_from', 'depends_on')"
+
+
+def test_the_direction_predicate_is_built_from_the_constant_alone(monkeypatch):
+    monkeypatch.setattr(kg_service, "OUTWARD_INCOMING_RELATIONS", ("references", "implements", "related_to"))
+
+    assert incoming_walk_sql("outward") == "relation_type IN ('references', 'implements', 'related_to')"
 
 
 @pytest.mark.parametrize("bad", ["sideways", "", "Outward", "incoming", "outward; DROP TABLE edges", 1, ["outward"]])
@@ -161,7 +170,7 @@ class _Edges:
     own semantics are not re-implemented: the row is kept or dropped by
     `resolve_edge_type`, the rule the fragment is the twin of. The direction
     fragment is applied the same way: a query that carries it keeps only rows of
-    the one relation it names, so it is caught on a fetch where it does not belong.
+    the relations it names, so it is caught on a fetch where it does not belong.
     """
 
     def __init__(self, *edges: tuple) -> None:
@@ -175,7 +184,7 @@ class _Edges:
             return False
         if WEAK_SQL in query and served != "weak":
             return False
-        if OUTWARD_SQL in query and relation != OUTWARD_INCOMING_RELATION:
+        if OUTWARD_SQL in query and relation not in OUTWARD_INCOMING_RELATIONS:
             return False
         return True
 
@@ -374,10 +383,15 @@ async def test_nodes_beyond_the_radius_are_not_a_truncation():
 
 def _incidents() -> _Edges:
     """An incident, the cluster it ran on, a sibling incident on that same cluster,
-    and a postmortem derived from the incident that also names a service."""
+    and a postmortem derived from the incident that also names a service.
+
+    The incidents name the cluster as context (`related_to`), not as something they
+    depend on: an incoming `depends_on` is followed, so a cluster that incidents
+    *depended on* would be walked through to every one of them.
+    """
     return _Edges(
-        (uri("incident"), uri("cluster"), "explicit", None, "depends_on"),
-        (uri("other-incident"), uri("cluster"), "explicit", None, "depends_on"),
+        (uri("incident"), uri("cluster"), "explicit", None, "related_to"),
+        (uri("other-incident"), uri("cluster"), "explicit", None, "related_to"),
         (uri("pm"), uri("incident"), "explicit", None, "derived_from"),
         (uri("pm"), uri("service"), "explicit", None, "references"),
     )
@@ -398,7 +412,7 @@ async def test_an_outward_walk_follows_its_own_context_and_what_was_derived_from
     assert _names(nodes) == {"incident", "cluster", "pm", "service"}
     assert "other-incident" not in _names(nodes)  # it only points at the cluster, which is shared context
     assert _edge_names(edge_list) == {
-        ("incident", "cluster", "depends_on"),  # outgoing
+        ("incident", "cluster", "related_to"),  # outgoing
         ("pm", "incident", "derived_from"),  # incoming, but derived_from
         ("pm", "service", "references"),  # the postmortem's own outgoing edge, one hop further out
     }
@@ -426,7 +440,7 @@ async def test_an_outward_walk_respects_hops():
 
     assert _names(nodes) == {"incident", "cluster", "pm"}  # the postmortem's edge to the service is a second hop
     assert _edge_names(edge_list) == {
-        ("incident", "cluster", "depends_on"), ("pm", "incident", "derived_from"),
+        ("incident", "cluster", "related_to"), ("pm", "incident", "derived_from"),
     }
     assert truncated is False  # the radius is not a cut
 
@@ -454,9 +468,22 @@ async def test_derived_from_is_followed_against_the_arrow_from_every_reached_nod
     assert len(edge_list) == 3
 
 
+# What an outward walk takes against the arrow, written out. It is stated here, not read from
+# `OUTWARD_INCOMING_RELATIONS`, so a change to the rule has to change this test too.
+FOLLOWED_AGAINST_THE_ARROW = {"derived_from", "depends_on"}  # what was derived from it; what depends on it
+NOT_FOLLOWED_AGAINST_THE_ARROW = {"related_to", "references", "links_to", "implements", "attached_to"}
+
+
+def test_every_relation_is_decided_as_followed_against_the_arrow_or_not():
+    """A relation added to `akb_link` (or stored by extraction) must be decided here."""
+    assert FOLLOWED_AGAINST_THE_ARROW.isdisjoint(NOT_FOLLOWED_AGAINST_THE_ARROW)
+    assert FOLLOWED_AGAINST_THE_ARROW | NOT_FOLLOWED_AGAINST_THE_ARROW == {*LINK_RELATION_TYPES, "links_to"}
+    assert set(OUTWARD_INCOMING_RELATIONS) == FOLLOWED_AGAINST_THE_ARROW
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("relation", [*LINK_RELATION_TYPES, "links_to"])
-async def test_only_derived_from_is_followed_against_the_arrow(relation):
+@pytest.mark.parametrize("relation", sorted(FOLLOWED_AGAINST_THE_ARROW | NOT_FOLLOWED_AGAINST_THE_ARROW))
+async def test_only_derived_from_and_depends_on_are_followed_against_the_arrow(relation):
     pointing_at = _Edges((uri("other"), uri("c"), "explicit", None, relation))
     pointed_to = _Edges((uri("c"), uri("other"), "explicit", None, relation))
 
@@ -464,10 +491,23 @@ async def test_only_derived_from_is_followed_against_the_arrow(relation):
     outbound_nodes, outbound_edges, _ = await _walk(pointed_to, uri("c"), direction="outward")
 
     assert _names(outbound_nodes) == {"c", "other"} and len(outbound_edges) == 1  # outgoing: always
-    if relation == OUTWARD_INCOMING_RELATION:
+    if relation in FOLLOWED_AGAINST_THE_ARROW:
         assert _names(inbound_nodes) == {"c", "other"} and len(inbound_edges) == 1
     else:
         assert _names(inbound_nodes) == {"c"} and inbound_edges == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("relation", sorted(NOT_FOLLOWED_AGAINST_THE_ARROW))
+async def test_both_still_takes_every_incoming_relation(relation):
+    """`both` is the walk it always was: the relations `outward` leaves out are taken."""
+    pointing_at = _Edges((uri("other"), uri("c"), "explicit", None, relation))
+
+    for direction in (None, "both"):
+        nodes, edge_list, _ = await _walk(pointing_at, uri("c"), direction=direction)
+
+        assert _names(nodes) == {"c", "other"} and len(edge_list) == 1
+        assert not any(OUTWARD_SQL in q for q in pointing_at.queries)
 
 
 @pytest.mark.asyncio
@@ -490,12 +530,12 @@ async def test_the_direction_predicate_is_on_the_incoming_fetch_only(edge_type):
 
 def _strength_mix() -> _Edges:
     return _Edges(
-        (uri("incident"), uri("cluster"), "explicit", None, "depends_on"),  # strong, outgoing
+        (uri("incident"), uri("cluster"), "explicit", None, "related_to"),  # strong, outgoing
         (uri("incident"), uri("owner"), "explicit", "weak", "references"),  # weak, outgoing
         (uri("pm"), uri("incident"), "explicit", None, "derived_from"),  # strong, derived from it
         (uri("draft"), uri("incident"), "explicit", "weak", "derived_from"),  # weak, derived from it
         (uri("log"), uri("incident"), "implicit", None, "derived_from"),  # implicit, so weak
-        (uri("sibling"), uri("cluster"), "explicit", None, "depends_on"),  # strong, but shared context
+        (uri("sibling"), uri("cluster"), "explicit", None, "related_to"),  # strong, but shared context
     )
 
 
@@ -542,7 +582,7 @@ async def test_an_edge_the_walk_did_not_follow_is_not_emitted_even_between_visit
 async def test_a_hub_does_not_spend_the_node_cap_on_an_outward_walk():
     """The shape seen on real data: every incident points at one cluster."""
     hub = uri("cluster")
-    edges = _Edges(*[(uri(f"incident-{i}"), hub, "explicit", None, "depends_on") for i in range(300)])
+    edges = _Edges(*[(uri(f"incident-{i}"), hub, "explicit", None, "related_to") for i in range(300)])
     start = uri("incident-0")
 
     fan_out, _, fan_out_truncated = await _walk(edges, start, limit=200, edge_type="strong")
@@ -563,6 +603,128 @@ async def test_neighbours_an_outward_walk_does_not_follow_are_not_a_cut():
 
     assert _names(nodes) == {"c"} and edge_list == [] and truncated is False
     assert len(default_nodes) == 1 and default_truncated is True  # the same cap does cut the default walk
+
+
+# ── Direction: an outward walk reaches what depends on a node ────────────
+
+
+def _services() -> _Edges:
+    """An incident that names a service, what depends on that service and on those, and the
+    documents that merely point at it.
+
+    web and batch depend on api, mobile depends on web (not on api itself), and api depends on db.
+    """
+    return _Edges(
+        (uri("incident"), uri("api"), "explicit", None, "related_to"),  # the service it names
+        (uri("web"), uri("api"), "explicit", None, "depends_on"),  # web depends on api: affected by it
+        (uri("mobile"), uri("web"), "explicit", None, "depends_on"),  # mobile depends on web: one level further
+        (uri("batch"), uri("api"), "explicit", "weak", "depends_on"),  # a weak dependent
+        (uri("api"), uri("db"), "explicit", None, "depends_on"),  # api depends on db: outgoing, always followed
+        (uri("runbook"), uri("api"), "explicit", None, "references"),  # points at api, depends on nothing
+        (uri("notes"), uri("api"), "implicit", None, "links_to"),  # a body link: weak, and not a dependency
+        (uri("sibling"), uri("api"), "explicit", None, "related_to"),  # another incident on the same service
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_outward_walk_reaches_what_depends_on_a_service_a_level_per_hop():
+    one = await _walk(_services(), uri("incident"), hops=1, direction="outward")
+    two = await _walk(_services(), uri("incident"), hops=2, direction="outward")
+    three = await _walk(_services(), uri("incident"), hops=3, direction="outward")
+
+    assert _names(one[0]) == {"incident", "api"}
+    # Two hops out: api's dependents (web, batch) against the arrow, and what api depends on (db) with it.
+    assert _names(two[0]) == {"incident", "api", "db", "web", "batch"}
+    assert _edge_names(two[1]) == {
+        ("incident", "api", "related_to"), ("api", "db", "depends_on"),
+        ("web", "api", "depends_on"), ("batch", "api", "depends_on"),
+    }
+    # Three hops out: the dependents of a dependent.
+    assert _names(three[0]) == {"incident", "api", "db", "web", "batch", "mobile"}
+    assert _edge_names(three[1]) == _edge_names(two[1]) | {("mobile", "web", "depends_on")}
+    assert {_short(u): n["depth"] for u, n in three[0].items()} == {
+        "incident": 0, "api": 1, "db": 2, "web": 2, "batch": 2, "mobile": 3,
+    }
+    # ... and none of what merely points at the service: not a dependency, so shared context.
+    assert {"runbook", "notes", "sibling"}.isdisjoint(_names(three[0]))
+    assert all(truncated is False for _, _, truncated in (one, two, three))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direction", [None, "both"])
+async def test_both_takes_the_dependents_and_everything_else_that_points_at_the_service(direction):
+    nodes, edge_list, truncated = await _walk(_services(), uri("incident"), hops=3, direction=direction)
+
+    assert _names(nodes) == {"incident", "api", "db", "web", "batch", "mobile", "runbook", "notes", "sibling"}
+    assert len(edge_list) == 8 and truncated is False
+
+
+@pytest.mark.asyncio
+async def test_depends_on_is_followed_against_the_arrow_from_every_reached_node():
+    chain = _Edges(
+        (uri("web"), uri("api"), "explicit", None, "depends_on"),
+        (uri("mobile"), uri("web"), "explicit", None, "depends_on"),  # depends on web, not on api
+        (uri("api"), uri("db"), "explicit", None, "depends_on"),  # api depends on db: outgoing
+        (uri("report"), uri("db"), "explicit", None, "depends_on"),  # depends on db, which api reaches outward
+    )
+
+    from_api = await _walk(chain, uri("api"), hops=3, direction="outward")
+    from_mobile = await _walk(chain, uri("mobile"), hops=4, direction="outward")
+
+    assert _names(from_api[0]) == {"api", "web", "mobile", "db", "report"} and len(from_api[1]) == 4
+    # mobile -> web -> api -> db are outgoing edges, followed whatever their relation; report depends
+    # on db, a node the walk reached, so it is a dependent of a reached node and is taken against the arrow.
+    assert _names(from_mobile[0]) == {"mobile", "web", "api", "db", "report"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("edge_type", "start", "expected"),
+    [
+        (None, "incident", {"incident", "api", "db", "web", "batch", "mobile"}),
+        ("strong", "incident", {"incident", "api", "db", "web", "mobile"}),  # batch is a weak dependent
+        ("weak", "incident", {"incident"}),  # the way out of the incident is strong
+        ("weak", "api", {"api", "batch"}),  # the body link into api is weak but not a dependency
+        ("strong", "api", {"api", "db", "web", "mobile"}),
+    ],
+)
+async def test_outward_dependents_compose_with_edge_type(edge_type, start, expected):
+    nodes, edge_list, _ = await _walk(_services(), uri(start), hops=3, edge_type=edge_type, direction="outward")
+
+    assert _names(nodes) == expected
+    if edge_type:
+        assert {e["edge_type"] for e in edge_list} <= {edge_type}
+
+
+@pytest.mark.asyncio
+async def test_an_implicit_depends_on_from_frontmatter_is_a_dependent_too():
+    """A service document that lists `depends_on:` in its frontmatter leaves an implicit (weak) edge."""
+    services = _Edges(
+        (uri("web"), uri("api"), "implicit", None, "depends_on"),
+        (uri("mobile"), uri("web"), "implicit", None, "depends_on"),
+    )
+
+    every = await _walk(services, uri("api"), hops=2, direction="outward")
+    weak = await _walk(services, uri("api"), hops=2, edge_type="weak", direction="outward")
+    strong = await _walk(services, uri("api"), hops=2, edge_type="strong", direction="outward")
+
+    assert _names(every[0]) == _names(weak[0]) == {"api", "web", "mobile"}
+    assert _names(strong[0]) == {"api"}  # an implicit edge is weak
+
+
+@pytest.mark.asyncio
+async def test_a_service_everything_depends_on_is_walked_through_and_the_cap_still_applies():
+    """The other side of the hub test: a dependency hub is not stopped at, and `limit` bounds it."""
+    core = uri("core")
+    edges = _Edges(*[(uri(f"service-{i}"), core, "explicit", None, "depends_on") for i in range(300)])
+
+    nodes, edge_list, truncated = await _walk(edges, core, hops=1, limit=200, direction="outward")
+    related = _Edges(*[(uri(f"service-{i}"), core, "explicit", None, "related_to") for i in range(300)])
+    related_nodes, related_edges, related_truncated = await _walk(related, core, hops=1, limit=200, direction="outward")
+
+    assert len(nodes) == 200 and truncated is True  # core and 199 of its 300 dependents
+    assert all(e["target"] == core for e in edge_list)
+    assert _names(related_nodes) == {"core"} and related_edges == [] and related_truncated is False
 
 
 # ── get_graph: parameter handling ────────────────────────────────────────
@@ -846,7 +1008,8 @@ def test_rest_documents_direction_as_an_enum_on_the_neighbourhood_route():
     assert param["required"] is False
     options = param["schema"].get("anyOf") or [param["schema"]]
     assert next(o["enum"] for o in options if "enum" in o) == list(GRAPH_DIRECTIONS)
-    assert "neighbourhood" in param["description"].lower() and "derived_from" in param["description"]
+    assert "neighbourhood" in param["description"].lower()
+    assert "derived_from" in param["description"] and "depends_on" in param["description"]
     # The overview has no direction to choose.
     assert "direction" not in {p["name"] for p in paths["/api/v1/graph/overview"]["get"]["parameters"]}
 
@@ -924,8 +1087,10 @@ def test_akb_graph_advertises_direction_from_the_shared_vocabulary():
     assert direction["enum"] == list(GRAPH_DIRECTIONS)
     assert direction["default"] == DEFAULT_GRAPH_DIRECTION == "both"
     assert "direction" not in graph.input_schema.get("required", [])
-    assert "uri" in direction["description"] and "derived_from" in direction["description"]
+    assert "uri" in direction["description"]
+    assert "derived_from" in direction["description"] and "depends_on" in direction["description"]
     assert "direction=outward" in graph.description  # one short sentence on the tool itself
+    assert "derived_from" in graph.description and "depends_on" in graph.description
     assert "direction" in server._TOOL_ARG_NAMES["akb_graph"]
     # `akb_relations` has a `direction` of its own, over another vocabulary: not the same parameter.
     relations = next(tool for tool in TOOLS if tool.name == "akb_relations")

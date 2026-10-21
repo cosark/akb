@@ -497,7 +497,7 @@ implicit row.
 ```
 akb_graph(vault="eng")                           # Full vault graph (all types)
 akb_graph(uri="akb://eng/doc/specs/api.md", hops=2)
-akb_graph(uri="akb://eng/doc/specs/api.md", direction="outward")   # Outgoing edges + what was derived from it
+akb_graph(uri="akb://eng/doc/specs/api.md", direction="outward")   # Outgoing edges + what was derived from it and what depends on it
 ```
 
 ## Provenance
@@ -1179,7 +1179,7 @@ Shows nodes (documents, tables, files) and edges (all relation types).
 | hops | | BFS traversal radius (1-5, default 2) |
 | limit | | Max nodes (1-200, default 50) |
 | edge_type | | `strong` or `weak`, with `uri` only: walk and return just edges of that strength (default: every edge) |
-| direction | | `both` (default) or `outward`, with `uri` only: `outward` follows each node's outgoing edges plus incoming `derived_from` edges |
+| direction | | `both` (default) or `outward`, with `uri` only: `outward` follows each node's outgoing edges plus incoming `derived_from` and `depends_on` edges |
 
 Pass either `vault` (full vault graph) or `uri` (graph anchored on one resource).
 
@@ -1201,11 +1201,16 @@ every edge; combining it with `edge_type` is refused. A `uri` result reports
 `direction` chooses which edges of a reached node the walk follows. `both`
 takes every edge touching it, so a hub (a cluster many documents point at)
 pulls in everything that points at it. `outward` takes its outgoing edges, its
-own context (the cluster, node, service or owner it names), plus incoming
-`derived_from` edges (what was derived from it, such as a postmortem derived
-from an incident), and stops at shared context instead of fanning out through
-it. It combines with `edge_type`, and only the edges the walk followed are
-returned. With `vault` and no `uri`, `outward` is refused.
+own context (the cluster, node, service or owner it names), plus two kinds of
+incoming edge: `derived_from` (what was derived from it, such as a postmortem
+derived from an incident) and `depends_on` (what depends on it and so is
+affected by it: from a service, the services that depend on it, then the ones
+that depend on those, a level per hop). Any other incoming edge (`related_to`,
+`references`, `links_to`, ...) is some other resource's context, and the walk
+stops there instead of fanning out through it. A resource many others depend on
+still pulls those dependents in; `limit` and `truncated` apply as usual. It
+combines with `edge_type`, and only the edges the walk followed are returned.
+With `vault` and no `uri`, `outward` is refused.
 
 ## Examples
 ```
@@ -1214,7 +1219,7 @@ akb_graph(uri="akb://eng/table/experiments", hops=2)              # From a table
 akb_graph(uri="akb://eng/doc/specs/api.md", hops=3)               # 3-hop from doc
 akb_graph(uri="akb://eng/doc/specs/api.md", edge_type="strong")   # Strong links only
 akb_graph(uri="akb://eng/doc/incidents/inc-42.md",
-  edge_type="strong", direction="outward")                        # Its own context + what was derived from it
+  edge_type="strong", direction="outward")                        # Its own context + what was derived from it and what depends on it
 ```""",
 
     "akb_provenance": """# akb_provenance — Document Provenance
