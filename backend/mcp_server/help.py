@@ -1157,7 +1157,12 @@ Every returned row includes `kind`: `explicit` rows are removable with
 `akb_unlink`; `implicit` rows must be removed by editing the document metadata
 or Markdown link that generated them. Each row also includes `edge_type`
 (`strong` or `weak`): implicit rows are always `weak`, and an explicit row is
-`strong` unless it was linked as `weak`. Relations never cross vaults.""",
+`strong` unless it was linked as `weak`. Relations never cross vaults.
+
+Each row names the resource at the other end: `name` is its title when it has
+one (a document without a title is named by its path). A document row also
+carries `title` (only when it has a real one), `doc_type`, `tags` and `path`; a
+table or file row carries `title`.""",
 
     "akb_graph": """# akb_graph — Knowledge Graph (Cross-Type)
 
@@ -1170,17 +1175,29 @@ Shows nodes (documents, tables, files) and edges (all relation types).
 | uri | | Center node AKB URI (use to anchor on a specific resource) |
 | hops | | BFS traversal radius (1-5, default 2) |
 | limit | | Max nodes (1-200, default 50) |
+| edge_type | | `strong` or `weak`, with `uri` only: walk and return just edges of that strength (default: every edge) |
 
 Pass either `vault` (full vault graph) or `uri` (graph anchored on one resource).
 
 Each edge carries `kind` (`explicit` | `implicit`) and `edge_type` (`strong` |
 `weak`; implicit edges are always `weak`).
 
+Each node's `name` is its title when it has one (a document without a title is
+named by its path). A document node also carries `title` (only when it has a
+real one), `doc_type`, `tags` and `path`; a table or file node carries `title`.
+
+`edge_type` restricts the walk itself: a neighbour reachable only through an
+edge of the other strength is not visited, so `limit` is spent on the
+neighbours you asked for, in both directions. The vault graph (`vault`, no
+`uri`) always returns every edge; combining it with `edge_type` is refused. A
+`uri` result reports `truncated: true` when `limit` cut the walk short.
+
 ## Examples
 ```
 akb_graph(vault="eng")                                            # Full vault graph
 akb_graph(uri="akb://eng/table/experiments", hops=2)              # From a table
 akb_graph(uri="akb://eng/doc/specs/api.md", hops=3)               # 3-hop from doc
+akb_graph(uri="akb://eng/doc/specs/api.md", edge_type="strong")   # Strong links only
 ```""",
 
     "akb_provenance": """# akb_provenance — Document Provenance

@@ -361,6 +361,14 @@ export interface AkbGraphNode {
   resource_type: "doc" | "table" | "file";
   depth?: number | null;
   degree?: number | null;
+  /** A document's real title (absent when it has none); a table's or file's name. */
+  title?: string;
+  /** Documents only. */
+  doc_type?: string;
+  /** Documents only. */
+  tags?: string[];
+  /** Documents only: the vault-relative path. */
+  path?: string;
   [key: string]: unknown;
 }
 
@@ -377,6 +385,8 @@ export interface AkbGraphNeighborsEnvelope {
   kind: "graph_neighbors";
   nodes: AkbGraphNode[];
   edges: AkbGraphEdge[];
+  /** True when the `limit` node cap cut the walk short. */
+  truncated?: boolean;
   [key: string]: unknown;
 }
 
@@ -426,6 +436,14 @@ export interface AkbRelation {
   resource_type: "doc" | "table" | "file";
   edge_type: AkbEdgeType;
   name?: string | null;
+  /** A document's real title (absent when it has none); a table's or file's name. */
+  title?: string;
+  /** Documents only. */
+  doc_type?: string;
+  /** Documents only. */
+  tags?: string[];
+  /** Documents only: the vault-relative path. */
+  path?: string;
   [key: string]: unknown;
 }
 

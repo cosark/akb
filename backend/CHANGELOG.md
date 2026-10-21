@@ -36,6 +36,60 @@ specifically; the proxy has its own log in
   A weak edge re-linked there loses its key and reads as strong again once this
   version returns.
 
+### Graph nodes and relation rows are named by their title
+
+- Fix: `/graph` (neighbourhood and vault overview), `/graph/overview`, `akb_graph`,
+  `/relations`, `akb_relations` and `/graph/health` named a document by its
+  collection path and file name even when it had a title. The lookup read only
+  the legacy `documents` catalog. A document written by the native ledger has no
+  row there, so on a `postgres_native` installation every document missed and
+  fell back to its path; bare-Git installations were never affected. The lookup
+  now follows the installation's document authority: on a native installation it
+  reads the title (and type and tags) from the head revision's frontmatter, lets
+  the catalog row a document kept at cutover fill only what its preserved body
+  does not say, and still resolves a pre-cutover document only the catalog holds.
+- A node and a relation row now carry the label, not just a name: `name` is the
+  title when the document has one (else its path, exactly as before), and a
+  document also gets `title` (only when it has a real one), `doc_type` (`note`
+  when none is stated), `tags` and `path`. A table or file keeps its `name` and
+  repeats it as `title`. All of these are optional additions to the OpenAPI
+  contract, the `@akb/client` types and the bundled web app's types; no existing
+  field changes. Orphan nodes in the overview and the hubs in `/graph/health`
+  carry the same fields.
+- One batched statement per resource type serves a whole graph, as before: a
+  200-node neighbourhood is not 200 lookups. On a native installation the
+  document statement reads at most an 8 KiB window of each head body; a
+  document whose frontmatter does not close inside it (a hub that lists hundreds
+  of relations) gets one wider read, capped at 128 KiB and 50 documents per
+  call, and past that is named by its path.
+- Not changed: the overview's orphan nodes and `/graph/health`'s orphan sample are
+  still enumerated from the legacy `documents` catalog, so a native installation
+  does not list its unlinked documents there; `/provenance` and `akb_provenance`
+  still look the document up in that catalog.
+
+### The graph neighbourhood can follow one strength
+
+- `GET /graph?uri=…` and `akb_graph(uri=…)` take an optional `edge_type` of
+  `strong` or `weak`. The walk then follows, and returns, only edges of that
+  strength, in both directions: a neighbour reachable only through an edge of
+  the other strength is not visited, so the `limit` node cap is spent on the
+  neighbours that were asked for rather than on edges that would be filtered
+  away. Omitted, the walk is exactly what it was. Strength is the one
+  `edge_type` already served on every edge (an implicit edge is always weak; an
+  explicit edge is strong unless stored as weak, including every edge made
+  before the attribute existed).
+- The vault overview is not strength-aware and is unchanged. Pairing `edge_type`
+  with a `vault` and no `uri` is refused (`invalid_argument`, REST 400) rather
+  than answered with every edge. An `edge_type` outside `strong` / `weak` is
+  rejected (REST 422).
+- The neighbourhood response now carries `truncated`, true when the `limit`
+  cap cut the walk short (more nodes qualified within `hops` than were
+  returned), like the overview's. Reaching `hops`, or a result that fits `limit`
+  exactly, is not a cut.
+- No migration. The `@akb/client` `graph.neighbors` option is `edgeType`. A
+  server without this change ignores the parameter, and its response has no
+  `truncated`.
+
 ### Search retrieval
 
 - Scoped pgvector posting searches choose term-first, scope-first, or bounded

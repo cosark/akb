@@ -45,11 +45,22 @@ class KnowledgeResponse(BaseModel):
 
 
 class GraphNode(KnowledgeResponse):
+    """A resource in a graph. ``name`` is its title when it has one.
+
+    ``title`` / ``doc_type`` / ``tags`` / ``path`` are set only when the
+    resource resolves in the vault: a document carries all four (``title``
+    only if it has a real one), a table or file just ``title``.
+    """
+
     uri: str
     name: str
     resource_type: ResourceType
     depth: int | None = None
     degree: int | None = None
+    title: str | None = None
+    doc_type: str | None = None
+    tags: list[str] | None = None
+    path: str | None = None
 
 
 class GraphEdge(KnowledgeResponse):
@@ -67,7 +78,13 @@ class RelationItem(KnowledgeResponse):
     resource_type: ResourceType
     kind: EdgeKind
     edge_type: EdgeType
+    # The resource at the other end: ``name`` is its title when it has one, and
+    # the rest follow `GraphNode` (set only when the resource resolves).
     name: str | None = None
+    title: str | None = None
+    doc_type: str | None = None
+    tags: list[str] | None = None
+    path: str | None = None
 
 
 class OrphanSummary(KnowledgeResponse):
@@ -79,6 +96,9 @@ class GraphNeighborsResponse(KnowledgeResponse):
     kind: Literal["graph_neighbors"] = "graph_neighbors"
     nodes: list[GraphNode]
     edges: list[GraphEdge]
+    # True when the `limit` node cap cut the walk short: more nodes qualified
+    # within `hops` than were returned. Parallel to the overview's `truncated`.
+    truncated: bool | None = None
 
 
 class GraphOverviewResponse(KnowledgeResponse):

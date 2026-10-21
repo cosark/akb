@@ -1,0 +1,652 @@
+"""Graph node and relation labels — DB-free coverage.
+
+A graph node, a vault-overview node and a relation row each name a resource, and
+they were all naming a document by its collection path and file name even though
+it had a real title. The lookup behind them (``_batch_resolve_labels``) asked the
+legacy ``documents`` catalog alone; a document written by the native ledger has
+no row there (its title lives in the head revision's frontmatter), so on a
+native-authoritative installation every document missed and fell back to its path.
+
+This file pins what needs no database: the label shape, the fallbacks, the
+installation-authority switch, the query budget (a constant number of statements
+however many nodes — never one per node) and how every projection applies the
+label. What the SQL itself does with real native and catalog rows runs against
+PostgreSQL in ``test_graph_node_labels_postgres.py``.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+import pytest
+
+from app.services import kg_service
+from app.services.document_service import _compose_markdown
+from app.services.uri_service import doc_uri, file_uri, table_uri
+
+VAULT = "labels"
+OTHER = "elsewhere"
+VAULT_ID = uuid.uuid4()
+A, B, C = "specs/a.md", "specs/b.md", "notes/c.md"
+
+# The window the first read uses (+1: see `_native_doc_labels`) and the wider one
+# a document with a very long frontmatter gets.
+FIRST_WINDOW = 8 * 1024 + 1
+RETRY_WINDOW = 128 * 1024
+
+
+class _Acquire:
+    def __init__(self, conn) -> None:
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, *_args):
+        return None
+
+
+class _Pool:
+    def __init__(self, conn) -> None:
+        self.conn = conn
+
+    def acquire(self):
+        return _Acquire(self.conn)
+
+
+def _authority(monkeypatch, *, native: bool) -> None:
+    monkeypatch.setattr(
+        "app.services.document_counters.native_documents_are_authoritative", lambda: native,
+    )
+
+
+def _body(title: str | None = "T", **fm: Any) -> bytes:
+    meta = {} if title is None else {"title": title}
+    return _compose_markdown({**meta, **fm}, "body text").encode()
+
+
+class _LabelConn:
+    """Answers the label queries from in-memory catalogs and records them.
+
+    ``legacy`` rows are what the ``documents`` catalog holds; ``native`` maps a
+    path to the body bytes of a live native head. The native query joins both
+    (the real one is in ``kg_service._NATIVE_DOC_LABELS_SQL``), so the fake does
+    too: a retained catalog row is matched by id when a native resource holds the
+    path, by path when none does.
+    """
+
+    def __init__(self, *, legacy=(), native=None, tables=(), files=()) -> None:
+        self.legacy = {row["path"]: row for row in legacy}
+        self.native: dict[str, dict] = {
+            path: {"resource_id": uuid.uuid4(), "body": body}
+            for path, body in (native or {}).items()
+        }
+        self.tables = list(tables)
+        self.files = list(files)
+        self.queries: list[str] = []
+        self.native_windows: list[tuple[int, list[str]]] = []
+
+    @property
+    def document_queries(self) -> list[str]:
+        return [q for q in self.queries if "FROM documents" in q or "native_resources" in q]
+
+    async def fetch(self, query: str, *args):
+        self.queries.append(query)
+        if "native_resources" in query:
+            _vault_id, paths, window = args
+            self.native_windows.append((window, list(paths)))
+            return [self._native_row(path, window) for path in paths]
+        if "FROM documents" in query:
+            paths, _vault_id = args
+            return [self.legacy[p] for p in paths if p in self.legacy]
+        if "FROM vault_tables" in query:
+            names, _vault_id = args
+            return [row for row in self.tables if row["name"] in names]
+        if "FROM vault_files" in query:
+            ids, _vault_id = args
+            return [row for row in self.files if row["id"] in ids]
+        raise AssertionError(f"unexpected query: {query}")
+
+    def _native_row(self, path: str, window: int) -> dict:
+        resource = self.native.get(path)
+        # A retained catalog row: by id when a native resource holds the path
+        # (the fake models the bridge, where the two ids are equal), else by path.
+        catalog = self.legacy.get(path)
+        body = resource["body"] if resource else None  # None: a head with no payload row
+        row = {
+            "path": path,
+            "resource_id": resource["resource_id"] if resource else None,
+            "body_size": len(body) if body is not None else None,
+            "body_slice": body[:window] if body is not None else None,
+            "legacy_id": None,
+            "legacy_title": None,
+            "legacy_doc_type": None,
+            "legacy_tags": None,
+        }
+        if catalog is not None:
+            row.update(
+                legacy_id=catalog.get("id", uuid.uuid4()),
+                legacy_title=catalog["title"],
+                legacy_doc_type=catalog.get("doc_type"),
+                legacy_tags=catalog.get("tags"),
+            )
+        return row
+
+
+def _catalog(path: str, title: str, doc_type: str | None = None, tags=None) -> dict:
+    return {"path": path, "title": title, "doc_type": doc_type, "tags": tags}
+
+
+async def _labels(conn, *uris_and_types: tuple[str, str], vault: str = VAULT) -> dict:
+    return await kg_service._batch_resolve_labels(
+        conn, list(uris_and_types), vault_id=VAULT_ID, vault_name=vault,
+    )
+
+
+def _doc(path: str, vault: str = VAULT) -> tuple[str, str]:
+    return doc_uri(vault, path), "doc"
+
+
+# ── The label of a document, legacy catalog ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_document_is_named_by_its_title_and_described(monkeypatch):
+    _authority(monkeypatch, native=False)
+    conn = _LabelConn(legacy=[_catalog(A, "Alpha spec", "spec", ["x", "y"])])
+
+    labels = await _labels(conn, _doc(A))
+
+    assert labels == {
+        doc_uri(VAULT, A): {
+            "name": "Alpha spec",
+            "title": "Alpha spec",
+            "doc_type": "spec",
+            "tags": ["x", "y"],
+            "path": A,
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("title", ["", "   ", None])
+async def test_a_document_without_a_title_is_named_by_its_path(monkeypatch, title):
+    """Today's value is kept — and no title is invented to stand in for it."""
+    _authority(monkeypatch, native=False)
+    conn = _LabelConn(legacy=[_catalog(B, title)])
+
+    label = (await _labels(conn, _doc(B)))[doc_uri(VAULT, B)]
+
+    assert label["name"] == B
+    assert "title" not in label
+    assert (label["doc_type"], label["tags"], label["path"]) == ("note", [], B)
+
+
+@pytest.mark.asyncio
+async def test_a_document_the_vault_does_not_hold_is_named_by_its_path_only(monkeypatch):
+    _authority(monkeypatch, native=False)
+
+    labels = await _labels(_LabelConn(), _doc(A))
+
+    assert labels == {doc_uri(VAULT, A): {"name": A, "path": A}}
+
+
+@pytest.mark.asyncio
+async def test_a_uri_from_another_vault_is_ignored_not_echoed(monkeypatch):
+    _authority(monkeypatch, native=False)
+    conn = _LabelConn(legacy=[_catalog(A, "Alpha spec")])
+
+    labels = await _labels(conn, _doc(A, vault=OTHER), _doc(A))
+
+    assert set(labels) == {doc_uri(VAULT, A)}
+
+
+@pytest.mark.asyncio
+async def test_tables_and_files_keep_their_name_and_repeat_it_as_title(monkeypatch):
+    _authority(monkeypatch, native=False)
+    file_id = str(uuid.uuid4())
+    conn = _LabelConn(
+        tables=[
+            {"name": "metrics", "description": "Key metrics"},
+            {"name": "plain", "description": None},
+        ],
+        files=[{"id": file_id, "name": "diagram.png"}],
+    )
+
+    labels = await _labels(
+        conn,
+        (table_uri(VAULT, "metrics"), "table"),
+        (table_uri(VAULT, "plain"), "table"),
+        (table_uri(VAULT, "ghost"), "table"),
+        (file_uri(VAULT, file_id), "file"),
+        (file_uri(VAULT, "no-such-file"), "file"),
+    )
+
+    assert labels[table_uri(VAULT, "metrics")] == {"name": "Key metrics", "title": "Key metrics"}
+    assert labels[table_uri(VAULT, "plain")] == {"name": "plain", "title": "plain"}
+    assert labels[file_uri(VAULT, file_id)] == {"name": "diagram.png", "title": "diagram.png"}
+    # Unresolved: the identifier, and nothing that claims it was found.
+    assert labels[table_uri(VAULT, "ghost")] == {"name": "ghost"}
+    assert labels[file_uri(VAULT, "no-such-file")] == {"name": "no-such-file"}
+
+
+@pytest.mark.asyncio
+async def test_every_label_has_a_name_that_says_something(monkeypatch):
+    _authority(monkeypatch, native=False)
+    conn = _LabelConn(
+        legacy=[_catalog(A, "")],
+        tables=[{"name": "t", "description": ""}],
+        files=[{"id": "f1", "name": ""}],
+    )
+
+    labels = await _labels(
+        conn, _doc(A), (table_uri(VAULT, "t"), "table"), (file_uri(VAULT, "f1"), "file"),
+    )
+
+    assert all(label["name"] for label in labels.values())
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (["a", " ", "b"], ["a", "b"]),
+        ("solo", ["solo"]),
+        (["a", 2, 3.5], ["a", "2", "3.5"]),
+        ([["nested"], {"k": 1}, None], []),
+        (None, []),
+        (7, []),
+    ],
+)
+def test_tags_are_a_list_of_non_blank_strings(raw, expected):
+    assert kg_service._tag_list(raw) == expected
+
+
+# ── The query budget ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [1, 7, 200])
+@pytest.mark.parametrize("native", [False, True], ids=["legacy", "native"])
+async def test_labels_cost_one_query_per_resource_type_however_many_nodes(monkeypatch, native, count):
+    """The reason the label is batched: a 200-node graph is not 200 lookups."""
+    _authority(monkeypatch, native=native)
+    paths = [f"bulk/doc-{i}.md" for i in range(count)]
+    names = [f"t{i}" for i in range(count)]
+    file_ids = [str(uuid.uuid4()) for _ in range(count)]
+    conn = _LabelConn(
+        legacy=[] if native else [_catalog(p, f"Title {p}") for p in paths],
+        native={p: _body(f"Title {p}") for p in paths} if native else None,
+        tables=[{"name": n, "description": None} for n in names],
+        files=[{"id": fid, "name": fid} for fid in file_ids],
+    )
+
+    labels = await _labels(
+        conn,
+        *[_doc(p) for p in paths],
+        *[(table_uri(VAULT, n), "table") for n in names],
+        *[(file_uri(VAULT, fid), "file") for fid in file_ids],
+    )
+
+    assert len(labels) == 3 * count
+    assert len(conn.queries) == 3, conn.queries  # documents, tables, files
+    assert len(conn.document_queries) == 1
+
+
+@pytest.mark.asyncio
+async def test_nothing_to_resolve_asks_nothing(monkeypatch):
+    _authority(monkeypatch, native=True)
+    conn = _LabelConn()
+
+    assert await _labels(conn) == {}
+    assert conn.queries == []
+
+
+# ── The installation authority ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_installation_never_queries_the_native_ledger(monkeypatch):
+    _authority(monkeypatch, native=False)
+    conn = _LabelConn(legacy=[_catalog(A, "Alpha spec")])
+
+    await _labels(conn, _doc(A))
+
+    assert conn.queries and not any("native_" in query for query in conn.queries)
+
+
+@pytest.mark.asyncio
+async def test_a_native_document_is_named_by_the_title_in_its_head_frontmatter(monkeypatch):
+    """The reported bug: no catalog row exists, and the title is in the body."""
+    _authority(monkeypatch, native=True)
+    conn = _LabelConn(native={A: _body("Alpha design", type="spec", tags=["graph", "design"])})
+
+    labels = await _labels(conn, _doc(A))
+
+    assert labels == {
+        doc_uri(VAULT, A): {
+            "name": "Alpha design",
+            "title": "Alpha design",
+            "doc_type": "spec",
+            "tags": ["graph", "design"],
+            "path": A,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_native_document_without_a_title_is_named_by_its_path(monkeypatch):
+    _authority(monkeypatch, native=True)
+    conn = _LabelConn(native={B: _body(None)})
+
+    label = (await _labels(conn, _doc(B)))[doc_uri(VAULT, B)]
+
+    assert label == {"name": B, "doc_type": "note", "tags": [], "path": B}
+
+
+@pytest.mark.asyncio
+async def test_a_plain_markdown_native_body_has_no_frontmatter_to_read(monkeypatch):
+    _authority(monkeypatch, native=True)
+    conn = _LabelConn(native={B: b"# just a heading\n\nand prose\n"})
+
+    label = (await _labels(conn, _doc(B)))[doc_uri(VAULT, B)]
+
+    assert (label["name"], label["doc_type"]) == (B, "note")
+
+
+@pytest.mark.asyncio
+async def test_a_retained_catalog_row_fills_only_what_the_native_frontmatter_leaves_out(monkeypatch):
+    """A document migrated at cutover keeps its row; its preserved body may not
+    state the metadata the catalog served. Native states first, the row fills."""
+    _authority(monkeypatch, native=True)
+    conn = _LabelConn(
+        native={A: _body(None, type="decision"), B: _body("Fresh title", tags=["new"])},
+        legacy=[_catalog(A, "Catalog title", "note", ["old"]), _catalog(B, "Stale title", "spec", ["old"])],
+    )
+
+    labels = await _labels(conn, _doc(A), _doc(B))
+
+    assert labels[doc_uri(VAULT, A)] == {
+        "name": "Catalog title", "title": "Catalog title",
+        "doc_type": "decision",  # stated by the body, so the row does not override it
+        "tags": ["old"],  # not stated by the body, so the row supplies it
+        "path": A,
+    }
+    assert labels[doc_uri(VAULT, B)] == {
+        "name": "Fresh title", "title": "Fresh title",  # the body wins over a stale row
+        "doc_type": "spec",
+        "tags": ["new"],
+        "path": B,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_pre_cutover_document_only_the_catalog_holds_still_resolves(monkeypatch):
+    _authority(monkeypatch, native=True)
+    conn = _LabelConn(legacy=[_catalog(C, "Old note", "note", ["t"])])
+
+    label = (await _labels(conn, _doc(C)))[doc_uri(VAULT, C)]
+
+    assert label == {"name": "Old note", "title": "Old note", "doc_type": "note", "tags": ["t"], "path": C}
+
+
+@pytest.mark.asyncio
+async def test_a_document_in_neither_catalog_is_named_by_its_path_on_a_native_installation(monkeypatch):
+    _authority(monkeypatch, native=True)
+
+    labels = await _labels(_LabelConn(), _doc(A))
+
+    assert labels == {doc_uri(VAULT, A): {"name": A, "path": A}}
+
+
+@pytest.mark.asyncio
+async def test_a_native_head_with_no_readable_payload_degrades_to_the_path(monkeypatch):
+    """A label is decoration: a damaged head must not take the graph down."""
+    _authority(monkeypatch, native=True)
+    conn = _LabelConn(native={A: None})  # the resource is there, its payload row is not
+
+    labels = await _labels(conn, _doc(A))
+
+    assert labels == {doc_uri(VAULT, A): {"name": A, "doc_type": "note", "tags": [], "path": A}}
+
+
+# ── A frontmatter longer than the first read window ──────────────────────
+
+
+def _wide_body(title: str, *, entries: int) -> bytes:
+    """A hub whose relation list pushes `title` (sorted late) past the first window."""
+    related = [f"akb://{VAULT}/coll/hub/doc/child-{i:04d}.md" for i in range(entries)]
+    return _body(title, related_to=related, type="index")
+
+
+@pytest.mark.asyncio
+async def test_a_wide_frontmatter_gets_one_wider_read_for_those_documents_only(monkeypatch):
+    _authority(monkeypatch, native=True)
+    wide = _wide_body("Hub index", entries=300)
+    assert FIRST_WINDOW < len(wide) < RETRY_WINDOW
+    conn = _LabelConn(native={"hub/index.md": wide, A: _body("Alpha")})
+
+    labels = await _labels(conn, _doc("hub/index.md"), _doc(A))
+
+    assert labels[doc_uri(VAULT, "hub/index.md")]["title"] == "Hub index"
+    assert labels[doc_uri(VAULT, "hub/index.md")]["doc_type"] == "index"
+    assert labels[doc_uri(VAULT, A)]["title"] == "Alpha"
+    assert [(window, sorted(paths)) for window, paths in conn.native_windows] == [
+        (FIRST_WINDOW, sorted(["hub/index.md", A])),
+        (RETRY_WINDOW, ["hub/index.md"]),  # only the one that did not fit
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_short_body_with_a_broken_envelope_is_not_read_again(monkeypatch):
+    """Nothing lies beyond the window, so a second read could only repeat it."""
+    _authority(monkeypatch, native=True)
+    conn = _LabelConn(native={B: b"---\ntitle: never closed\n\nbody\n"})
+
+    label = (await _labels(conn, _doc(B)))[doc_uri(VAULT, B)]
+
+    assert label["name"] == B and "title" not in label
+    assert len(conn.native_windows) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_frontmatter_wider_than_the_second_window_falls_back_to_the_path(monkeypatch):
+    _authority(monkeypatch, native=True)
+    huge = _wide_body("Never seen", entries=6000)
+    assert len(huge) > RETRY_WINDOW
+    conn = _LabelConn(native={"hub/huge.md": huge})
+
+    label = (await _labels(conn, _doc("hub/huge.md")))[doc_uri(VAULT, "hub/huge.md")]
+
+    assert label["name"] == "hub/huge.md" and "title" not in label
+    assert [window for window, _ in conn.native_windows] == [FIRST_WINDOW, RETRY_WINDOW]
+
+
+@pytest.mark.asyncio
+async def test_the_wider_read_is_bounded_in_rows(monkeypatch):
+    """A writer must not be able to turn a label into an unbounded read."""
+    _authority(monkeypatch, native=True)
+    count = kg_service._LABEL_RETRY_MAX_ROWS + 10
+    paths = [f"hub/wide-{i:03d}.md" for i in range(count)]
+    conn = _LabelConn(native={p: _wide_body(f"Title {p}", entries=300) for p in paths})
+
+    labels = await _labels(conn, *[_doc(p) for p in paths])
+
+    assert len(labels) == count  # every document is still labelled
+    assert len(conn.native_windows[1][1]) == kg_service._LABEL_RETRY_MAX_ROWS
+    unread = [uri for uri, label in labels.items() if "title" not in label]
+    assert len(unread) == 10 and all(labels[uri]["name"] == labels[uri]["path"] for uri in unread)
+
+
+# ── The label reaches every projection ───────────────────────────────────
+
+
+def _use_connection(monkeypatch, conn) -> None:
+    async def _pool():
+        return _Pool(conn)
+
+    monkeypatch.setattr(kg_service, "get_pool", _pool)
+
+
+class _GraphConn(_LabelConn):
+    """Edges for the projections, plus the label catalogs."""
+
+    def __init__(self, *, edges=(), **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.edges = list(edges)
+
+    async def fetchrow(self, query: str, *_args):
+        return {"edges_total": len(self.edges), "nodes_total": len({u for e in self.edges for u in e[:2]})}
+
+    async def fetch(self, query: str, *args):
+        if "FROM edges" in query or "FROM scoped_edges" in query:
+            return self._edge_rows(query, args)
+        return await super().fetch(query, *args)
+
+    def _edge_rows(self, query: str, args):
+        if "count(*) AS degree" in query:
+            degree: dict[str, int] = {}
+            for source, target, *_ in self.edges:
+                degree[source] = degree.get(source, 0) + 1
+                degree[target] = degree.get(target, 0) + 1
+            floor = args[2] if "HAVING" in query else 0  # the hub query's `degree >= $3`
+            return [
+                {"uri": u, "rtype": "doc", "degree": d}
+                for u, d in sorted(degree.items()) if d >= floor
+            ]
+        if "relation_type, kind" in query:
+            return [self._row(e) for e in self.edges]
+        if "source_uri = ANY" in query or "e.source_uri = $1" in query:
+            seeds = args[0] if isinstance(args[0], list) else [args[0]]
+            return [self._row(e) for e in self.edges if e[0] in seeds]
+        seeds = args[0] if isinstance(args[0], list) else [args[0]]
+        return [self._row(e) for e in self.edges if e[1] in seeds]
+
+    @staticmethod
+    def _row(edge) -> dict:
+        source, target, relation = edge
+        return {
+            "source_uri": source, "target_uri": target, "target_type": "doc", "source_type": "doc",
+            "relation_type": relation, "kind": "explicit", "stored_edge_type": None,
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True], ids=["legacy", "native"])
+async def test_a_relation_row_names_the_other_end_by_its_title(monkeypatch, native):
+    _authority(monkeypatch, native=native)
+    conn = _GraphConn(
+        edges=[(doc_uri(VAULT, A), doc_uri(VAULT, B), "references")],
+        legacy=[] if native else [_catalog(B, "Beta notes", "note", ["n"])],
+        native={B: _body("Beta notes", tags=["n"])} if native else None,
+    )
+    _use_connection(monkeypatch, conn)
+
+    (row,) = await kg_service.get_resource_relations(VAULT, doc_uri(VAULT, A), vault_id=VAULT_ID)
+
+    assert row == {
+        "direction": "outgoing", "relation": "references", "uri": doc_uri(VAULT, B),
+        "resource_type": "doc", "kind": "explicit", "edge_type": "strong",
+        "name": "Beta notes", "title": "Beta notes", "doc_type": "note", "tags": ["n"], "path": B,
+    }
+    assert len(conn.document_queries) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True], ids=["legacy", "native"])
+async def test_neighbourhood_and_overview_nodes_carry_the_label(monkeypatch, native):
+    _authority(monkeypatch, native=native)
+    edges = [(doc_uri(VAULT, A), doc_uri(VAULT, B), "references")]
+    conn = _GraphConn(
+        edges=edges,
+        legacy=[] if native else [_catalog(A, "Alpha", "spec", ["a"]), _catalog(B, "Beta")],
+        native={A: _body("Alpha", type="spec", tags=["a"]), B: _body("Beta")} if native else None,
+    )
+    _use_connection(monkeypatch, conn)
+
+    graph = await kg_service.get_graph(VAULT, doc_uri(VAULT, A), hops=1, vault_id=VAULT_ID)
+    overview = await kg_service.get_overview(VAULT, vault_id=VAULT_ID, include_orphans=False)
+
+    for nodes in (graph["nodes"], overview["nodes"]):
+        by_uri = {n["uri"]: n for n in nodes}
+        assert by_uri[doc_uri(VAULT, A)]["name"] == "Alpha"
+        assert by_uri[doc_uri(VAULT, A)]["title"] == "Alpha"
+        assert by_uri[doc_uri(VAULT, A)]["doc_type"] == "spec"
+        assert by_uri[doc_uri(VAULT, A)]["tags"] == ["a"]
+        assert by_uri[doc_uri(VAULT, A)]["path"] == A
+        assert by_uri[doc_uri(VAULT, B)]["name"] == "Beta"
+        assert by_uri[doc_uri(VAULT, B)]["doc_type"] == "note"
+    # Existing node fields are untouched.
+    assert {n["uri"]: n["depth"] for n in graph["nodes"]} == {doc_uri(VAULT, A): 0, doc_uri(VAULT, B): 1}
+    assert {n["degree"] for n in overview["nodes"]} == {1}
+
+
+@pytest.mark.asyncio
+async def test_the_overview_resolves_all_its_nodes_in_one_batch(monkeypatch):
+    _authority(monkeypatch, native=True)
+    hub = doc_uri(VAULT, "hub.md")
+    spokes = [f"spokes/s-{i}.md" for i in range(60)]
+    conn = _GraphConn(
+        edges=[(hub, doc_uri(VAULT, s), "references") for s in spokes],
+        native={"hub.md": _body("Hub"), **{s: _body(f"Spoke {s}") for s in spokes}},
+    )
+    _use_connection(monkeypatch, conn)
+
+    overview = await kg_service.get_overview(VAULT, vault_id=VAULT_ID, include_orphans=False)
+
+    assert len(overview["nodes"]) == 61
+    assert {n["name"] for n in overview["nodes"] if n["uri"] != hub} == {f"Spoke {s}" for s in spokes}
+    assert len(conn.document_queries) == 1
+
+
+@pytest.mark.asyncio
+async def test_health_hubs_carry_the_label_too(monkeypatch):
+    _authority(monkeypatch, native=False)
+    hub = doc_uri(VAULT, A)
+    spokes = [doc_uri(VAULT, f"s/{i}.md") for i in range(5)]
+
+    class _HealthConn(_GraphConn):
+        async def fetch(self, query: str, *args):
+            if "FROM documents WHERE vault_id" in query:  # the orphan scan
+                return []
+            return await super().fetch(query, *args)
+
+    conn = _HealthConn(
+        edges=[(hub, s, "references") for s in spokes],
+        legacy=[_catalog(A, "Alpha spec", "spec", ["x"])],
+    )
+    _use_connection(monkeypatch, conn)
+
+    health = await kg_service.get_health(VAULT, vault_id=VAULT_ID, hub_threshold=5)
+
+    (top,) = health["hubs"]
+    assert (top["uri"], top["name"], top["degree"]) == (hub, "Alpha spec", 5)
+    assert (top["title"], top["doc_type"], top["tags"], top["path"]) == ("Alpha spec", "spec", ["x"], A)
+
+
+@pytest.mark.asyncio
+async def test_orphan_nodes_are_labelled_like_connected_ones(monkeypatch):
+    class _OrphanConn:
+        async def fetch(self, query: str, *_args):
+            if "FROM documents" in query:
+                return [{"path": A, "title": "Alpha spec", "doc_type": "spec", "tags": ["x"]},
+                        {"path": B, "title": "", "doc_type": None, "tags": None}]
+            if "FROM vault_tables" in query:
+                return [{"name": "metrics", "description": "Key metrics", "coll": None}]
+            return [{"id": "f1", "name": "diagram.png", "coll": None}]
+
+    nodes, truncated = await kg_service._fetch_orphan_nodes(
+        _OrphanConn(), VAULT, VAULT_ID, doc_paths=set(), table_names=set(), file_ids=set(), limit=10,
+    )
+
+    by_uri = {n["uri"]: n for n in nodes}
+    assert truncated is False
+    assert by_uri[doc_uri(VAULT, A)] == {
+        "uri": doc_uri(VAULT, A), "resource_type": "doc", "degree": 0, "name": "Alpha spec",
+        "title": "Alpha spec", "doc_type": "spec", "tags": ["x"], "path": A,
+    }
+    untitled = by_uri[doc_uri(VAULT, B)]
+    assert (untitled["name"], untitled["doc_type"], untitled["tags"]) == (B, "note", [])
+    assert "title" not in untitled
+    assert by_uri[table_uri(VAULT, "metrics")]["title"] == "Key metrics"
+    assert by_uri[file_uri(VAULT, "f1")]["title"] == "diagram.png"
