@@ -104,6 +104,23 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("focused content navigation", () => {
+  it("keeps sibling Collections visible when a document is opened without requiring a filter reset", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={["/vault/v"]}><ResourceLocationProvider identity="reader">
+      <PublishCurrent onlyOnResource value={{ vault: "v", title: "Start", kind: "Document", collectionPath: "guides", resourceRef: "guides/start.md", status: "active" }} />
+      <VaultExplorer vault="v" presentation="focused" />
+    </ResourceLocationProvider></MemoryRouter>);
+    await user.click(await screen.findByRole("button", { name: "architecture" }));
+    await user.click(screen.getByRole("button", { name: "guides" }));
+    await user.click(screen.getByRole("link", { name: /^Document:\s*Start$/ }));
+    await waitFor(() => expect(screen.getByRole("link", { name: /^Document:\s*Start$/ })).toHaveAttribute("aria-current", "page"));
+    expect(screen.getByRole("button", { name: "architecture" })).toBeVisible();
+    expect(screen.getByRole("link", { name: /^Document:\s*Schema$/ })).toBeVisible();
+    expect(screen.getByRole("link", { name: /^Document:\s*System$/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Filter content" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Reset filters" })).not.toBeInTheDocument();
+  });
+
   it("keeps identity in the parent and exposes native collection disclosures and document links", async () => {
     const user = userEvent.setup();
     const { container } = renderAt("/vault/v", "focused");
@@ -548,7 +565,7 @@ describe("VaultExplorer — rendering", () => {
     ["Document", "guides/last.md", "/vault/v/doc/guides%2Flast.md"],
     ["File", "file-last", "/vault/v/file/file-last"],
     ["Table", "table_last", "/vault/v/table/table_last"],
-  ] as const)("reveals an authorized current %s beyond the first page without full traversal", async (kind, ref, route) => {
+  ] as const)("reveals an authorized current %s without narrowing the Collection list or traversing every page", async (kind, ref, route) => {
     browseMock.mockResolvedValue({ ...sample, complete: false, next_cursor: "next", items: [sample.items[0]] });
     // A table's authorized name is also its routing identity; unlike a
     // Document title or File display name, it is not an arbitrary alias.
@@ -560,8 +577,11 @@ describe("VaultExplorer — rendering", () => {
     const row = await screen.findByRole("treeitem", { name: new RegExp(`^${kind}:\\s*${title}$`) });
     expect(row).toBeVisible();
     expect(row).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "architecture" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Reset filters" })).not.toBeInTheDocument();
     expect(browseMock.mock.calls.every(call => !call[3]?.cursor)).toBe(true);
-    expect(browseMock).toHaveBeenCalledWith("v", "guides", -1, expect.objectContaining({ page_size: 100, content_type: "all" }));
+    expect(browseMock.mock.calls.every(call => !call[1])).toBe(true);
+    expect(browseMock).toHaveBeenCalledWith("v", undefined, -1, expect.objectContaining({ page_size: 100, content_type: "all" }));
   });
 
   it("resets the old kind scope on resource navigation but preserves a later manual collapse", async () => {

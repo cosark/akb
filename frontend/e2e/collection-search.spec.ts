@@ -64,6 +64,9 @@ for (const width of [375, 2560]) for (const dark of [false, true]) {
     if (width < 1024) await drawer.click();
     const scope = page.getByRole("button", { name: "Collection search scope", exact: true });
     await expect(scope).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Filter content", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Reset filters", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: `Collection actions for ${collection}-old`, exact: true })).toBeVisible();
     const documents = page.getByRole("button", { name: "Documents, 1 item", exact: true });
     await expect(documents).toHaveAttribute("aria-expanded", "true");
     await documents.click();

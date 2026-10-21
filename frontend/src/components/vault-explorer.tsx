@@ -248,10 +248,11 @@ export function VaultExplorer({
     if (revealedResource.current?.key === resourceRevealKey) return;
     revealedResource.current = { key: resourceRevealKey, pathname };
     setFilter("");
-    changeCollectionScope(currentResource.collectionPath || "");
+    // Opening a resource reveals its ancestors below; it must not turn the
+    // reader's location into a Collection search filter and hide sibling rows.
     setKindFilter("all");
     setScopeSelection({ owner: filterOwner, scope: currentResource.status === "archived" ? "all" : "unarchived" });
-  }, [resourceRevealKey, currentResource, vault, pathname, filterOwner, setFilter, changeCollectionScope]);
+  }, [resourceRevealKey, currentResource, vault, pathname, filterOwner, setFilter]);
   useEffect(() => {
     onRefetchReady?.(refetch);
   }, [onRefetchReady, refetch]);

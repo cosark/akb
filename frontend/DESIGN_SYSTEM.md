@@ -494,7 +494,10 @@ an `sr-only` summary, never the only signal.
   clears search filters while retaining the exploration root. Scope-picker
   choices remain within that root, and creation uses that verified writable
   Collection. Reserved/unavailable roots offer no misleading root-create action.
-  Reading-mode, revision and edit changes keep exploration intact. A new
+  Opening a document, file or table reveals its ancestors without automatically
+  setting a Collection search filter or hiding sibling Collections. Collection
+  search boundaries are chosen explicitly. Reading-mode, revision and edit
+  changes keep exploration intact. A new
   resource outside the root lifts the sidebar to their closest common
   Collection, or the full list; resolve its owner from the browse tree even
   when that snapshot arrives after navigation. Missing roots remain explicitly
