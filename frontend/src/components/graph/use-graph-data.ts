@@ -11,6 +11,7 @@ import { groupOf } from "./cluster";
 import {
   ALL_NODE_KINDS,
   RELATION_CLASS,
+  edgeId,
   edgeStrength,
   type GraphEdge,
   type GraphNode,
@@ -60,6 +61,11 @@ function normalizeRelation(raw: string | undefined): RelationKind | null {
   }
 }
 
+/** ``{ [key]: value }`` for a non-blank string from a server that may not send the field, else nothing. */
+function optionalText<K extends string>(key: K, value: unknown): Partial<Record<K, string>> {
+  return typeof value === "string" && value.trim() ? { [key]: value } as Record<K, string> : {};
+}
+
 /** Convert a backend /graph response into the renderer's payload shape.
  *  Shared by the full-graph load and on-demand node expansion so both map
  *  kinds/relations/groups identically. */
@@ -67,6 +73,8 @@ export function apiToPayload(resp: GraphOverviewResponse): GraphPayload {
   const nodes: GraphNode[] = resp.nodes.map((n) => ({
     uri: n.uri,
     name: n.name || n.uri,
+    ...optionalText("title", (n as unknown as { title?: unknown }).title),
+    ...optionalText("doc_type", (n as unknown as { doc_type?: unknown }).doc_type),
     kind: normalizeKind(n.resource_type),
     group: groupOf(n.uri),
     degree: n.degree ?? undefined,
@@ -143,10 +151,12 @@ export function strongNeighborhood(
   hops: number,
   /** Resources the reader asked to see (loaded connections, a followed relationship, the selection): always kept. */
   revealed: Iterable<string> = [],
-): GraphPayload & { weak: Set<string>; strong: boolean } {
+): GraphPayload & StrongScene {
   const explicit = p.edges.filter(e => edgeStrength(e) === "strong" && e.source !== e.target);
-  if (!focus || explicit.length === 0) return { ...p, weak: new Set(), strong: false };
+  if (!focus || explicit.length === 0) return { ...p, weak: new Set(), strong: false, reach: new Map(), tree: new Set(), perHop: [] };
   const reach = new Map<string, number>([[focus, 0]]);
+  // The edge by which the walk first reached each resource: the backbone the map draws at full weight.
+  const tree = new Set<string>();
   const queue = [focus];
   for (let index = 0; index < queue.length; index += 1) {
     const here = queue[index], next = reach.get(here)! + 1;
@@ -154,9 +164,11 @@ export function strongNeighborhood(
     for (const e of explicit) {
       const other = e.source === here ? e.target : e.relation === "derived_from" && e.target === here ? e.source : undefined;
       if (other === undefined || reach.has(other)) continue;
-      reach.set(other, next); queue.push(other);
+      reach.set(other, next); queue.push(other); tree.add(edgeId(e));
     }
   }
+  // How many resources each step adds, for an honest hop control (the walk may end before the chosen depth).
+  const perHop = Array.from({ length: hops }, (_, i) => [...reach.values()].filter(d => d === i + 1).length);
   const weak = new Set<string>();
   for (const e of p.edges) {
     if (edgeStrength(e) === "strong") continue;
@@ -171,8 +183,22 @@ export function strongNeighborhood(
     if (edgeStrength(e) === "strong") return reach.has(e.source) && reach.has(e.target);
     return e.source === focus || e.target === focus;
   });
-  return { nodes: p.nodes.filter(n => keep.has(n.uri)), edges, meta: p.meta, weak, strong: true };
+  return { nodes: p.nodes.filter(n => keep.has(n.uri)), edges, meta: p.meta, weak, strong: true, reach, tree, perHop };
 }
+
+export interface StrongScene {
+  /** Resources joined to the focus by a weak connection only (never walked). */
+  weak: Set<string>;
+  /** False when the map has no strong connection, so everything loaded is shown. */
+  strong: boolean;
+  /** Hop distance of every strongly reached resource (the focus is 0). */
+  reach: Map<string, number>;
+  /** ``edgeId`` of the edge that first reached each resource. */
+  tree: Set<string>;
+  /** Resources added by hop 1, 2, … up to the chosen depth. */
+  perHop: number[];
+}
+
 
 /** Hops from ``start`` over the loaded relationships, either direction. Resources the walk does not reach are absent. */
 export function hopDistances(edges: GraphEdge[], start: string | undefined): Map<string, number> {

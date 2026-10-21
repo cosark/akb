@@ -3,8 +3,8 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/hooks/use-theme";
 import { cn } from "@/lib/utils";
-import type { GraphEdge, GraphNode } from "./graph-types";
-import { seedSpatialPositions, type GraphDimension, type SpatialPoint } from "./graph-spatial-layout";
+import { categoryOf, displayName, edgeId, type GraphEdge, type GraphNode } from "./graph-types";
+import { ringRadius, seedSpatialPositions, type GraphDimension, type SpatialPoint } from "./graph-spatial-layout";
 import { SpatialGraphRenderer } from "./graph-spatial-renderer";
 import type { ProjectedLabel } from "./graph-spatial-view";
 
@@ -32,6 +32,15 @@ interface Props {
   hops?: Map<string, number>;
   /** Resources joined to the focus by a body link only; drawn faded. */
   weak?: Set<string>;
+  /** Around a focus, the ``edgeId``s of the walk's backbone: drawn at full weight, other strong edges faded. */
+  tree?: Set<string>;
+  /** Whole-Vault colouring: collection (node.group) -> colour token. */
+  groupTokens?: Map<string, string>;
+}
+
+function ringsFor(nodes: GraphNode[], hops: Map<string, number>, weak: Set<string> | undefined): Record<string, number> {
+  const deepest = Math.max(0, ...nodes.filter(n => !weak?.has(n.uri)).map(n => hops.get(n.uri) ?? 0));
+  return Object.fromEntries(nodes.map(n => [n.uri, ringRadius(hops.get(n.uri), !!weak?.has(n.uri), deepest)]));
 }
 
 export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCanvas(props, ref) {
@@ -44,6 +53,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
   // Resources the reader dragged keep their place until Rearrange.
   const moved = useRef(new Set<string>());
   const dimension = props.dimension ?? 2;
+  // A category prefix only helps when the map holds more than one.
+  const showCategory = new Set(props.nodes.map(categoryOf)).size > 1;
   const [labels, setLabels] = useState<ProjectedLabel[]>([]);
   const [busy, setBusy] = useState(false), [layoutError, setLayoutError] = useState("");
   const [renderError, setRenderError] = useState("");
@@ -75,8 +86,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
     current.onerror = () => { if (worker.current === current) fail(); };
     timeout.current = setTimeout(() => { if (worker.current === current) fail(); }, 30000);
     current.postMessage({ nodes: latest.current.nodes.map(n => ({ id: n.uri, position: positions.current.get(n.uri)! })),
-      edges: latest.current.edges.map(e => ({ source: e.source, target: e.target })),
-      pinned: [...new Set([...fixed, ...latest.current.pinned, ...moved.current])], dimensions: latest.current.dimension ?? 2 });
+      // With rings, only the walk's backbone pulls: cross links between rings would drag a whole ring to one side.
+      edges: latest.current.edges.filter(e => !latest.current.hops || !latest.current.tree || latest.current.tree.has(edgeId(e)))
+        .map(e => ({ source: e.source, target: e.target })),
+      pinned: [...new Set([...fixed, ...latest.current.pinned, ...moved.current])], dimensions: latest.current.dimension ?? 2,
+      ...(latest.current.hops ? { rings: ringsFor(latest.current.nodes, latest.current.hops, latest.current.weak) } : {}) });
   }
 
   useImperativeHandle(ref, () => ({
@@ -102,6 +116,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
       return;
     }
     renderer.current = engine;
+    engine.setTopInset(latest.current.topInset ?? 0);
     const observer = new ResizeObserver(() => engine.resize()); observer.observe(host.current);
     return () => { observer.disconnect(); stopWorker(); engine.dispose(); renderer.current = null; firstLayout.current = true; };
   }, []);
@@ -123,7 +138,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
     if (props.selected) renderer.current?.focus(props.selected);
   }, [props.selected, props.inspectedEdge, props.pinned, props.nodes, props.edges]);
   useEffect(() => { renderer.current?.theme(); }, [theme]);
-  useEffect(() => { renderer.current?.setHops(props.hops, props.weak); }, [props.hops, props.weak]);
+  useEffect(() => { renderer.current?.setTopInset(props.topInset ?? 0); }, [props.topInset]);
+  useEffect(() => { renderer.current?.setHops(props.hops, props.weak, props.tree, props.groupTokens); }, [props.hops, props.weak, props.tree, props.groupTokens]);
   // Switching between the flat map and the volume lays the map out afresh.
   const shownDimension = useRef(dimension);
   useEffect(() => {
@@ -160,11 +176,14 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
     {!renderError && <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-label="Visible graph labels">
       {labels.filter(label => label.y >= (props.topInset ?? 0)).map(label => {
         const node = props.nodes.find(n => n.uri === label.uri); if (!node) return null;
-        return <button key={node.uri} type="button" data-graph-node={node.uri} aria-label={`Inspect ${node.name}`} aria-description={node.kind} title={`${node.name} · ${node.kind}`}
+        return <button key={node.uri} type="button" data-graph-node={node.uri} aria-label={`Inspect ${displayName(node)}`} aria-description={node.kind} title={`${displayName(node)} · ${node.name} · ${node.kind}`}
           onClick={() => props.onSelect(node.uri)} onDoubleClick={() => props.onExpand(node)}
-          style={{ left: label.x, top: label.y, transform: "translateX(-50%)" }}
-          className={cn("pointer-events-auto absolute flex h-6 max-w-40 items-center gap-1 rounded-[var(--radius-xs)] px-1 text-xs text-foreground-muted [text-shadow:0_0_4px_var(--color-surface),0_0_2px_var(--color-surface)] hover:text-link focus-visible:bg-surface focus-visible:outline-2 focus-visible:outline-ring", props.selected === node.uri && "font-semibold text-link") }>
-          <span className="truncate">{node.name}</span>{props.pinned.has(node.uri) && <Pin className="h-3 w-3 shrink-0" aria-label="Position pinned" />}
+          style={{ left: label.x, top: label.y, transform: `translate(${(label.ax ?? -0.5) * 100}%, ${(label.ay ?? 0) * 100}%)` }}
+          className={cn("pointer-events-auto absolute flex min-h-6 max-w-56 items-center gap-1 rounded-[var(--radius-xs)] px-1 text-xs text-foreground-muted [text-shadow:0_0_4px_var(--color-surface),0_0_2px_var(--color-surface)] hover:text-link focus-visible:bg-surface focus-visible:outline-2 focus-visible:outline-ring", props.selected === node.uri && "font-semibold text-link") }>
+          <span className="line-clamp-2 text-center leading-tight">
+            {showCategory && categoryOf(node) && <span className="mr-1 text-[10px] uppercase tracking-wide text-foreground-muted/80">{categoryOf(node)}</span>}
+            {displayName(node)}
+          </span>{props.pinned.has(node.uri) && <Pin className="h-3 w-3 shrink-0" aria-label="Position pinned" />}
         </button>;
       })}
     </div>}

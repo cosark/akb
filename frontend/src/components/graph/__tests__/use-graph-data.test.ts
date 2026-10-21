@@ -13,7 +13,7 @@ import {
   strongerOnly,
 } from "../use-graph-data";
 import { docUri } from "@/lib/uri";
-import { ALL_RELATIONS, DEFAULT_VIEW, edgeStrength, type GraphNode, type GraphEdge } from "../graph-types";
+import { ALL_RELATIONS, DEFAULT_VIEW, categoryOf, displayName, edgeId, edgeStrength, type GraphNode, type GraphEdge } from "../graph-types";
 
 describe("apiToPayload", () => {
   it("preserves server degree, traversal depth, and relation source without guessing missing values", () => {
@@ -514,5 +514,26 @@ describe("edge strength", () => {
     } as never);
     expect(payload.edges.map(e => e.edge_type)).toEqual(["strong", "weak"]);
     expect(visibleGraph(payload, DEFAULT_VIEW, new Set(), false).edges).toHaveLength(1);
+  });
+});
+
+describe("labels and the strong walk's shape", () => {
+  it("names a resource by its title, else by its file name without path or extension", () => {
+    expect(displayName({ name: "incidents/inc-1.md", title: "Payment pods crash" })).toBe("Payment pods crash");
+    expect(displayName({ name: "incidents/inc-1.md" })).toBe("inc-1");
+    expect(displayName({ name: "incidents/inc-1.md", title: "  " })).toBe("inc-1");
+    expect(categoryOf({ doc_type: "postmortem", group: "postmortems" })).toBe("postmortem");
+    expect(categoryOf({ group: "hr/people" })).toBe("people");
+    expect(categoryOf({})).toBe("");
+  });
+
+  it("records the backbone and what each hop adds", () => {
+    const s = (source: string, target: string, relation: GraphEdge["relation"] = "related_to"): GraphEdge => ({ source, target, relation, kind: "explicit" });
+    const scene = strongNeighborhood({ nodes: ["f", "a", "b", "pm", "c"].map(uri => ({ uri, name: uri, kind: "document" as const })),
+      edges: [s("f", "a"), s("f", "b"), s("pm", "f", "derived_from"), s("pm", "c"), s("pm", "a")] }, "f", 3);
+    expect(scene.perHop).toEqual([3, 1, 0]);
+    expect(Object.fromEntries(scene.reach)).toEqual({ f: 0, a: 1, b: 1, pm: 1, c: 2 });
+    expect(scene.tree.has(edgeId(s("pm", "c")))).toBe(true);
+    expect(scene.tree.has(edgeId(s("pm", "a")))).toBe(false);
   });
 });

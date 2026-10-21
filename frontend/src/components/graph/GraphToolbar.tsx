@@ -83,6 +83,10 @@ interface Props {
   resourceCounts?: Record<NodeKind, number>;
   onSelect?: (uri: string) => void;
   onRearrange?: () => void;
+  /** Around a focus in strong mode: resources each hop adds, and the folded weak neighbours. */
+  strongWalk?: { perHop: number[]; weak: number; weakShown: boolean; onToggleWeak: () => void };
+  /** Whole-Vault colouring by collection, largest first. */
+  collections?: { key: string; count: number; token: string }[];
 }
 
 function kindIcon(kind: NodeKind) {
@@ -108,7 +112,7 @@ export function GraphToolbar(props: Props) {
 function GraphControls({
   vault, view, onChange, onNavigate, hubs, nodes, resourceCounts, onSelect, onRearrange,
   focusTitle, displayMode, onDisplayModeChange, orphanCount, hideOrphans,
-  onToggleOrphans, hiddenCount, onUnhideAll, onFit, history,
+  onToggleOrphans, hiddenCount, onUnhideAll, onFit, history, strongWalk, collections,
 }: Props & { history: ReturnType<typeof useGraphHistory> }) {
   // URL navigation can commit after another control fires. Compose those
   // actions against the latest dispatch; external navigation replaces it.
@@ -367,7 +371,7 @@ function GraphControls({
               onClick={() => toggleType(kind)}
               className={cn("h-11 gap-1.5 rounded-[var(--radius-sm)] px-1.5 text-xs hover:bg-surface-hover @min-[40rem]/graph-toolbar:h-7 @min-[40rem]/graph-toolbar:px-2",
                 selected ? "text-foreground" : "text-foreground-muted")}>
-              <GraphNodeMarker kind={kind} neutral={!!view.entry} />
+              <GraphNodeMarker kind={kind} neutral={!!view.entry || !!collections?.length} />
               <span className={selected ? undefined : "line-through"}>{label}</span>
               {count !== undefined && <>
                 <span aria-hidden className="min-w-3 text-right tabular-nums text-foreground-muted">{count}</span>
@@ -384,10 +388,16 @@ function GraphControls({
             <ChevronRight className="h-3 w-3 shrink-0 text-foreground-muted" aria-hidden />
             <span className="max-w-44 truncate font-medium text-foreground" title={focusTitle || view.entry}>{focusTitle || view.entry}</span>
             <div role="group" aria-label="Neighborhood depth" className="flex items-center rounded-[var(--radius-sm)] bg-surface-2">
-              {([1, 2, 3] as const).map(hops => <button key={hops} type="button"
-                onClick={() => updateView(current => ({ ...current, hops }))} aria-pressed={view.hops === hops} aria-label={hops + " hop neighborhood"}
-                className={cn("h-11 min-w-11 rounded-[var(--radius-sm)] px-1.5 tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/graph-toolbar:h-9 @min-[40rem]/graph-toolbar:min-w-9",
-                  view.hops === hops ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>{hops}</button>)}
+              {([1, 2, 3] as const).map(hops => {
+                const added = strongWalk?.perHop[hops - 1];
+                return <button key={hops} type="button"
+                  onClick={() => updateView(current => ({ ...current, hops }))} aria-pressed={view.hops === hops} aria-label={hops + " hop neighborhood"}
+                  title={added === undefined ? undefined : `Hop ${hops} adds ${added} strongly connected resource${added === 1 ? "" : "s"}`}
+                  className={cn("h-11 min-w-11 rounded-[var(--radius-sm)] px-1.5 tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/graph-toolbar:h-9 @min-[40rem]/graph-toolbar:min-w-9",
+                    view.hops === hops ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>
+                  {hops}{added !== undefined && <span className="ml-0.5 text-[10px] text-foreground-muted">+{added}</span>}
+                </button>;
+              })}
             </div>
             <span className="text-foreground-muted">hops</span>
             <button type="button" aria-pressed={view.links === "strong"}
@@ -397,7 +407,38 @@ function GraphControls({
                 view.links === "strong" ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>
               Strong links only
             </button>
+            {strongWalk && strongWalk.weak > 0 && <button type="button" aria-pressed={strongWalk.weakShown} onClick={strongWalk.onToggleWeak}
+              title="Resources joined to the focus only by a body link. They are never followed."
+              className={cn("min-h-11 rounded-[var(--radius-sm)] px-2 tabular-nums focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/graph-toolbar:min-h-9",
+                strongWalk.weakShown ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>
+              {strongWalk.weakShown ? "Hide" : "Show"} {strongWalk.weak} weak link{strongWalk.weak === 1 ? "" : "s"}
+            </button>}
             <HopLegend hops={view.hops} />
+            {strongWalk && (() => {
+              const last = strongWalk.perHop.reduce((end, n, i) => (n > 0 ? i + 1 : end), 0);
+              return last < view.hops ? <span className="text-foreground-muted">Strong links end at {last === 0 ? "the focus" : `hop ${last}`}</span> : null;
+            })()}
+          </div>
+        )}
+        {!view.entry && (
+          <div className="pointer-events-auto flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-border bg-surface px-2 py-0.5 text-xs shadow-xs">
+            <button type="button" aria-pressed={view.links === "strong"}
+              onClick={() => updateView(current => ({ ...current, links: current.links === "strong" ? "all" : "strong" }))}
+              title="Draw strong connections only (explicit relations). Turn off to draw body links too."
+              className={cn("min-h-11 rounded-[var(--radius-sm)] px-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/graph-toolbar:min-h-9",
+                view.links === "strong" ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>
+              Strong links only
+            </button>
+            {collections && collections.length > 0 && <span className="flex flex-wrap items-center gap-2" aria-label="Collection colours">
+              {collections.slice(0, 4).map(c => <span key={c.key} className="flex items-center gap-1 text-foreground-muted" title={`${c.count} in ${c.key}`}>
+                <svg viewBox="0 0 16 16" aria-hidden className="h-3 w-3 shrink-0" style={{ color: `var(--color-${c.token})` }}><circle cx="8" cy="8" r="5" fill="currentColor" /></svg>
+                {c.key.split("/").at(-1)}
+              </span>)}
+              {collections.length > 4 && <span className="flex items-center gap-1 text-foreground-muted">
+                <svg viewBox="0 0 16 16" aria-hidden className="h-3 w-3 shrink-0" style={{ color: "var(--color-cat-6)" }}><circle cx="8" cy="8" r="5" fill="currentColor" /></svg>
+                {collections.length - 4} more
+              </span>}
+            </span>}
           </div>
         )}
         {!view.entry && view.selected && (

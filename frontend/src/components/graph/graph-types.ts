@@ -22,6 +22,8 @@ export const ALL_RELATIONS: ReadonlyArray<RelationKind> = [
 export interface GraphNode {
   uri: string;
   name: string;
+  /** The document's own title when the server reports one; labels prefer it over ``name``. */
+  title?: string;
   kind: NodeKind;
   doc_id?: string;
   doc_type?: string;
@@ -44,6 +46,11 @@ export interface GraphEdge {
   kind?: "implicit" | "explicit";
   /** Server-reported strength: an explicit relation is strong unless made weak; a body link is always weak. */
   edge_type?: "strong" | "weak";
+}
+
+/** A stable key for one edge (endpoints, relation and provenance); endpoints are canonical URI strings. */
+export function edgeId(e: Pick<GraphEdge, "source" | "target" | "relation" | "kind">): string {
+  return [e.source, e.target, e.relation, e.kind ?? ""].join("\u0000");
 }
 
 /** The strength of a connection: the server's ``edge_type``; from a server that does not report it, an explicit
@@ -87,6 +94,19 @@ export interface GraphView {
  *  1, 2 and 3 hops away. A lightness-ramped run of the categorical scale, so
  *  neighbouring steps differ slightly and the focus stands out in the accent. */
 export const HOP_TOKENS = ["cat-5", "cat-1", "cat-2", "cat-3"] as const;
+
+/** What a resource is called on the map: its title, else its name without the collection path and extension. */
+export function displayName(node: Pick<GraphNode, "name" | "title">): string {
+  const title = node.title?.trim();
+  if (title) return title;
+  const leaf = node.name.split("/").filter(Boolean).at(-1) ?? node.name;
+  return leaf.replace(/\.md$/i, "") || node.name;
+}
+
+/** The short category shown before a label: the document type when known, else the collection it lives in. */
+export function categoryOf(node: Pick<GraphNode, "doc_type" | "group">): string {
+  return node.doc_type?.trim() || node.group?.split("/").at(-1) || "";
+}
 
 export const DEFAULT_VIEW: GraphView = {
   hops: 1,
