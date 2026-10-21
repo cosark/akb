@@ -384,18 +384,31 @@ export async function fetchNeighbors(
   return apiToPayload(resp);
 }
 
+/** Strong links around a focus: the server walks strong edges only, so its node budget goes to the strong
+ *  neighbourhood, and one hop of every edge adds the focus's own weak neighbours. */
+export async function fetchStrongNeighbors(vault: string, id: string, hops: 1 | 2 | 3, limit = 200): Promise<GraphPayload> {
+  const [strong, around] = await Promise.all([
+    getGraph(vault, id, hops, limit, "strong"),
+    getGraph(vault, id, 1, 100),
+  ]);
+  const merged = mergeGraph(apiToPayload(strong), apiToPayload(around));
+  const truncated = (strong as { truncated?: unknown }).truncated === true;
+  return truncated ? { ...merged, meta: { ...merged.meta, truncated: true } } : merged;
+}
+
 export function useNeighborhood(
   vault: string,
   entry: string | undefined,
   hops: 1 | 2 | 3,
+  links: "strong" | "all" = "all",
 ) {
   const user = useCurrentUser();
   const { checking, revision } = useAccessVerification();
   return useQuery({
-    queryKey: ["graph", user?.user_id, revision, vault, "neighborhood", entry, hops],
+    queryKey: ["graph", user?.user_id, revision, vault, "neighborhood", entry, hops, links],
     enabled: !!entry && !!user?.user_id && !checking,
     // Single server-side BFS call (was N per-node /relations round trips).
     // The enabled guard requires a resource and a verified account.
-    queryFn: () => fetchNeighbors(vault, entry!, hops, 200),
+    queryFn: () => links === "strong" ? fetchStrongNeighbors(vault, entry!, hops) : fetchNeighbors(vault, entry!, hops, 200),
   });
 }

@@ -62,7 +62,7 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
     const structural = next.entry !== view.entry || next.hops !== view.hops || next.types !== view.types || next.relations !== view.relations;
     setSearch(new URLSearchParams(viewToQuery(next)), { replace: !structural });
   }, [setSearch, view]);
-  const full = useFullGraph(vault, !view.entry), neighborhood = useNeighborhood(vault, view.entry, view.hops);
+  const full = useFullGraph(vault, !view.entry), neighborhood = useNeighborhood(vault, view.entry, view.hops, view.links);
   const query = view.entry ? neighborhood : full;
   const base = query.data;
   const [overlay, setOverlay] = useState<GraphPayload>(EMPTY);
