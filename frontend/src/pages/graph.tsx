@@ -9,9 +9,9 @@ import { GraphDetailPanel } from "@/components/graph/GraphDetailPanel";
 import { GraphListView } from "@/components/graph/GraphListView";
 import { GraphToolbar, type GraphDisplayMode } from "@/components/graph/GraphToolbar";
 import { queryToView, viewToQuery } from "@/components/graph/graph-state";
-import { graphCoverage } from "@/components/graph/graph-scene";
+import { graphCoverage, wholeVaultNote } from "@/components/graph/graph-scene";
 import { ALL_NODE_KINDS, ALL_RELATIONS, RELATION_LABEL, displayName, edgeStrength, kindToSegment, type GraphEdge, type GraphNode, type GraphView, type RelatedRef } from "@/components/graph/graph-types";
-import { changedWithin, degreeMap, docIdFromUri, fetchNeighbors, hopDistances, mergeGraph, strongNeighborhood, useFullGraph, useNeighborhood, visibleGraph, type GraphPayload, type StrongScene } from "@/components/graph/use-graph-data";
+import { changedWithin, degreeMap, docIdFromUri, fetchNeighbors, hopDistances, mergeGraph, strongNeighborhood, useFullGraph, useIncomingNeighborhood, useNeighborhood, visibleGraph, type GraphPayload, type StrongScene } from "@/components/graph/use-graph-data";
 import type { GraphDimension } from "@/components/graph/graph-spatial-layout";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
@@ -64,7 +64,12 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
   }, [setSearch, view]);
   const full = useFullGraph(vault, !view.entry), neighborhood = useNeighborhood(vault, view.entry, view.hops, view.links);
   const query = view.entry ? neighborhood : full;
-  const base = query.data;
+  // Incoming and all directions add the strong links that point at the walked resources, loaded beside the outgoing
+  // neighbourhood and merged in when they arrive.
+  const incoming = useIncomingNeighborhood(vault, view.entry, view.hops, view.links === "strong" && view.direction !== "outgoing");
+  const incomingData = view.direction === "outgoing" ? undefined : incoming.data;
+  const base = useMemo(() => neighborhood.data && incomingData && view.entry ? mergeGraph(neighborhood.data, incomingData) : query.data,
+    [neighborhood.data, incomingData, view.entry, query.data]);
   const [overlay, setOverlay] = useState<GraphPayload>(EMPTY);
   const [pinned, setPinned] = useState(new Set<string>());
   const [hidden, setHidden] = useState(new Set<string>());
@@ -112,7 +117,7 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
     const strong = view.entry && entryNode && view.links === "strong"
       // The plain-links fallback is decided on the unfiltered map: a date window that removes every strong edge
       // still walks (and so shows only what stays reachable), instead of showing everything left.
-      ? strongNeighborhood(recent, entryNode.uri, view.hops, revealed, view.since !== "all" && merged.edges.some(e => edgeStrength(e) === "strong"))
+      ? strongNeighborhood(recent, entryNode.uri, view.hops, revealed, view.since !== "all" && merged.edges.some(e => edgeStrength(e) === "strong"), view.direction)
       : { ...recent, ...empty };
     const visible = visibleGraph(strong, view, hidden, hideOrphans);
     if (!view.entry && view.links === "strong" && visible.edges.some(e => edgeStrength(e) === "strong")) {
@@ -124,7 +129,7 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
     // Selection is deliberately excluded (it cannot invalidate renderer data), except that the date filter exempts
     // the selection, so a selection change matters while a window is set (dateExempt).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [merged, overlay, filterKey, hidden, hideOrphans, view.entry, entryNode, view.links, view.hops, view.since, dateExempt]);
+    [merged, overlay, filterKey, hidden, hideOrphans, view.entry, entryNode, view.links, view.hops, view.since, view.direction, dateExempt]);
   const weakShown = weakChoice ?? scene.weak.size <= 5;
   const displayed = useMemo(() => {
     if (weakShown || !scene.strong || !view.entry) return scene;
@@ -137,9 +142,13 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
   const selected = view.selected ? displayed.nodes.find(n => n.uri === view.selected || n.doc_id === view.selected || docIdFromUri(n.uri) === view.selected) : undefined;
   const edge = displayed.edges.find(item => edgeSelection && item.source === edgeSelection.source && item.target === edgeSelection.target && item.relation === edgeSelection.relation && item.kind === edgeSelection.kind);
   const selectedId = selected && (selected.doc_id || docIdFromUri(selected.uri));
-  // Missing weak links make the map partial only while weak links are shown.
-  const coverage = graphCoverage(base?.meta && weakShown && base.meta.weakTruncated ? { ...base.meta, truncated: true } : base?.meta);
+  // Missing weak links make the map partial only while weak links are shown; a capped incoming walk always does.
+  const partial = (weakShown && base?.meta?.weakTruncated) || incomingData?.meta?.truncated === true;
+  const coverage = graphCoverage(base?.meta && partial ? { ...base.meta, truncated: true } : base?.meta);
   const orphanCount = merged.nodes.filter(n => n.degree === 0).length;
+  // The whole Vault never draws everything: it loads the best-connected resources only and, with strong links only,
+  // leaves body links out. Say so, so a missing relationship is not read as an absent one.
+  const vaultNote = view.entry || !base ? "" : wholeVaultNote(base.meta, scene.overview ? merged.edges.filter(e => edgeStrength(e) !== "strong").length : 0);
   const degree = useMemo(() => degreeMap(displayed.edges), [displayed.edges]);
   const hubs = useMemo(() => [...displayed.nodes].sort((a, b) => (degree.get(b.uri) ?? 0) - (degree.get(a.uri) ?? 0)).slice(0, 8), [displayed.nodes, degree]);
   const focusTitle = entryNode && displayName(entryNode);
@@ -219,7 +228,8 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
         onNavigate={query => navigate({ search: query })}
         nodes={displayed.nodes} resourceCounts={resourceCounts} hubs={hubs} onSelect={select}
         nodeCount={displayed.nodes.length} edgeCount={displayed.edges.length}
-        strongWalk={view.entry && scene.strong ? { perHop: scene.perHop, weak: scene.weak.size, weakShown, onToggleWeak: () => setWeakChoice(!weakShown) } : undefined}
+        strongWalk={view.entry && scene.strong ? { perHop: scene.perHop, weak: scene.weak.size, weakShown, onToggleWeak: () => setWeakChoice(!weakShown),
+          loadingIncoming: view.direction !== "outgoing" && incoming.isFetching } : undefined}
         collections={collections} dated={merged.nodes.some(n => !!n.updated_at)}
         focusTitle={focusTitle} displayMode={mode} onDisplayModeChange={next => {
           setMode(next);
@@ -277,7 +287,8 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
           </summary>
           <div className="absolute bottom-full left-0 mb-2 w-72 max-w-[80vw] rounded-[var(--radius-md)] border border-border bg-surface p-3 leading-relaxed shadow-md">{coverage.detail}</div>
         </details>
-        {mode === "graph" && <p className="hidden h-9 items-center px-2 @min-[64rem]/graph:flex">Larger dots have more connections in this map</p>}
+        {vaultNote && <p role="note" className="pointer-events-auto flex min-h-9 max-w-xl items-center gap-2 rounded-[var(--radius-sm)] border border-border bg-surface px-3 py-1.5 leading-snug shadow-xs"><Info className="h-3.5 w-3.5 shrink-0" aria-hidden />{vaultNote}</p>}
+        {mode === "graph" && !vaultNote && <p className="hidden h-9 items-center px-2 @min-[64rem]/graph:flex">Larger dots have more connections in this map</p>}
       </div>
       <div className="sr-only" aria-live="polite">{selected ? `Selected ${selected.name}, ${selected.kind}, ${degree.get(selected.uri) ?? 0} relationships in this map` : ""}</div>
     </section>

@@ -222,7 +222,7 @@ export class SpatialGraphRenderer {
 
   theme() {
     const css = getComputedStyle(document.documentElement);
-    this.colors = Object.fromEntries(["surface", "cat-1", "cat-2", "cat-3", "cat-4", "cat-5", "cat-6", "graph-edge", "link"].map(key => [key, css.getPropertyValue(`--color-${key}`).trim()]));
+    this.colors = Object.fromEntries(["surface", "cat-1", "cat-2", "cat-3", "cat-4", "cat-5", "cat-6", "hop-4", "hop-5", "graph-edge", "link"].map(key => [key, css.getPropertyValue(`--color-${key}`).trim()]));
     this.scene.background = new Color(this.colors.surface);
     this.rebuild();
   }

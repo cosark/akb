@@ -761,13 +761,13 @@ an `sr-only` summary, never the only signal.
   still operable. These are independent pressed-state filter buttons,
   not tabs; hidden kinds retain their counts and remain recoverable. Counts
   describe the loaded map, not an assumed complete Vault inventory. A
-  focused-neighborhood breadcrumb and a hop dropdown (1, 2 or 3 hops) appear
-  around a focus; a "Changed within" dropdown (last day, 7 days, 30 days, any
-  time) sits beside it and in the whole-Vault strip, keeping only resources
+  focused-neighborhood breadcrumb and a labelled "Hop" dropdown (1 to 5) appear
+  around a focus; a labelled "Period" dropdown (All time, 1 day, 7 days, 30
+  days) sits beside it and in the whole-Vault strip, keeping only resources
   whose `updated_at` falls in the window (the focus, the selection, revealed
   resources and resources without a reported time always stay), applied
   before the walk so it never passes through a hidden resource. Around a focus the canvas colours each resource by its hop distance —
-  focus `cat-5`, then `cat-1`, `cat-2`, `cat-3` for 1, 2 and 3 hops, a
+  focus `cat-5`, then `cat-1`, `cat-2`, `cat-3`, `hop-4`, `hop-5` for 1 to 5 hops, a
   lightness-ramped run of the categorical scale — and shape alone carries the
   kind; a compact hop legend beside the control names each colour, and the
   kind legend's markers turn neutral so they do not claim a colour the map is
@@ -775,7 +775,10 @@ an `sr-only` summary, never the only signal.
   follows explicit relations outward from the focus (and back along
   `derived_from` and `depends_on`: what was derived from a resource and what
   depends on it, i.e. the services an incident's service affects), so shared context such as a cluster ends the
-  walk instead of pulling in every other resource that shares it; the focus's
+  walk instead of pulling in every other resource that shares it. A "Direction" toggle (Outgoing, the default;
+  Incoming; All) switches the walk: Incoming loads the incoming connections (every strong link that points at a
+  reached resource, such as the incidents that name a service) and follows them back to the chosen hop, All does
+  both; the extra load runs beside the drawn map; the focus's
   own body links, and those of every strongly reached resource short of the
   chosen depth (one step further out), are weak neighbours that are never
   followed: with more than
@@ -793,7 +796,8 @@ an `sr-only` summary, never the only signal.
   around a focus they sit on the far side of their dot from the focus and are
   prioritised by distance. Turning it off (`links=all`) shows every loaded
   connection. A Vault without explicit relations around the focus shows all
-  connections with a one-line notice. The whole-Vault map also defaults to
+  connections with a one-line notice. The whole-Vault map carries a visible note when it leaves anything out (resources
+  past its best-connected set, hidden body links), pointing to Focus for the full connections. It also defaults to
   strong links only (body links drawn only when it is turned off) and colours
   resources by collection: the four largest collections take `cat-1`..`cat-4`,
   the rest share `cat-6`, named in a compact legend; shape still carries the

@@ -18,6 +18,9 @@
 /* Read by the WebGL renderer at runtime, not by a Tailwind utility. */
 @theme static {
   --color-graph-edge: #526675;
+  /* Hops 4 and 5 continue the cat-1 → cat-3 ramp toward a pale green, so far resources read as farther. */
+  --color-hop-4: #7aae8f;
+  --color-hop-5: #a3c2ae;
 }
 
 @theme {
@@ -245,6 +248,8 @@
   --color-cat-4: #e3a13f;
   --color-cat-5: #f0744a;
   --color-cat-6: #9aa4af;
+  --color-hop-4: #8fdcb4;
+  --color-hop-5: #b9e3cb;
   /* Recency ramp (dark): lighter warm → light gray, AA on the dark surface. */
   --color-recency-h: #da8063;
   --color-recency-d: #c58c7c;

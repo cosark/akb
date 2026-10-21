@@ -85,10 +85,13 @@ export interface GraphView {
   // single concept (graph traversal distance). Pre-0.3.0 this
   // field was called `depth`, which collided with the also-
   // renamed `akb_browse.depth` (collection-tree depth).
-  hops: 1 | 2 | 3;
+  hops: GraphHops;
   /** Around a focus: follow explicit relations only ("strong", the default)
    *  or every loaded connection, body links included ("all"). */
   links: "strong" | "all";
+  /** Which way the strong walk goes from the focus: its own links ("outgoing", the default), the links that point at
+   *  it ("incoming"), or both ("all"). */
+  direction: GraphDirection;
   /** Only resources changed within the last N days ("all" = any time). */
   since: GraphSince;
   types: Set<NodeKind>;
@@ -96,10 +99,15 @@ export interface GraphView {
   selected?: string;
 }
 
+export type GraphHops = 1 | 2 | 3 | 4 | 5;
+export const GRAPH_HOPS: GraphHops[] = [1, 2, 3, 4, 5];
+export type GraphDirection = "outgoing" | "incoming" | "all";
+export const GRAPH_DIRECTIONS: GraphDirection[] = ["outgoing", "incoming", "all"];
+
 /** Colour tokens for the distance from the focused resource: the focus, then
- *  1, 2 and 3 hops away. A lightness-ramped run of the categorical scale, so
+ *  1 to 5 hops away. A lightness-ramped run of the categorical scale, so
  *  neighbouring steps differ slightly and the focus stands out in the accent. */
-export const HOP_TOKENS = ["cat-5", "cat-1", "cat-2", "cat-3"] as const;
+export const HOP_TOKENS = ["cat-5", "cat-1", "cat-2", "cat-3", "hop-4", "hop-5"] as const;
 
 /** What a resource is called on the map: its title, else its name without the collection path and extension. */
 export function displayName(node: Pick<GraphNode, "name" | "title">): string {
@@ -117,7 +125,7 @@ export function categoryOf(node: Pick<GraphNode, "doc_type" | "group">): string 
 }
 
 export type GraphSince = "all" | "1" | "7" | "30";
-export const GRAPH_SINCE: GraphSince[] = ["1", "7", "30", "all"];
+export const GRAPH_SINCE: GraphSince[] = ["all", "1", "7", "30"];
 
 /** Labels on the map are kept short; the inspector and tooltips carry the full title. */
 export const LABEL_MAX_CHARS = 15;
@@ -136,6 +144,7 @@ export function shortName(node: Pick<GraphNode, "name" | "title" | "doc_type" | 
 export const DEFAULT_VIEW: GraphView = {
   hops: 1,
   links: "strong",
+  direction: "outgoing",
   since: "all",
   types: new Set(ALL_NODE_KINDS),
   relations: new Set(ALL_RELATIONS),

@@ -31,7 +31,11 @@ import { viewToQuery } from "./graph-state";
 import {
   ALL_NODE_KINDS,
   ALL_RELATIONS,
+  GRAPH_DIRECTIONS,
+  GRAPH_HOPS,
   GRAPH_SINCE,
+  type GraphDirection,
+  type GraphHops,
   RELATION_LABEL,
   type GraphNode,
   type GraphView,
@@ -86,7 +90,7 @@ interface Props {
   onSelect?: (uri: string) => void;
   onRearrange?: () => void;
   /** Around a focus in strong mode: resources each hop adds, and the folded weak neighbours. */
-  strongWalk?: { perHop: number[]; weak: number; weakShown: boolean; onToggleWeak: () => void };
+  strongWalk?: { perHop: number[]; weak: number; weakShown: boolean; onToggleWeak: () => void; loadingIncoming?: boolean };
   /** Whole-Vault colouring by collection, largest first. */
   collections?: { key: string; count: number; token: string }[];
   /** Whether any loaded resource carries a change time (the date filter needs one). */
@@ -391,9 +395,10 @@ function GraphControls({
               className="min-h-11 font-medium text-link hover:text-link-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/graph-toolbar:min-h-9">Whole Vault</button>
             <ChevronRight className="h-3 w-3 shrink-0 text-foreground-muted" aria-hidden />
             <span className="max-w-44 truncate font-medium text-foreground" title={focusTitle || view.entry}>{focusTitle || view.entry}</span>
-            <SelectMenu aria-label="Neighborhood depth" value={String(view.hops)} className="h-9 w-auto min-w-[6.5rem] text-xs"
-              onValueChange={value => updateView(current => ({ ...current, hops: Number(value) as 1 | 2 | 3 }))}
-              options={[1, 2, 3].map(hops => ({ value: String(hops), label: `${hops} hop${hops === 1 ? "" : "s"}` }))} />
+            <label className="flex items-center gap-1"><span className="text-foreground-muted">Hop</span>
+              <SelectMenu aria-label="Hop" value={String(view.hops)} className="h-9 w-auto min-w-[4rem] text-xs"
+                onValueChange={value => updateView(current => ({ ...current, hops: Number(value) as GraphHops }))}
+                options={GRAPH_HOPS.map(hops => ({ value: String(hops), label: String(hops) }))} /></label>
             <SinceMenu view={view} updateView={updateView} dated={dated} />
             <button type="button" aria-pressed={view.links === "strong"}
               onClick={() => updateView(current => ({ ...current, links: current.links === "strong" ? "all" : "strong" }))}
@@ -408,6 +413,19 @@ function GraphControls({
                 strongWalk.weakShown ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>
               {strongWalk.weakShown ? "Hide" : "Show"} {strongWalk.weak} weak link{strongWalk.weak === 1 ? "" : "s"}
             </button>}
+            {view.links === "strong" && <span role="group" aria-label="Link direction" className="flex items-center gap-1">
+              <span className="text-foreground-muted">Direction</span>
+              <span className="flex rounded-[var(--radius-sm)] border border-border p-0.5">
+                {GRAPH_DIRECTIONS.map(direction => <button key={direction} type="button" aria-pressed={view.direction === direction}
+                  title={DIRECTION_TITLE[direction]}
+                  onClick={() => updateView(current => ({ ...current, direction }))}
+                  className={cn("min-h-10 rounded-[calc(var(--radius-sm)-2px)] px-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring @min-[40rem]/graph-toolbar:min-h-7",
+                    view.direction === direction ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>
+                  {DIRECTION_LABEL[direction]}
+                </button>)}
+              </span>
+              {strongWalk?.loadingIncoming && <span className="text-foreground-muted" aria-live="polite">Loading incoming connections…</span>}
+            </span>}
             <HopLegend hops={view.hops} />
             {strongWalk && (() => {
               const last = strongWalk.perHop.reduce((end, n, i) => (n > 0 ? i + 1 : end), 0);
@@ -442,15 +460,23 @@ function GraphControls({
   );
 }
 
-const SINCE_LABEL: Record<GraphView["since"], string> = { "1": "Last day", "7": "Last 7 days", "30": "Last 30 days", all: "Any time" };
+const SINCE_LABEL: Record<GraphView["since"], string> = { all: "All time", "1": "1 day", "7": "7 days", "30": "30 days" };
+const DIRECTION_LABEL: Record<GraphDirection, string> = { outgoing: "Outgoing", incoming: "Incoming", all: "All" };
+const DIRECTION_TITLE: Record<GraphDirection, string> = {
+  outgoing: "Follow each resource's own strong links (plus what was derived from it or depends on it).",
+  incoming: "Load incoming connections: follow back the strong links that point at each resource, such as the incidents that name a service.",
+  all: "Follow strong links both ways: outgoing and incoming connections.",
+};
 
 /** Which resources the map shows by when they last changed. */
 function SinceMenu({ view, updateView, dated = true }: { view: GraphView; updateView: (update: (current: GraphView) => GraphView) => void; dated?: boolean }) {
   // A server that reports no change times cannot be filtered by them; say so instead of silently doing nothing.
-  return <SelectMenu aria-label="Changed within" value={view.since} className="h-9 w-auto min-w-[7.5rem] text-xs"
-    disabled={!dated && view.since === "all"}
-    onValueChange={value => updateView(current => ({ ...current, since: value as GraphView["since"] }))}
-    options={GRAPH_SINCE.map(since => ({ value: since, label: SINCE_LABEL[since] }))} />;
+  return <label className="flex items-center gap-1" title="Show resources updated (updated_at) within this period">
+    <span className="text-foreground-muted">Period</span>
+    <SelectMenu aria-label="Period" value={view.since} className="h-9 w-auto min-w-[6.5rem] text-xs"
+      disabled={!dated && view.since === "all"}
+      onValueChange={value => updateView(current => ({ ...current, since: value as GraphView["since"] }))}
+      options={GRAPH_SINCE.map(since => ({ value: since, label: SINCE_LABEL[since] }))} /></label>;
 }
 
 function GraphFilterMenu({

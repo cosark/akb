@@ -3,6 +3,9 @@ import {
   ALL_NODE_KINDS,
   ALL_RELATIONS,
   DEFAULT_VIEW,
+  GRAPH_DIRECTIONS,
+  GRAPH_HOPS,
+  type GraphHops,
   type GraphView,
   type NodeKind,
   type RelationKind,
@@ -28,6 +31,7 @@ export function viewToQuery(v: GraphView): string {
   if (v.hops !== DEFAULT_VIEW.hops) p.set("hops", String(v.hops));
   if (v.links !== DEFAULT_VIEW.links) p.set("links", v.links);
   if (v.since !== DEFAULT_VIEW.since) p.set("since", v.since);
+  if (v.direction !== DEFAULT_VIEW.direction) p.set("dir", v.direction);
   if (!setsEqual(v.types, ALL_KIND_SET)) {
     p.set("types", [...v.types].join(","));
   }
@@ -38,11 +42,9 @@ export function viewToQuery(v: GraphView): string {
   return p.toString();
 }
 
-function parseHops(raw: string | null): 1 | 2 | 3 {
-  if (raw === "1") return 1;
-  if (raw === "2") return 2;
-  if (raw === "3") return 3;
-  return DEFAULT_VIEW.hops;
+function parseHops(raw: string | null): GraphHops {
+  const hops = Number(raw);
+  return GRAPH_HOPS.includes(hops as GraphHops) ? hops as GraphHops : DEFAULT_VIEW.hops;
 }
 
 export function queryToView(q: URLSearchParams): GraphView {
@@ -58,6 +60,7 @@ export function queryToView(q: URLSearchParams): GraphView {
     // bookmarked URLs.
     hops: parseHops(q.get("hops") ?? q.get("depth")),
     links: q.get("links") === "all" ? "all" : "strong",
+    direction: GRAPH_DIRECTIONS.find(d => d === q.get("dir")) ?? DEFAULT_VIEW.direction,
     since: (["1", "7", "30"] as const).find(value => value === q.get("since")) ?? "all",
     types: types !== null
       ? new Set(

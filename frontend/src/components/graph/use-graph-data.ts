@@ -15,6 +15,8 @@ import {
   edgeStrength,
   type GraphEdge,
   type GraphNode,
+  type GraphDirection,
+  type GraphHops,
   type GraphView,
   type NodeKind,
   type RelationKind,
@@ -152,20 +154,9 @@ const WALKED_BACK: ReadonlySet<string> = new Set(["derived_from", "depends_on"])
  *  own weak neighbours stay, listed in ``weak`` and never walked further.
  *  A map without any explicit relation is returned unchanged with
  *  ``strong: false``, so a Vault that never declares relations keeps its links. */
-export function strongNeighborhood(
-  p: GraphPayload,
-  focus: string | undefined,
-  hops: number,
-  /** Resources the reader asked to see (loaded connections, a followed relationship, the selection): always kept. */
-  revealed: Iterable<string> = [],
-  /** Set when filters (e.g. a date window) ran first: the walk applies even if they left no strong edge. */
-  filtered = false,
-): GraphPayload & StrongScene {
-  const explicit = p.edges.filter(e => edgeStrength(e) === "strong" && e.source !== e.target);
-  if (!focus || (explicit.length === 0 && !filtered)) return { ...p, weak: new Set(), weakDepth: new Map(), strong: false, reach: new Map(), tree: new Set(), perHop: [] };
-  const reach = new Map<string, number>([[focus, 0]]);
-  // The edge by which the walk first reached each resource: the backbone the map draws at full weight.
-  const tree = new Set<string>();
+/** The outgoing walk: a resource's own strong links, plus what was derived from it or depends on it. */
+function outgoingWalk(explicit: GraphEdge[], focus: string, hops: number): [Map<string, number>, Set<string>] {
+  const reach = new Map<string, number>([[focus, 0]]), tree = new Set<string>();
   // Along depends_on the walk keeps its direction: from what it reached as an affected resource (something that
   // depends on the way here) it goes on to further affected resources only, and from a dependency to further
   // dependencies only, so it never turns back into the other services a dependent or a dependency also touches.
@@ -183,6 +174,47 @@ export function strongNeighborhood(
       reach.set(other, next); mode.set(other, as); queue.push(other); tree.add(edgeId(e));
     }
   }
+  return [reach, tree];
+}
+
+/** The incoming walk: back along every strong link that points at a resource (the incidents that name a service, the
+ *  postmortems derived from them), whatever the relation. */
+function incomingWalk(explicit: GraphEdge[], focus: string, hops: number): [Map<string, number>, Set<string>] {
+  const reach = new Map<string, number>([[focus, 0]]), tree = new Set<string>();
+  const queue = [focus];
+  for (let index = 0; index < queue.length; index += 1) {
+    const here = queue[index], next = reach.get(here)! + 1;
+    if (next > hops) continue;
+    for (const e of explicit) {
+      if (e.target !== here || reach.has(e.source)) continue;
+      reach.set(e.source, next); queue.push(e.source); tree.add(edgeId(e));
+    }
+  }
+  return [reach, tree];
+}
+
+export function strongNeighborhood(
+  p: GraphPayload,
+  focus: string | undefined,
+  hops: number,
+  /** Resources the reader asked to see (loaded connections, a followed relationship, the selection): always kept. */
+  revealed: Iterable<string> = [],
+  /** Set when filters (e.g. a date window) ran first: the walk applies even if they left no strong edge. */
+  filtered = false,
+  /** "outgoing": the outgoing walk; "incoming": back along every strong link that points at a walked resource; "all": both. */
+  direction: GraphDirection = "outgoing",
+): GraphPayload & StrongScene {
+  const explicit = p.edges.filter(e => edgeStrength(e) === "strong" && e.source !== e.target);
+  if (!focus || (explicit.length === 0 && !filtered)) return { ...p, weak: new Set(), weakDepth: new Map(), strong: false, reach: new Map(), tree: new Set(), perHop: [] };
+  const reach = new Map<string, number>([[focus, 0]]);
+  // The edge by which the walk first reached each resource: the backbone the map draws at full weight.
+  const tree = new Set<string>();
+  const add = ([walked, edges]: [Map<string, number>, Set<string>]) => {
+    for (const [uri, depth] of walked) if (depth < (reach.get(uri) ?? Infinity)) reach.set(uri, depth);
+    for (const id of edges) tree.add(id);
+  };
+  if (direction !== "incoming") add(outgoingWalk(explicit, focus, hops));
+  if (direction !== "outgoing") add(incomingWalk(explicit, focus, hops));
   // How many resources each step adds, for an honest hop control (the walk may end before the chosen depth).
   const perHop = Array.from({ length: hops }, (_, i) => [...reach.values()].filter(d => d === i + 1).length);
   // Weak neighbours are each strongly reached resource's own: within the chosen depth, a resource's body links show
@@ -417,7 +449,7 @@ export function useFullGraph(vault: string, enabled: boolean) {
 export async function fetchNeighbors(
   vault: string,
   id: string,
-  hops: 1 | 2 | 3 = 1,
+  hops: GraphHops = 1,
   limit = 100,
 ): Promise<GraphPayload> {
   const resp = await getGraph(vault, id, hops, limit);
@@ -426,7 +458,7 @@ export async function fetchNeighbors(
 
 /** Strong links around a focus: the server walks strong edges only, so its node budget goes to the strong
  *  neighbourhood, and one hop of every edge adds the focus's own weak neighbours. */
-export async function fetchStrongNeighbors(vault: string, id: string, hops: 1 | 2 | 3, limit = 200): Promise<GraphPayload> {
+export async function fetchStrongNeighbors(vault: string, id: string, hops: GraphHops, limit = 200): Promise<GraphPayload> {
   const strong = await getGraph(vault, id, hops, limit, "strong");
   // Every strongly reached resource short of the chosen depth brings its own weak links: one hop of every edge around
   // it (the focus first; bounded so a large strong neighbourhood stays a handful of requests).
@@ -447,10 +479,22 @@ export async function fetchStrongNeighbors(vault: string, id: string, hops: 1 | 
 /** How many strongly reached resources contribute their weak links to one neighbourhood. */
 const WEAK_SOURCES = 12;
 
+/** The strong links around a focus both ways, for the incoming and all directions. The outgoing neighbourhood (with its
+ *  weak rings) loads first and draws; this loads beside it and merges in, so the map does not wait for it. */
+export function useIncomingNeighborhood(vault: string, entry: string | undefined, hops: GraphHops, enabled: boolean) {
+  const user = useCurrentUser();
+  const { checking, revision } = useAccessVerification();
+  return useQuery({
+    queryKey: ["graph", user?.user_id, revision, vault, "incoming", entry, hops],
+    enabled: enabled && !!entry && !!user?.user_id && !checking,
+    queryFn: async () => apiToPayload(await getGraph(vault, entry!, hops, 200, "strong", "both")),
+  });
+}
+
 export function useNeighborhood(
   vault: string,
   entry: string | undefined,
-  hops: 1 | 2 | 3,
+  hops: GraphHops,
   links: "strong" | "all" = "all",
 ) {
   const user = useCurrentUser();

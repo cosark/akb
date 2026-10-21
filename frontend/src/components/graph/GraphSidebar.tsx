@@ -5,6 +5,8 @@ import { searchDocs } from "@/lib/api";
 import { useGraphHistory } from "@/hooks/use-graph-history";
 import { useDebounce } from "@/hooks/use-debounce";
 import {
+  GRAPH_HOPS,
+  type GraphHops,
   ALL_NODE_KINDS,
   ALL_RELATIONS,
   RELATION_LABEL,
@@ -51,9 +53,9 @@ interface SearchHit {
 /** Last-used traversal depth, persisted so a focus picks up the user's
  *  preferred radius instead of always resetting to 2. */
 const HOPS_KEY = "akb:graph:hops";
-function savedHops(): 1 | 2 | 3 {
-  const v = typeof localStorage !== "undefined" ? localStorage.getItem(HOPS_KEY) : null;
-  return v === "1" ? 1 : v === "3" ? 3 : 2;
+function savedHops(): GraphHops {
+  const v = Number(typeof localStorage !== "undefined" ? localStorage.getItem(HOPS_KEY) : null);
+  return GRAPH_HOPS.includes(v as GraphHops) ? v as GraphHops : 2;
 }
 
 
@@ -132,7 +134,7 @@ export function GraphSidebar({
     setHits([]);
   }
 
-  function setHops(d: 1 | 2 | 3) {
+  function setHops(d: GraphHops) {
     if (typeof localStorage !== "undefined") localStorage.setItem(HOPS_KEY, String(d));
     onChange({ ...view, hops: d });
   }
@@ -254,7 +256,7 @@ export function GraphSidebar({
             (not just hinted) there to avoid the "I clicked it and nothing
             happened" confusion. */}
         <div className={cn("flex items-center gap-3 text-[11px]", !view.entry && "opacity-50")}>
-          {([1, 2, 3] as const).map((d) => (
+          {GRAPH_HOPS.map((d) => (
             <label
               key={d}
               className={cn(
