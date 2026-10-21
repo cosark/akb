@@ -204,8 +204,13 @@ export function VaultShell() {
 
   const workspaceNavigationWidth =
     (vaultCollapsed ? 56 : rail.width) +
-    (!vaultCollapsed && !!name ? 1 : 0) +
+    (!vaultCollapsed ? 1 : 0) +
     (name && !isFocusedWorkspace ? (effectiveTreeVisible ? tree.width : 40) : 0) + 1;
+  // Freeze only the sizing input during a gesture, so crossing the responsive
+  // boundary cannot remove a handle while it still owns pointer capture.
+  const settledNavigationWidth =
+    (vaultCollapsed ? 56 : rail.settledWidth) + (!vaultCollapsed ? 1 : 0) +
+    (name && !isFocusedWorkspace ? (effectiveTreeVisible ? tree.settledWidth : 40) : 0) + 1;
   // Measure the workspace after the personal rail, not a viewport breakpoint.
   // A narrow reading surface temporarily uses the existing navigation drawer;
   // neither the saved widths nor the user's expanded/collapsed preference changes.
@@ -223,7 +228,7 @@ export function VaultShell() {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  const navigationOverlay = desktopNav && workspaceWidth > 0 && workspaceWidth - workspaceNavigationWidth < (layout?.minimumVaultWorkspaceWidth ?? minimumContentWidth);
+  const navigationOverlay = desktopNav && workspaceWidth > 0 && workspaceWidth - settledNavigationWidth < (layout?.minimumVaultWorkspaceWidth ?? minimumContentWidth);
   const inlineNavigation = desktopNav && !navigationOverlay;
   useEffect(() => {
     if (!collectionTarget) setRouteTreeOverride(null);
@@ -239,7 +244,9 @@ export function VaultShell() {
   useEffect(() => {
     if (inlineNavigation || !mobileNavOpen) return;
     const panel = document.getElementById("vault-workspace-navigation");
-    const frame = window.requestAnimationFrame(() => panel?.querySelector<HTMLElement>('button:not([disabled]), a[href]')?.focus());
+    const frame = window.requestAnimationFrame(() => {
+      if (!panel?.contains(document.activeElement)) panel?.querySelector<HTMLElement>('button:not([disabled]), a[href]')?.focus();
+    });
     const close = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       setMobileNavOpen(false);
@@ -289,12 +296,18 @@ export function VaultShell() {
     publishWidth?.(inlineNavigation ? workspaceNavigationWidth : 0);
   }, [inlineNavigation, workspaceNavigationWidth, publishWidth]);
   useLayoutEffect(() => () => publishWidth?.(0), [publishWidth]);
-  const effectiveVaultCollapsed = inlineNavigation
+  const effectiveVaultCollapsed = desktopNav
     ? vaultCollapsed
     : mobileRailCollapsed;
-  const toggleEffectiveVaultCollapsed = inlineNavigation
+  const toggleEffectiveVaultCollapsed = desktopNav
     ? toggleVaultCollapsed
     : () => setMobileRailCollapsed((collapsed) => !collapsed);
+  const cancelRailResize = rail.cancel;
+  const cancelTreeResize = tree.cancel;
+  useEffect(() => {
+    if (!desktopNav || effectiveVaultCollapsed) cancelRailResize();
+    if (!inlineNavigation || !showTree) cancelTreeResize();
+  }, [desktopNav, effectiveVaultCollapsed, inlineNavigation, showTree, cancelRailResize, cancelTreeResize]);
   const mobileTreeWidth = effectiveVaultCollapsed
     ? "calc(100vw - 3.5rem)"
     : "calc(100vw - 10rem)";
@@ -322,31 +335,41 @@ export function VaultShell() {
               !showTree && "border-r border-border",
             )}
           >
+            <div id="vault-list-sidebar" className="flex min-h-0 shrink-0">
             <VaultRail
               current={name || ""}
               onRefetchReady={onVaultsRefetchReady}
               onCreateVault={openCreateVault}
               collapsed={effectiveVaultCollapsed}
               onToggleCollapsed={toggleEffectiveVaultCollapsed}
-              width={inlineNavigation ? rail.width : 160}
+              width={desktopNav ? rail.width : 160}
             />
-            {/* Resize the expanded Vault list beside Collections.
-                The collapsed list remains a fixed-width icon strip. */}
-            {inlineNavigation && !vaultCollapsed && !!name && (
+            </div>
+            {/* The desktop Vault list resizes independently of Collections,
+                both inline and in the temporary overlay. Mobile stays bounded. */}
+            {desktopNav && !effectiveVaultCollapsed && (
               <div
                 role="separator"
                 aria-orientation="vertical"
                 aria-label="Resize vault list"
-                title="Drag to resize · double-click to reset"
+                aria-controls="vault-list-sidebar"
+                aria-valuemin={192}
+                aria-valuemax={320}
+                aria-valuenow={rail.width}
+                aria-valuetext={`${rail.width}px`}
+                tabIndex={0}
+                onFocus={() => setMobileNavOpen(true)}
+                title="Drag or use arrow keys to resize · double-click to reset"
                 {...rail.handlers}
-                className="group relative z-10 w-px shrink-0 cursor-col-resize touch-none before:absolute before:inset-y-0 before:-left-1 before:w-2"
+                className="group relative z-10 w-px shrink-0 cursor-col-resize touch-none outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background before:absolute before:inset-y-0 before:-left-1.5 before:w-3"
               >
-                <div className="mx-auto h-full w-px bg-border transition-colors group-hover:bg-primary group-active:bg-primary" />
+                <div className="mx-auto h-full w-px bg-border transition-colors group-hover:bg-primary group-focus-visible:bg-primary group-active:bg-primary" />
               </div>
             )}
             {/* Collections is exclusively a content explorer, not a Vault menu. */}
             {showTree && (
               <div
+                id="vault-collections-sidebar"
                 data-slot="vault-collections-sidebar"
                 className="flex h-full min-h-0 shrink-0 flex-col overflow-hidden bg-surface"
                 style={{ width: inlineNavigation ? tree.width : desktopNav ? 320 : mobileTreeWidth }}
@@ -374,11 +397,18 @@ export function VaultShell() {
               role="separator"
               aria-orientation="vertical"
               aria-label="Resize tree panel"
-              title="Drag to resize · double-click to reset"
+              aria-controls="vault-collections-sidebar"
+              aria-valuemin={220}
+              aria-valuemax={480}
+              aria-valuenow={tree.width}
+              aria-valuetext={`${tree.width}px`}
+              tabIndex={0}
+              onFocus={() => setMobileNavOpen(true)}
+              title="Drag or use arrow keys to resize · double-click to reset"
               {...tree.handlers}
-              className="group relative z-10 w-px shrink-0 cursor-col-resize touch-none before:absolute before:inset-y-0 before:-left-1 before:w-2 lg:-mt-14 lg:h-[calc(100%+3.5rem)]"
+              className="group relative z-10 w-px shrink-0 cursor-col-resize touch-none outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background before:absolute before:inset-y-0 before:-left-1.5 before:w-3 lg:-mt-14 lg:h-[calc(100%+3.5rem)]"
             >
-              <div className="mx-auto h-full w-px bg-border transition-colors group-hover:bg-primary group-active:bg-primary" />
+              <div className="mx-auto h-full w-px bg-border transition-colors group-hover:bg-primary group-focus-visible:bg-primary group-active:bg-primary" />
             </div>
           )}
 
@@ -424,21 +454,18 @@ export function VaultShell() {
                 data-slot="vault-route-viewport"
                 className={cn(
                   "min-h-0 min-w-0 flex-1 bg-background",
-                  isSettings
-                    ? "overflow-y-auto xl:overflow-hidden"
-                    : "overflow-y-auto",
+                  "overflow-y-auto",
                 )}
               >
                 <div
                   className={cn(
                     "w-full",
-                    isSettings
-                      ? "min-h-full xl:h-full xl:min-h-0"
-                      : isOverview
+                    isOverview
                         ? "min-h-full px-2 py-3 lg:p-0"
-                        : isActivity || isPublications || isMembers
-                          ? "px-3 py-5 lg:px-4 lg:py-6 xl:px-5"
-                          : "px-5 py-5 lg:px-7 lg:py-6 xl:px-8",
+                        : isPublications || isMembers || isSettings
+                          ? "px-4 py-5 sm:p-6"
+                          : isActivity ? "px-3 py-5 lg:px-4 lg:py-6 xl:px-5"
+                            : "px-5 py-5 lg:px-7 lg:py-6 xl:px-8",
                   )}
                 >
                   <ErrorBoundary resetKeys={[location.pathname]}>

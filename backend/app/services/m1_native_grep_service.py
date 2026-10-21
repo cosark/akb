@@ -589,7 +589,7 @@ class M1NativeGrepService:
             """, *params,
         )
         if len(rows) > NATIVE_GREP_MAX_RESOURCES:
-            raise ValidationError("native grep File catalogue exceeds resource limit")
+            raise GrepScopeTooLargeError("resources", NATIVE_GREP_MAX_RESOURCES)
         for row in rows:
             if (row["cutover_binary"] and row["resource_id"] is None
                     and row["hash_verified_at"] is not None):
@@ -862,9 +862,7 @@ class M1NativeGrepService:
             ) or (body.surface != "document" and scope != "archived" and not (doc_types or tags))]
         searched_bytes = sum(body.byte_size for body in bodies)
         if searched_bytes > NATIVE_GREP_MAX_SEARCH_BYTES:
-            raise ValidationError(
-                f"native grep candidate bytes exceed {NATIVE_GREP_MAX_SEARCH_BYTES}"
-            )
+            raise GrepScopeTooLargeError("bytes", NATIVE_GREP_MAX_SEARCH_BYTES)
         # Unicode-insensitive literals use escaped regex too; repeated-prefix
         # inputs need the same process deadline as explicit regular expressions.
         bounded_matcher = regex or not case_sensitive

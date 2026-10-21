@@ -15,7 +15,7 @@ import logging
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import NoReturn
+from typing import Any, NoReturn
 from app.services.role_authority import role_authority_transaction
 from app.services.search_filters import ArchiveScope
 
@@ -1493,13 +1493,17 @@ class NativeDocumentService(DocumentService):
         """
         depth_offset = prefix.count("/") + 1 if prefix else 0
         native = await self._native()
+        bounded: dict[str, Any] = {}
+        if resource_ids is not None:
+            bounded["resource_ids"] = resource_ids
+        if conn is not None:
+            bounded["conn"] = conn
         snapshots = await native.list_live_head_snapshots(
             namespace_id=vault_id,
             surface="document",
             path_like=like_escape(prefix) + "/%" if prefix else None,
             max_slashes=max_depth + depth_offset if max_depth >= 0 else None,
-            **({"resource_ids": resource_ids} if resource_ids is not None else {}),
-            **({"conn": conn} if conn is not None else {}),
+            **bounded,
         )
         # Parsing every body is CPU-bound; keep it off the event loop.
         parsed = await asyncio.to_thread(lambda: [_parse_markdown(s.text) for s in snapshots])

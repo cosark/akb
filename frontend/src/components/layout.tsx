@@ -21,6 +21,7 @@ import { HeaderIndexingStatus } from "@/components/header-indexing-status";
 import { NotificationBell } from "@/components/notification-bell";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AppPageLocation } from "@/components/app-page-location";
+import { VaultOverviewNavigationFocus } from "@/components/vault-overview-navigation";
 import { appRouteBoundaryForPath } from "@/app-route-contract";
 import { Button } from "@/components/ui/button";
 import type { VaultNavigationControl } from "@/components/vault-shell";
@@ -54,7 +55,7 @@ function isExpiredIdentityProof(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401 && error.name !== "DeferredSessionError";
 }
 
-export function Layout({ routeOverlay }: { routeOverlay?: ReactNode }) {
+export function Layout({ routeOverlay, protectBackgroundDrafts = false }: { routeOverlay?: ReactNode; protectBackgroundDrafts?: boolean }) {
   const queryClient = useQueryClient();
   const location = useLocation();
   const wide = appRouteBoundaryForPath(location.pathname) === "vault-shell";
@@ -198,6 +199,8 @@ export function Layout({ routeOverlay }: { routeOverlay?: ReactNode }) {
   const isSearchWorkspace = Boolean(matchPath("/search", location.pathname));
   const isSearchRoute = isSearchWorkspace || Boolean(matchPath("/vault/:name/search", location.pathname));
   const isSettingsWorkspace = Boolean(matchPath("/settings", location.pathname));
+  const overviewMatch = matchPath("/vault/:name", location.pathname);
+  const isVaultOverview = !!overviewMatch && overviewMatch.params.name !== "new";
   const viewportLocked = wide || isSearchWorkspace;
   const sidebarCompact = wide ? vaultSidebar.compact : sidebarCollapsed;
   const surface: AppSurface = location.pathname === "/" || wide || isSearchRoute || isSettingsWorkspace ? "paper" : "workspace";
@@ -206,19 +209,17 @@ export function Layout({ routeOverlay }: { routeOverlay?: ReactNode }) {
     const search = searchControlsRef.current;
     const account = accountControlsRef.current;
     if (!wide || !search || !account) return;
-    const vaultMenu = search.parentElement?.querySelector<HTMLElement>('[data-slot="vault-page-switcher"]');
     const measure = () => {
       const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
       // Compare layout CSS pixels with the rail widths, not zoomed visual rects.
-      // Reserve the independent menu in addition to a readable trail, search /
-      // identity controls, insets, divider and optional navigator trigger.
-      setMinimumVaultWorkspaceWidth(search.offsetWidth + account.offsetWidth + (vaultMenu?.offsetWidth ?? 0) + 22.25 * rem);
+      // Reserve a readable breadcrumb, search/identity controls, insets and
+      // the optional navigator trigger. Vault page links belong to Overview.
+      setMinimumVaultWorkspaceWidth(search.offsetWidth + account.offsetWidth + 22.25 * rem);
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(search);
     observer.observe(account);
-    if (vaultMenu) observer.observe(vaultMenu);
     return () => observer.disconnect();
   }, [wide, session.status, location.pathname]);
 
@@ -264,8 +265,8 @@ export function Layout({ routeOverlay }: { routeOverlay?: ReactNode }) {
   return (
     <SearchStatusProvider identity={activeFingerprint!} enabled={!revalidating}>
     <CurrentUserProvider user={session.user} checking={revalidating} revision={accessRevision}>
-    <ResourceLocationProvider identity={activeFingerprint!} checking={revalidating} revision={accessRevision}>
     <ResourceNavigationProvider>
+    <ResourceLocationProvider identity={activeFingerprint!} checking={revalidating} revision={accessRevision}>
     <SettingsDialogProvider identity={session.user.user_id}>
     <div className={`${rootClass} [--workspace-gutter:1rem] sm:[--workspace-gutter:1.5rem] lg:[--workspace-gutter:2rem] xl:[--workspace-gutter:3rem] 2xl:[--workspace-gutter:9rem] ${sidebarCompact ? "lg:pl-14" : "lg:pl-52"}`} style={{ "--vault-navigation-width": `${wide ? vaultNavigationWidth : 0}px` } as CSSProperties} aria-busy={revalidating || undefined}>
       {revalidating && (
@@ -311,7 +312,7 @@ export function Layout({ routeOverlay }: { routeOverlay?: ReactNode }) {
             </Button>}
             <AppPageLocation isAdmin={session.user.is_admin} />
             <div ref={searchControlsRef} className="ml-auto flex min-w-0 flex-1 items-center gap-2 lg:flex-none lg:pl-3">
-              <HeaderIndexingStatus />
+              {!isVaultOverview && <HeaderIndexingStatus />}
               {/* Quick search stays available on every route. The full Search
                   page owns its separate, URL-backed query below this header. */}
               <CurrentUserProvider user={session.user}>
@@ -367,6 +368,7 @@ export function Layout({ routeOverlay }: { routeOverlay?: ReactNode }) {
           }
         >
           {/* Content */}
+          <VaultOverviewNavigationFocus />
           <main
             id="main"
             tabIndex={-1}
@@ -408,12 +410,15 @@ export function Layout({ routeOverlay }: { routeOverlay?: ReactNode }) {
       </div>
     </div>
     </SettingsDialogProvider>
-    </ResourceNavigationProvider>
     </ResourceLocationProvider>
+    {/* Settings previews retain editable drafts. Their mode changes and exits
+        consult that workspace's guard without sharing breadcrumb state. */}
+    {protectBackgroundDrafts && routeOverlay}
+    </ResourceNavigationProvider>
     {/* Route-backed previews share the shell's identity/access proof, but keep
         their own location and navigation scope. The inactive background must
         not intercept a preview's mode changes after an approved departure. */}
-    {routeOverlay}
+    {!protectBackgroundDrafts && routeOverlay}
     </CurrentUserProvider>
     </SearchStatusProvider>
   );

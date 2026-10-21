@@ -73,7 +73,7 @@ for (const width of [375, 1440]) for (const dark of [false, true]) {
     // must not issue another unchanged-scope request in either build mode.
     const beforeRecovery = grepRequests;
     await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
-    await page.getByRole("button", { name: "Choose a Collection in More filters" }).click();
+    await page.getByRole("button", { name: "Choose a Collection in Filters" }).click();
     await expect(page.getByRole("textbox", { name: "Collection path (including children)" })).toBeFocused();
     expect(grepRequests).toBe(beforeRecovery);
     await page.screenshot({ path: testInfo.outputPath("grep-scope-guidance.png") });

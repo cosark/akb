@@ -1,5 +1,5 @@
 import { Activity, useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { SettingsLink } from "@/contexts/settings-dialog-context";
 import {
   AlertTriangle,
@@ -20,7 +20,6 @@ import {
   Shield,
   Table as TableIcon,
   Upload,
-  UsersRound,
   type LucideIcon,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -34,6 +33,8 @@ import {
   importKnowledgeBundle,
   type KnowledgeImportResult,
 } from "@/lib/api";
+import { LoadingState, InlineLoadingState } from "@/components/ui/loading-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { RelativeTime } from "@/components/ui/relative-time";
 import { recentIcon, recentTone } from "@/lib/recent";
 import { stripFrontmatter } from "@/lib/markdown";
@@ -43,7 +44,6 @@ import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
 import { EmptyState } from "@/components/empty-state";
 import { RoleBadge, VaultStateBadge } from "@/components/status-badge";
-import { VaultIndexingStatus } from "@/components/pending-indexing-badge";
 import { VaultProcessingDetails } from "@/components/vault-processing-details";
 import { VAULT_SKILL_PATH } from "@/lib/skill";
 import { TooltipText } from "@/components/ui/tooltip-text";
@@ -51,7 +51,10 @@ import { cn } from "@/lib/utils";
 import { useVaultRefresh } from "@/contexts/vault-refresh-context";
 import { useOpenDocumentCreateDialog } from "@/contexts/document-create-dialog-context";
 import { WorkspacePageHeader } from "@/components/ui/workspace-page-header";
-import { VaultContextBadge } from "@/components/ui/vault-context-badge";
+import { VaultAddressAction } from "@/components/vault-address-action";
+import { VaultCreateMenu } from "@/components/vault-create-menu";
+import { VaultOverviewNavigation } from "@/components/vault-overview-navigation";
+import { documentPreviewState } from "@/lib/document-preview-navigation";
 import { TonalIcon, type TonalIconTone } from "@/components/ui/tonal-icon";
 import { FileUploadDialog } from "@/components/file-upload-dialog";
 import { TableCreateDialog } from "@/components/table-create-dialog";
@@ -117,7 +120,7 @@ function OverviewCount({ value }: { value?: number }) {
   );
 }
 
-/** Passive totals share the creation row, but are not unimplemented buttons. */
+/** Content inventory is passive text, separate from page navigation. */
 function VaultContentSummary({ info }: { info: VaultInfo | null }) {
   const contents = [
     { label: "Documents", value: info?.document_count, Icon: FileText },
@@ -132,7 +135,7 @@ function VaultContentSummary({ info }: { info: VaultInfo | null }) {
           <div
             key={label}
             title={info && !knownCount(value) ? `${label} count is unavailable on this server` : undefined}
-            className="inline-flex min-h-8 items-center gap-2 rounded-[var(--radius-md)] border border-border bg-surface px-2.5 py-1 text-xs"
+            className="inline-flex min-h-8 items-center gap-2 text-xs"
           >
             <dt className="inline-flex items-center gap-1.5 whitespace-nowrap text-foreground-muted">
               <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -209,8 +212,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
   const navigate = useNavigate();
   const { refetchTree } = useVaultRefresh();
   const openCreateDocument = useOpenDocumentCreateDialog();
-  const uploadButtonRef = useRef<HTMLButtonElement>(null);
-  const tableButtonRef = useRef<HTMLButtonElement>(null);
+  const createButtonRef = useRef<HTMLButtonElement>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [tableCreateOpen, setTableCreateOpen] = useState(false);
   const [info, setInfo] = useState<VaultInfo | null>(null);
@@ -222,9 +224,13 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
   latestChecking.current = checking;
   const [recent, setRecent] = useState<RecentRow[]>([]);
   const [recentLoading, setRecentLoading] = useState(true);
+  const [recentLoaded, setRecentLoaded] = useState(false);
+  const recentRequest = useRef(0);
   const [recentError, setRecentError] = useState(false);
   const [activity, setActivity] = useState<ActivityRow[]>([]);
   const [activityLoading, setActivityLoading] = useState(true);
+  const [activityLoaded, setActivityLoaded] = useState(false);
+  const activityRequest = useRef(0);
   const [activityError, setActivityError] = useState(false);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -279,16 +285,19 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
   }
 
   async function loadRecent(vault: string, alive: () => boolean = () => mounted.current) {
+    const id = ++recentRequest.current;
     const requestScope = scope;
-    const current = () => alive() && requestScope === latestScope.current && !latestChecking.current;
+    const current = () => id === recentRequest.current && alive() && requestScope === latestScope.current && !latestChecking.current;
     setRecentLoading(true);
     setRecentError(false);
     try {
       const d = await getRecent(vault, 12);
       if (!current()) return;
       setRecent(d.changes || []);
-    } catch {
+      setRecentLoaded(true);
+    } catch (caught) {
       if (!current()) return;
+      if (typeof caught === "object" && caught !== null && "status" in caught && (caught.status === 401 || caught.status === 403)) { setRecent([]); setRecentLoaded(false); }
       setRecentError(true);
     } finally {
       if (current()) setRecentLoading(false);
@@ -299,17 +308,19 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
     vault: string,
     alive: () => boolean = () => mounted.current,
   ) {
+    const id = ++activityRequest.current;
     const requestScope = scope;
-    const current = () => alive() && requestScope === latestScope.current && !latestChecking.current;
+    const current = () => id === activityRequest.current && alive() && requestScope === latestScope.current && !latestChecking.current;
     setActivityLoading(true);
     setActivityError(false);
     try {
       const result = await getVaultActivity(vault, { limit: 10 });
       if (!current()) return;
       setActivity(result.activity || []);
-    } catch {
+      setActivityLoaded(true);
+    } catch (caught) {
       if (!current()) return;
-      setActivity([]);
+      if (typeof caught === "object" && caught !== null && "status" in caught && (caught.status === 401 || caught.status === 403)) { setActivity([]); setActivityLoaded(false); }
       setActivityError(true);
     } finally {
       if (current()) setActivityLoading(false);
@@ -325,9 +336,11 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
     setInfo(null);
     setInfoError(false);
     setRecent([]);
+    setRecentLoaded(false);
     setRecentError(false);
     setRecentLoading(true);
     setActivity([]);
+    setActivityLoaded(false);
     setActivityError(false);
     setActivityLoading(true);
     loadInfo(name, isAlive);
@@ -373,12 +386,12 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
 
   return (
     <>
-    {(checking || loadedScope !== scope) && <p role="status">{checking ? "Verifying vault access…" : "Loading vault overview…"}</p>}
+    {(checking || loadedScope !== scope) && <OverviewLoadingState checking={checking} />}
     <Activity mode={!checking && loadedScope === scope ? "visible" : "hidden"}>
     <div
       role="region"
       aria-label={`${name} Vault overview`}
-      className="@container/vault-overview flex min-h-full w-full flex-col gap-6 bg-background p-3 sm:p-4 lg:p-6"
+      className="@container/vault-overview flex min-h-full w-full flex-col gap-5 bg-background p-3 sm:p-4 lg:p-5"
     >
       {infoError && (
         <Alert variant="destructive">
@@ -387,6 +400,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
             <Button
               variant="outline"
               size="sm"
+              className="h-11 sm:[@media(pointer:fine)]:h-8"
               onClick={() => {
                 setInfoError(false);
                 setInfo(null);
@@ -399,7 +413,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
         </Alert>
       )}
 
-      <section aria-label="Vault summary" className="flex min-w-0 flex-col gap-3 border-b border-border pb-4">
+      <section aria-label="Vault summary" className="flex min-w-0 flex-col gap-2 border-b border-border pb-3">
         <WorkspacePageHeader
           icon={Box}
           iconTone="knowledge"
@@ -411,51 +425,25 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
           }
           meta={
             <>
-              <VaultContextBadge name={name!} address copyable />
+              <VaultAddressAction name={name!} />
               {info?.role && <RoleBadge role={info.role} />}
               <VaultStateBadge
                 archived={info?.is_archived}
                 externalGit={info?.is_external_git}
                 publicAccess={info?.public_access}
               />
-              <VaultIndexingStatus vaultName={name!} />
               <VaultProcessingDetails vaultName={name!} />
             </>
           }
-          className="min-h-0 rounded-none border-0 bg-transparent p-0 shadow-none [&>div:first-child]:max-w-full [&_h1]:whitespace-normal [&_h1]:break-words [&_h1]:[overflow-wrap:anywhere]"
+          actions={canCreateContent ? <div role="group" aria-label="Create content">
+            <VaultCreateMenu triggerRef={createButtonRef} onDocument={() => openCreateDocument()}
+              onTable={() => setTableCreateOpen(true)} onUpload={() => setUploadOpen(true)} />
+          </div> : undefined}
+          className="min-h-0 rounded-none border-0 bg-transparent p-0 shadow-none [&>div:first-child]:max-w-full [&>div:first-child]:gap-2.5 [&>div:first-child>span]:h-7 [&>div:first-child>span]:w-7 [&_h1]:text-sm [&_h1]:whitespace-normal [&_h1]:break-words [&_h1]:[overflow-wrap:anywhere]"
         />
-        <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-6 gap-y-3">
+        <div className="flex min-w-0 flex-col gap-2 @[58rem]/vault-overview:flex-row @[58rem]/vault-overview:items-center @[58rem]/vault-overview:justify-between @[58rem]/vault-overview:gap-x-5">
           {!infoError && <VaultContentSummary info={info} />}
-          {canCreateContent && (
-            <div role="group" aria-label="Create content" className="flex max-w-full flex-wrap items-center gap-2">
-              <Button
-                ref={uploadButtonRef}
-                variant="outline"
-                size="sm"
-                onClick={() => setUploadOpen(true)}
-              >
-                <Upload className="h-4 w-4" aria-hidden />
-                Upload file
-              </Button>
-              <Button
-                ref={tableButtonRef}
-                variant="outline"
-                size="sm"
-                onClick={() => setTableCreateOpen(true)}
-              >
-                <TableIcon className="h-4 w-4" aria-hidden />
-                New table
-              </Button>
-              <Button
-                variant="accent"
-                size="sm"
-                onClick={() => openCreateDocument()}
-              >
-                <FilePlus className="h-4 w-4" aria-hidden />
-                New document
-              </Button>
-            </div>
-          )}
+          {name && <VaultOverviewNavigation vault={name} />}
         </div>
       </section>
 
@@ -466,8 +454,8 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
         </Alert>
       )}
 
-      <div className="grid min-w-0 items-start gap-6 @[60rem]/vault-overview:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="flex min-w-0 flex-col gap-4">
+      <div className="grid min-w-0 items-start gap-5 @[60rem]/vault-overview:grid-cols-[minmax(0,1fr)_20rem]">
+        <div className="flex min-w-0 flex-col gap-3">
           {info && isEmpty ? (
             <VaultEmptyOnboarding
               name={name!}
@@ -489,6 +477,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
               name={name!}
               rows={recent}
               loading={recentLoading}
+              loaded={recentLoaded}
               error={recentError}
               onRetry={() => name && loadRecent(name)}
             />
@@ -499,6 +488,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
               name={name!}
               rows={activity}
               loading={activityLoading}
+              loaded={activityLoaded}
               error={activityError}
               onRetry={() => name && loadActivity(name)}
             />
@@ -519,7 +509,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
           />
         ) : infoError ? (
           <aside aria-label="Vault overview details">
-            <Panel variant="workspace" className="p-4 text-sm text-foreground-muted">
+            <Panel variant="workspace" className="p-4 text-ui text-foreground-muted">
               Vault details are unavailable.
             </Panel>
           </aside>
@@ -538,7 +528,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
             visible={!checking && loadedScope === scope && canCreateContent}
             onOpenChange={setUploadOpen}
             vault={name}
-            returnFocusRef={uploadButtonRef}
+            returnFocusRef={createButtonRef}
             onUploaded={(file) => {
               if (!mounted.current || scope !== latestScope.current || latestChecking.current) return;
               refetchTree();
@@ -556,7 +546,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
             visible={!checking && loadedScope === scope && canCreateContent}
             onOpenChange={setTableCreateOpen}
             vault={name}
-            returnFocusRef={tableButtonRef}
+            returnFocusRef={createButtonRef}
             onCreated={(tableName) => {
               if (!mounted.current || scope !== latestScope.current || latestChecking.current) return;
               refetchTree();
@@ -575,12 +565,14 @@ function RecentActivityPanel({
   name,
   rows,
   loading,
+  loaded,
   error,
   onRetry,
 }: {
   name: string;
   rows: RecentRow[];
   loading: boolean;
+  loaded: boolean;
   error: boolean;
   onRetry: () => void;
 }) {
@@ -593,7 +585,7 @@ function RecentActivityPanel({
       aria-busy={loading}
       className="@container/recent min-w-0 rounded-[var(--radius-sm)]"
     >
-      <div className="flex min-h-11 flex-wrap items-center gap-2 border-b border-border bg-background px-4 py-2">
+      <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-border bg-background px-4 py-1.5">
         <FileClock className="h-4 w-4 shrink-0 text-foreground-muted" aria-hidden />
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           <h2
@@ -618,12 +610,14 @@ function RecentActivityPanel({
             : `${rows.length} recent change${rows.length === 1 ? "" : "s"}`}
       </span>
 
-      {loading ? (
+      {loaded && loading && <InlineLoadingState label="Updating recent activity; previous changes shown" className="px-4 py-2" />}
+      {loaded && error && <Alert variant="destructive" className="m-3">Recent activity could not be updated; previous changes shown.<Button variant="outline" size="sm" className="ml-2" loading={loading} onClick={onRetry}>Retry</Button></Alert>}
+      {loading && !loaded ? (
         <ul className="divide-y divide-border" aria-hidden>
           {Array.from({ length: 4 }).map((_, index) => (
             <li
               key={index}
-              className="flex items-center gap-3 px-4 py-3 sm:px-5"
+              className="flex items-center gap-2.5 px-4 py-2.5"
             >
               <span className="h-7 w-7 rounded-[var(--radius-sm)] bg-surface-muted" />
               <span className="h-3 flex-1 rounded bg-surface-muted" />
@@ -631,22 +625,24 @@ function RecentActivityPanel({
             </li>
           ))}
         </ul>
-      ) : error ? (
-        <div className="p-4 sm:p-5">
+      ) : error && !loaded ? (
+        <div className="p-4">
           <EmptyState
+            className="px-5 py-10 [&>p]:text-ui [&>p:first-of-type]:text-sm"
             icon={<AlertTriangle className="h-6 w-6" aria-hidden />}
             title="Couldn't load recent activity"
             description="Something went wrong fetching this vault's latest changes."
             action={
-              <Button variant="outline" size="sm" onClick={onRetry}>
+              <Button variant="outline" size="sm" className="h-11 sm:[@media(pointer:fine)]:h-8" onClick={onRetry}>
                 Retry
               </Button>
             }
           />
         </div>
       ) : rows.length === 0 ? (
-        <div className="p-4 sm:p-5">
+        <div className="p-4">
           <EmptyState
+            className="px-5 py-10 [&>p]:text-ui [&>p:first-of-type]:text-sm"
             icon={<FileClock className="h-6 w-6" aria-hidden />}
             title="Nothing written yet"
             description="Document writes in this vault will appear here."
@@ -662,7 +658,7 @@ function RecentActivityPanel({
               <li key={`${row.doc_id}:${row.commit ?? ""}:${index}`}>
                 <Link
                   to={`/vault/${name}/doc/${encodeURIComponent(row.path || row.doc_id)}`}
-                  className="group grid min-h-14 grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2.5 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  className="group grid min-h-12 grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-2.5 px-4 py-2 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 >
                   <span
                     className="inline-flex items-center justify-center"
@@ -673,11 +669,11 @@ function RecentActivityPanel({
                   </span>
                   <span className="min-w-0">
                     <span
-                      className="block break-words text-sm font-medium text-foreground transition-colors group-hover:text-link [overflow-wrap:anywhere]"
+                      className="block break-words text-ui font-medium text-foreground transition-colors group-hover:text-link [overflow-wrap:anywhere]"
                     >
                       {row.title}
                     </span>
-                    <span className="block break-words text-xs leading-relaxed text-foreground-muted [overflow-wrap:anywhere]">
+                    <span className="block break-words text-xs leading-4 text-foreground-muted [overflow-wrap:anywhere]">
                       {collection}
                     </span>
                   </span>
@@ -699,12 +695,14 @@ function CommitHistoryPanel({
   name,
   rows,
   loading,
+  loaded,
   error,
   onRetry,
 }: {
   name: string;
   rows: ActivityRow[];
   loading: boolean;
+  loaded: boolean;
   error: boolean;
   onRetry: () => void;
 }) {
@@ -720,7 +718,7 @@ function CommitHistoryPanel({
       aria-busy={loading}
       className="w-full min-w-0 rounded-none border-0 border-t bg-transparent"
     >
-      <div className="flex min-h-11 flex-wrap items-center gap-2 py-2">
+      <div className="flex min-h-11 flex-wrap items-center gap-2 py-1.5">
         <div className="flex flex-1 items-center gap-2">
           <GitCommit className="h-4 w-4 shrink-0 text-foreground-muted" aria-hidden />
           <h2
@@ -746,7 +744,7 @@ function CommitHistoryPanel({
               aria-expanded={expanded}
               aria-controls="commit-history-list"
               onClick={() => setExpanded((current) => !current)}
-              className="inline-flex min-h-9 cursor-pointer items-center rounded-[var(--radius-sm)] px-2 text-xs font-medium text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="inline-flex min-h-11 cursor-pointer items-center sm:[@media(pointer:fine)]:min-h-8 rounded-[var(--radius-sm)] px-2 text-xs font-medium text-foreground-muted transition-token hover:bg-surface-hover hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {expanded ? "Hide commits" : "Show commits"}
               <ChevronRight
@@ -760,7 +758,7 @@ function CommitHistoryPanel({
           )}
           <Link
             to={`/vault/${name}/activity`}
-            className="inline-flex min-h-9 items-center rounded-[var(--radius-sm)] px-2 text-xs font-medium text-link transition-token hover:bg-surface-hover hover:text-link-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="inline-flex min-h-11 items-center sm:[@media(pointer:fine)]:min-h-8 rounded-[var(--radius-sm)] px-2 text-xs font-medium text-link transition-token hover:bg-surface-hover hover:text-link-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Full commit log
             <ChevronRight className="ml-1 h-3.5 w-3.5" aria-hidden />
@@ -768,14 +766,16 @@ function CommitHistoryPanel({
         </div>
       </div>
 
+      {loaded && loading && <InlineLoadingState label="Updating commit history; previous commits shown" className="py-2" />}
+      {loaded && error && <Alert variant="destructive" className="my-2">Commit history could not be updated; previous commits shown.<Button variant="outline" size="sm" className="ml-2" loading={loading} onClick={onRetry}>Retry</Button></Alert>}
       {expanded && (
         <div id="commit-history-list">
-          {loading ? (
+          {loading && !loaded ? (
             <ul className="divide-y divide-border" aria-hidden>
               {Array.from({ length: 5 }).map((_, index) => (
                 <li
                   key={index}
-                  className="flex items-center gap-3 px-4 py-3 sm:px-5"
+                  className="flex items-center gap-2.5 px-4 py-2.5"
                 >
                   <span className="h-3 w-14 rounded bg-surface-muted" />
                   <span className="h-3 w-24 rounded bg-surface-muted" />
@@ -783,21 +783,22 @@ function CommitHistoryPanel({
                 </li>
               ))}
             </ul>
-          ) : error ? (
-            <div className="p-4 sm:p-5">
+          ) : error && !loaded ? (
+            <div className="p-4">
               <EmptyState
+                className="px-5 py-10 [&>p]:text-ui [&>p:first-of-type]:text-sm"
                 icon={<AlertTriangle className="h-6 w-6" aria-hidden />}
                 title="Couldn't load commit history"
                 description="The latest commits are temporarily unavailable."
                 action={
-                  <Button variant="outline" size="sm" onClick={onRetry}>
+                  <Button variant="outline" size="sm" className="h-11 sm:[@media(pointer:fine)]:h-8" onClick={onRetry}>
                     Retry
                   </Button>
                 }
               />
             </div>
           ) : rows.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-foreground-muted sm:px-5">
+            <p className="px-4 py-5 text-ui text-foreground-muted">
               No commits have landed in this vault yet.
             </p>
           ) : (
@@ -815,7 +816,7 @@ function CommitHistoryPanel({
                   <li key={`${row.hash ?? "commit"}:${index}`}>
                     <Link
                       to={link}
-                      className="group grid grid-cols-[62px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[62px_120px_minmax(0,1fr)_auto] sm:px-5"
+                      className="group grid min-h-11 grid-cols-[62px_minmax(0,1fr)_auto] items-center gap-2.5 px-4 py-2 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[62px_120px_minmax(0,1fr)_auto]"
                     >
                       <span className="font-mono text-xs tabular-nums text-foreground-muted">
                         {(row.hash || "").slice(0, 7)}
@@ -836,7 +837,7 @@ function CommitHistoryPanel({
                               row.summary ||
                               "Commit"
                             }
-                            className="truncate text-sm text-foreground transition-colors group-hover:text-link"
+                            className="truncate text-ui text-foreground transition-colors group-hover:text-link"
                           >
                             {row.subject ||
                               primaryPath ||
@@ -888,6 +889,7 @@ function VaultOverviewAside({
   guideRetrying: boolean;
   onGuideRetry: () => void;
 }) {
+  const location = useLocation();
   const guideStatus = guideLoading
     ? "Checking…"
     : guideError
@@ -942,7 +944,7 @@ function VaultOverviewAside({
           {guideError ? (
             <Alert variant="destructive" title="Couldn't load the vault guide">{guideError}</Alert>
           ) : (
-            <p className="line-clamp-3 max-w-prose break-words text-sm leading-relaxed text-foreground [overflow-wrap:anywhere]">
+            <p className="line-clamp-3 max-w-prose break-words text-ui leading-5 text-foreground [overflow-wrap:anywhere]">
               {summary}
             </p>
           )}
@@ -951,11 +953,13 @@ function VaultOverviewAside({
               {info.is_external_git ? "Git managed" : guideStatus}
             </Badge>
             {!info.is_external_git && guideError ? (
-              <Button variant="outline" size="sm" onClick={onGuideRetry} loading={guideRetrying}>Retry</Button>
+              <Button variant="outline" size="sm" className="h-11 sm:[@media(pointer:fine)]:h-8" onClick={onGuideRetry} loading={guideRetrying}>Retry</Button>
             ) : !info.is_external_git && !guideLoading && (
-              <Button asChild variant="outline" size="sm" className="h-9 rounded-[var(--radius-sm)] text-link">
+              <Button asChild variant="outline" size="sm" className="h-11 rounded-[var(--radius-sm)] text-link sm:[@media(pointer:fine)]:h-8">
                 <Link
-                  to={`/vault/${name}/settings#skill`}
+                  id="vault-overview-guide"
+                  to={guideDefined ? `/vault/${encodeURIComponent(name)}/doc/${encodeURIComponent(VAULT_SKILL_PATH)}` : `/vault/${encodeURIComponent(name)}/settings#skill`}
+                  state={guideDefined ? documentPreviewState(location, "vault-overview-guide") : undefined}
                   aria-label={guideDefined ? "Open vault guide" : "Set up vault guide"}
                   aria-describedby="vault-guide-status"
                 >
@@ -981,17 +985,9 @@ function VaultOverviewAside({
                 {publicAccess}
               </Badge>
             } />
+            <OverviewContextRow label="Members" value={<OverviewCount value={info.member_count} />} />
           </dl>
           <p className="mt-1 max-w-md text-xs leading-relaxed text-foreground-muted">{visibilityDescription}</p>
-          <Link
-            to={`/vault/${name}/members`}
-            className="mt-3 flex min-h-10 max-w-md items-center gap-2 rounded-[var(--radius-sm)] border border-border bg-background px-3 py-2 text-sm font-medium text-link transition-token hover:border-border-strong hover:bg-surface-hover hover:text-link-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-          >
-            <UsersRound className="h-4 w-4 shrink-0" aria-hidden />
-            <span className="flex-1">Members</span>
-            <span className="text-xs tabular-nums text-foreground-muted"><OverviewCount value={info.member_count} /></span>
-            <ChevronRight className="h-4 w-4 shrink-0" aria-hidden />
-          </Link>
         </div>
       </Panel>
 
@@ -1011,8 +1007,8 @@ function OverviewContextHeading({
   children: ReactNode;
 }) {
   return (
-    <div className="flex min-h-12 items-center gap-2.5 border-b border-border bg-background px-4 py-2.5">
-      <TonalIcon tone={tone} size="sm"><Icon aria-hidden /></TonalIcon>
+    <div className="flex min-h-11 items-center gap-2 border-b border-border bg-background px-4 py-2">
+      <TonalIcon tone={tone} size="sm" className="h-6 w-6"><Icon aria-hidden /></TonalIcon>
       <h2 id={id} className="min-w-0 text-sm font-semibold text-foreground">{children}</h2>
     </div>
   );
@@ -1026,7 +1022,7 @@ function OverviewContextRow({
   value: ReactNode;
 }) {
   return (
-    <div className="flex min-h-9 items-start justify-between gap-3 py-1.5 text-sm">
+    <div className="flex min-h-8 items-start justify-between gap-2.5 py-1.5 text-ui">
       <dt className="text-foreground-muted">{label}</dt>
       <dd className="min-w-0 break-words text-right font-medium text-foreground [overflow-wrap:anywhere]">{value}</dd>
     </div>
@@ -1041,8 +1037,8 @@ function VaultContextSkeleton() {
       aria-busy="true"
     >
       <Panel variant="workspace" flush className="rounded-[var(--radius-sm)]" aria-hidden>
-        <div className="flex min-h-12 items-center gap-2.5 border-b border-border bg-background px-4 py-2.5">
-          <div className="h-7 w-7 animate-pulse rounded bg-surface-muted" />
+        <div className="flex min-h-11 items-center gap-2 border-b border-border bg-background px-4 py-2">
+          <div className="h-6 w-6 animate-pulse rounded bg-surface-muted" />
           <div className="h-4 w-24 animate-pulse rounded bg-surface-muted" />
         </div>
         <div className="space-y-3 p-4">
@@ -1051,8 +1047,8 @@ function VaultContextSkeleton() {
         </div>
       </Panel>
       <Panel variant="workspace" flush className="rounded-[var(--radius-sm)]" aria-hidden>
-        <div className="flex min-h-12 items-center gap-2.5 border-b border-border bg-background px-4 py-2.5">
-          <div className="h-7 w-7 animate-pulse rounded bg-surface-muted" />
+        <div className="flex min-h-11 items-center gap-2 border-b border-border bg-background px-4 py-2">
+          <div className="h-6 w-6 animate-pulse rounded bg-surface-muted" />
           <div className="h-4 w-36 animate-pulse rounded bg-surface-muted" />
         </div>
         <div className="space-y-3 p-4">
@@ -1121,8 +1117,8 @@ function VaultEmptyOnboarding({
       aria-labelledby="vault-getting-started-heading"
       className="overflow-hidden rounded-[var(--radius-md)] border border-border bg-surface shadow-xs"
     >
-      <div className="flex min-h-14 flex-wrap items-center gap-3 border-b border-border-strong bg-surface-2/55 px-4 py-2.5 sm:px-5">
-        <TonalIcon tone="guide" size="sm">
+      <div className="flex min-h-12 flex-wrap items-center gap-2.5 border-b border-border-strong bg-surface-2/55 px-4 py-2">
+        <TonalIcon tone="guide" size="sm" className="h-6 w-6">
           <BookText aria-hidden />
         </TonalIcon>
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
@@ -1136,15 +1132,15 @@ function VaultEmptyOnboarding({
         </div>
       </div>
 
-      <div className="flex items-start gap-3 border-b border-border px-4 py-4 sm:px-5">
-        <TonalIcon tone="knowledge">
+      <div className="flex items-start gap-2.5 border-b border-border px-4 py-3">
+        <TonalIcon tone="knowledge" size="sm">
           <BookText aria-hidden />
         </TonalIcon>
         <div className="min-w-0">
-          <h3 className="font-display text-lg font-semibold tracking-tight text-foreground">
+          <h3 className="font-display text-base font-semibold tracking-tight text-foreground">
             This vault is just getting started
           </h3>
-          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-foreground-muted">
+          <p className="mt-1.5 max-w-2xl text-ui leading-5 text-foreground-muted">
             {isMirror
               ? "This vault mirrors an external Git source. Content is managed by that source."
               : canWrite
@@ -1182,7 +1178,7 @@ function VaultEmptyOnboarding({
 
       {canWrite && !isMirror && (
         <section aria-labelledby="vault-setup-heading">
-          <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-y border-border-strong bg-surface-2 px-4 py-2 sm:px-5">
+          <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-y border-border-strong bg-surface-2 px-4 py-1.5">
             <h3
               id="vault-setup-heading"
               className="text-xs font-semibold text-foreground"
@@ -1286,17 +1282,17 @@ function OnboardStep({
   body: string;
 }) {
   const className =
-    "group flex min-h-24 w-full flex-col items-start bg-surface px-4 py-3 text-left transition-token hover:bg-surface-hover focus:outline-none focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
+    "group flex min-h-20 w-full flex-col items-start bg-surface px-4 py-2.5 text-left transition-token hover:bg-surface-hover focus:outline-none focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
   const content = (
     <>
-      <TonalIcon tone={tone} size="sm">
+      <TonalIcon tone={tone} size="sm" className="h-6 w-6">
         <Icon className={cn(busy && "animate-pulse")} aria-hidden />
       </TonalIcon>
-      <span className="mt-2 min-w-0">
-        <span className="block text-sm font-semibold text-foreground transition-colors group-hover:text-link">
+      <span className="mt-1.5 min-w-0">
+        <span className="block text-ui font-semibold text-foreground transition-colors group-hover:text-link">
           {title}
         </span>
-        <span className="mt-1 block text-xs leading-relaxed text-foreground-muted">
+        <span className="mt-1 block text-xs leading-4 text-foreground-muted">
           {body}
         </span>
       </span>
@@ -1322,4 +1318,16 @@ function OnboardStep({
       {content}
     </button>
   );
+}
+
+function OverviewLoadingState({ checking }: { checking: boolean }) {
+  return <LoadingState label={checking ? "Verifying vault access…" : "Loading vault overview…"} className="w-full space-y-5 p-3 sm:p-4 lg:p-5">
+    <p className="text-sm text-foreground-muted">{checking ? "Verifying vault access…" : "Loading vault overview…"}</p>
+    <div className="flex min-h-16 items-center justify-between gap-4"><Skeleton className="h-8 w-48" /><Skeleton className="h-9 w-28" /></div>
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">{[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-20 w-full" />)}</div>
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <Panel variant="workspace" className="space-y-4 p-4"><Skeleton className="h-5 w-40" />{[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}</Panel>
+      <VaultContextSkeleton />
+    </div>
+  </LoadingState>;
 }

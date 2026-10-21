@@ -464,12 +464,23 @@ describe("VaultExplorer — rendering", () => {
     expect(within(dialog).getByText("Loaded files")).toBeInTheDocument();
   });
 
-  it("keeps one compact actions trigger beside the collection name", async () => {
+  it("opens row options without expanding and restores focus before title activation", async () => {
+    const user = userEvent.setup();
     renderAt("/vault/v");
-    const name = await screen.findByText("architecture");
-    const row = name.closest('[role="treeitem"]');
-    expect(row).not.toBeNull();
+    const title = await screen.findByRole("button", { name: /^architecture$/i });
+    const row = title.closest('[role="treeitem"]')!;
+    const options = within(row as HTMLElement).getByRole("button", { name: "Collection actions for architecture" });
     expect(within(row as HTMLElement).getAllByRole("button")).toHaveLength(2);
+    expect(row).toHaveAttribute("aria-expanded", "false");
+    await user.click(options);
+    expect(row).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("menuitem", { name: "Search in collection" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    expect(options).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(title).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(row).toHaveAttribute("aria-expanded", "true");
   });
 
   it("auto-reveals ancestors of the active document", async () => {

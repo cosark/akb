@@ -8,7 +8,8 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import VaultPage from "@/pages/vault";
 import { CurrentUserProvider } from "@/contexts/current-user-context";
@@ -65,6 +66,17 @@ const createVaultTableMock = createVaultTable as unknown as ReturnType<
 const TEMPLATE = "# {vault} Guide\n\n(Describe what this vault is for.)\n";
 const SEEDED_BODY = "# my-v Guide\n\n(Describe what this vault is for.)";
 
+function PreviewProbe() {
+  const location = useLocation();
+  return <output data-testid="preview-state">{JSON.stringify(location.state)}</output>;
+}
+
+async function chooseCreate(label: string) {
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "New content" }));
+  await user.click(screen.getByRole("menuitem", { name: label }));
+}
+
 function renderVault() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -72,6 +84,7 @@ function renderVault() {
       <MemoryRouter initialEntries={["/vault/my-v"]}>
         <Routes>
           <Route path="/vault/:name" element={<VaultPage />} />
+          <Route path="/vault/:name/doc/:id" element={<PreviewProbe />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -101,7 +114,7 @@ it("preserves an Overview table draft across same-account proof while resetting 
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const view = (checking: boolean, revision: number) => <QueryClientProvider client={client}><MemoryRouter initialEntries={["/vault/my-v"]}><CurrentUserProvider user={{ user_id: "a", username: "a", email: "a@x.test", display_name: null, is_admin: false, auth_method: "local", key_class: null }} checking={checking} revision={revision}><Routes><Route path="/vault/:name" element={<VaultPage />} /></Routes></CurrentUserProvider></MemoryRouter></QueryClientProvider>;
   const { rerender } = render(view(false, 0));
-  fireEvent.click(await screen.findByRole("button", { name: "New table" }));
+  await chooseCreate("New table");
   const dialog = screen.getByRole("dialog", { name: "Create a table" });
   fireEvent.change(within(dialog).getByLabelText(/Table name/), { target: { value: "retained_table" } });
   rerender(view(true, 0));
@@ -189,7 +202,7 @@ describe("vault page guide chip", () => {
     renderVault();
     const link = await findChip();
     await waitFor(() => expect(link).toHaveAccessibleDescription("Starter template"));
-    expect(link.getAttribute("href")).toBe("/vault/my-v/settings#skill");
+    expect(link.getAttribute("href")).toBe("/vault/my-v/doc/overview%2Fvault-skill.md");
     expect(getSkillTemplateMock).toHaveBeenCalled();
     expect(screen.getByText("Starter template")).not.toHaveAttribute("aria-hidden", "true");
   });
@@ -201,7 +214,7 @@ describe("vault page guide chip", () => {
     renderVault();
     const link = await findChip();
     await waitFor(() => expect(link).toHaveAccessibleDescription("Guide customized"));
-    expect(link.getAttribute("href")).toBe("/vault/my-v/settings#skill");
+    expect(link.getAttribute("href")).toBe("/vault/my-v/doc/overview%2Fvault-skill.md");
   });
 
   it("keeps an untouched historical seed classified as template while retaining overview context", async () => {
@@ -333,10 +346,10 @@ describe("vault page guide chip", () => {
       screen.getByRole("link", { name: /Connect an agent/i }),
     );
     expect(
-      screen.getByRole("button", { name: /New document/ }),
+      screen.getByRole("button", { name: /Write a document/ }),
     ).toBeInTheDocument();
     expect(
-      screen.getAllByRole("button", { name: /Upload file/ }).length,
+      screen.getAllByRole("button", { name: /Upload a file/ }).length,
     ).toBeGreaterThan(0);
     expect(
       screen.getAllByRole("button", { name: /Create a table|New table/ })
@@ -397,7 +410,7 @@ describe("vault page guide chip", () => {
   it("wires file upload and table creation to their real creation flows", async () => {
     renderVault();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Upload file" }));
+    await chooseCreate("Upload file");
     const upload = new File(["runbook"], "runbook.pdf", {
       type: "application/pdf",
     });
@@ -418,7 +431,7 @@ describe("vault page guide chip", () => {
     );
 
     renderVault();
-    fireEvent.click(await screen.findByRole("button", { name: "New table" }));
+    await chooseCreate("New table");
     fireEvent.change(screen.getByLabelText(/Table name/), {
       target: { value: "incidents" },
     });
@@ -519,8 +532,9 @@ describe("vault overview content hierarchy", () => {
     const access = await screen.findByRole("region", { name: "Access and ownership" });
     expect(access).toHaveTextContent(label!);
     expect(access).toHaveTextContent(explanation!);
-    expect(within(access).getAllByRole("link")).toHaveLength(1);
-    expect(within(access).getByRole("link", { name: /Members.*5/ })).toHaveAttribute("href", "/vault/my-v/members");
+    expect(within(access).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(access).getByText("Members").closest("div")).toHaveTextContent("5");
+    expect(within(screen.getByRole("navigation", { name: "Vault pages" })).getByRole("link", { name: "Members" })).toHaveAttribute("href", "/vault/my-v/members");
     expect(within(access).queryByRole("button")).toBeNull();
   });
 
@@ -547,6 +561,9 @@ describe("vault overview content hierarchy", () => {
     const summary = screen.getByRole("region", { name: "Vault summary" });
     const details = screen.getByRole("complementary", { name: "Vault overview details" });
     expect(summary).toContainElement(contents);
+    const pages = within(summary).getByRole("navigation", { name: "Vault pages" });
+    expect(within(pages).getAllByRole("link").map(link => link.textContent)).toEqual(["Graph", "Public links", "Members", "Settings"]);
+    expect(within(pages).queryByRole("link", { name: "Overview" })).not.toBeInTheDocument();
     expect(details).not.toContainElement(contents);
     expect(within(summary).getByText("writer", { exact: true })).toBeInTheDocument();
     expect(within(summary).getByText("public:reader")).toBeInTheDocument();
@@ -558,13 +575,15 @@ describe("vault overview content hierarchy", () => {
     }
     expect(within(contents).queryByText("Members")).toBeNull();
     const access = screen.getByRole("region", { name: "Access and ownership" });
-    expect(within(access).getByRole("link", { name: /Members.*5/ })).toHaveAttribute("href", "/vault/my-v/members");
+    expect(within(access).getByText("Members").closest("div")).toHaveTextContent("5");
+    expect(within(screen.getByRole("navigation", { name: "Vault pages" })).getByRole("link", { name: "Members" })).toHaveAttribute("href", "/vault/my-v/members");
     expect(access).not.toHaveTextContent("Your role");
     expect(within(details).queryByRole("region", { name: "Tables" })).toBeNull();
     expect(screen.queryByRole("link", { name: /service_catalog/ })).toBeNull();
     const actions = within(summary).getByRole("group", { name: "Create content" });
-    expect(within(actions).getByRole("button", { name: "Upload file" })).toBeEnabled();
-    expect(within(actions).getByRole("button", { name: "New table" })).toBeEnabled();
+    expect(within(actions).getByRole("button", { name: "New content" })).toBeEnabled();
+    expect(within(actions).getAllByRole("button")).toHaveLength(1);
+    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
   });
 
   it("distinguishes missing counts from zero and never treats a legacy info response as empty", async () => {
@@ -621,4 +640,24 @@ describe("vault overview content hierarchy", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
     expect(screen.queryByRole("region", { name: "Contents" })).toBeNull();
   });
+});
+
+
+it("opens an existing guide as a preview over the current Overview", async () => {
+  const user = userEvent.setup();
+  renderVault();
+  await user.click(await findChip());
+  const state = JSON.parse(screen.getByTestId("preview-state").textContent!);
+  expect(state.documentPreview).toBe(true);
+  expect(state.backgroundLocation.pathname).toBe("/vault/my-v");
+  expect(state.returnFocusId).toBe("vault-overview-guide");
+});
+
+it("keeps visible skeleton geometry while vault details are pending", async () => {
+  getVaultInfoMock.mockReturnValueOnce(new Promise(() => {}));
+  renderVault();
+  const loading = screen.getByRole("status", { name: "Loading vault overview…" });
+  expect(loading).toBeVisible();
+  expect(loading.querySelectorAll('[data-slot="skeleton"]').length || loading.querySelectorAll('.animate-pulse').length).toBeGreaterThan(3);
+  expect(screen.queryByRole("region", { name: "my-v Vault overview" })).not.toBeInTheDocument();
 });
