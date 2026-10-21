@@ -90,6 +90,8 @@ interface Props {
   strongWalk?: { perHop: number[]; weak: number; weakShown: boolean; onToggleWeak: () => void };
   /** Whole-Vault colouring by collection, largest first. */
   collections?: { key: string; count: number; token: string }[];
+  /** Whether any loaded resource carries a change time (the date filter needs one). */
+  dated?: boolean;
 }
 
 function kindIcon(kind: NodeKind) {
@@ -115,7 +117,7 @@ export function GraphToolbar(props: Props) {
 function GraphControls({
   vault, view, onChange, onNavigate, hubs, nodes, resourceCounts, onSelect, onReveal, onRearrange,
   focusTitle, displayMode, onDisplayModeChange, orphanCount, hideOrphans,
-  onToggleOrphans, hiddenCount, onUnhideAll, onFit, history, strongWalk, collections,
+  onToggleOrphans, hiddenCount, onUnhideAll, onFit, history, strongWalk, collections, dated,
 }: Props & { history: ReturnType<typeof useGraphHistory> }) {
   // URL navigation can commit after another control fires. Compose those
   // actions against the latest dispatch; external navigation replaces it.
@@ -396,7 +398,7 @@ function GraphControls({
             <SelectMenu aria-label="Neighborhood depth" value={String(view.hops)} className="h-9 w-auto min-w-[6.5rem] text-xs"
               onValueChange={value => updateView(current => ({ ...current, hops: Number(value) as 1 | 2 | 3 }))}
               options={[1, 2, 3].map(hops => ({ value: String(hops), label: `${hops} hop${hops === 1 ? "" : "s"}` }))} />
-            <SinceMenu view={view} updateView={updateView} />
+            <SinceMenu view={view} updateView={updateView} dated={dated} />
             <button type="button" aria-pressed={view.links === "strong"}
               onClick={() => updateView(current => ({ ...current, links: current.links === "strong" ? "all" : "strong" }))}
               title="Strong links are explicit relations, followed outward from the focus. Body links are weak: only the focus's own are shown, faded, and never followed."
@@ -426,8 +428,8 @@ function GraphControls({
                 view.links === "strong" ? "bg-surface-selected font-medium text-surface-selected-foreground" : "text-foreground-muted hover:bg-surface-hover")}>
               Strong links only
             </button>
-            <SinceMenu view={view} updateView={updateView} />
-            {collections && collections.length > 0 && <span className="flex flex-wrap items-center gap-2" aria-label="Collection colours">
+            <SinceMenu view={view} updateView={updateView} dated={dated} />
+            {collections && collections.length > 0 && <span role="group" className="flex flex-wrap items-center gap-2" aria-label="Collection colours">
               {collections.slice(0, 4).map(c => <span key={c.key} className="flex items-center gap-1 text-foreground-muted" title={`${c.count} in ${c.key}`}>
                 <svg viewBox="0 0 16 16" aria-hidden className="h-3 w-3 shrink-0" style={{ color: `var(--color-${c.token})` }}><circle cx="8" cy="8" r="5" fill="currentColor" /></svg>
                 {c.key.split("/").at(-1)}
@@ -447,8 +449,10 @@ function GraphControls({
 const SINCE_LABEL: Record<GraphView["since"], string> = { "1": "Last day", "7": "Last 7 days", "30": "Last 30 days", all: "Any time" };
 
 /** Which resources the map shows by when they last changed. */
-function SinceMenu({ view, updateView }: { view: GraphView; updateView: (update: (current: GraphView) => GraphView) => void }) {
+function SinceMenu({ view, updateView, dated = true }: { view: GraphView; updateView: (update: (current: GraphView) => GraphView) => void; dated?: boolean }) {
+  // A server that reports no change times cannot be filtered by them; say so instead of silently doing nothing.
   return <SelectMenu aria-label="Changed within" value={view.since} className="h-9 w-auto min-w-[7.5rem] text-xs"
+    disabled={!dated && view.since === "all"}
     onValueChange={value => updateView(current => ({ ...current, since: value as GraphView["since"] }))}
     options={GRAPH_SINCE.map(since => ({ value: since, label: SINCE_LABEL[since] }))} />;
 }
@@ -701,7 +705,7 @@ function GraphMoreMenu({
             <li>The map is flat (2D) by default: drag the background to pan and scroll to zoom. Switch to 3D in the bottom-right controls to rotate: drag to rotate, right-drag to pan. In both, drag a resource to move it; it stays there until Rearrange. On touch screens, use two fingers to pan or pinch to zoom.</li>
             <li>Choose 1, 2 or 3 hops around a focused or selected resource. Around a focus, colour shows the distance (Focus, 1, 2, 3 hops) and shape shows the kind.</li>
             <li>Strong links only (on by default) follows explicit relations outward from the focus; the focus's body links appear faded and are not followed. Turn it off to see every loaded connection.</li>
-            <li>Camera buttons provide the same controls without dragging. Focus the canvas and use arrow keys to rotate, Shift + arrows to pan, + / − to zoom, or Home to fit. List provides a keyboard-accessible view.</li>
+            <li>Camera buttons provide the same controls without dragging. Focus the canvas and use the arrow keys to pan (in 3D they rotate and Shift + arrows pans), + / − to zoom, or Home to fit. List provides a keyboard-accessible view.</li>
             <li>Pin a position from the resource actions. Rearrange calculates a fresh layout.</li>
           </ul>}
         </DialogContent>

@@ -60,6 +60,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
   const [renderError, setRenderError] = useState("");
   const { theme } = useTheme();
 
+  /** Where the focus stands when the reader fixed it (dragged or pinned): the rings centre there instead of the origin. */
+  function fixedFocus(): SpatialPoint | undefined {
+    const focus = latest.current.hops && [...latest.current.hops].find(([, hop]) => hop === 0)?.[0];
+    if (!focus || !(moved.current.has(focus) || latest.current.pinned.has(focus))) return undefined;
+    return positions.current.get(focus);
+  }
   function stopWorker() { worker.current?.terminate(); worker.current = null; clearTimeout(timeout.current); }
   function arrange(fixed: string[] = [], refit = true) {
     if (!renderer.current || !latest.current.nodes.length) return;
@@ -90,7 +96,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
       edges: latest.current.edges.filter(e => !latest.current.hops || !latest.current.tree || latest.current.tree.has(edgeId(e)))
         .map(e => ({ source: e.source, target: e.target })),
       pinned: [...new Set([...fixed, ...latest.current.pinned, ...moved.current])], dimensions: latest.current.dimension ?? 2,
-      ...(latest.current.hops ? { rings: ringsFor(latest.current.nodes, latest.current.hops, latest.current.weak) } : {}) });
+      ...(latest.current.hops ? { rings: ringsFor(latest.current.nodes, latest.current.hops, latest.current.weak), ringCentre: fixedFocus() } : {}) });
   }
 
   useImperativeHandle(ref, () => ({
@@ -174,7 +180,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
         ? `Knowledge graph map: ${props.nodes.length} resources, ${props.edges.length} relationships. Arrow keys pan, plus and minus zoom, Home resets. Use List to browse all resources.`
         : `3D knowledge graph: ${props.nodes.length} resources, ${props.edges.length} relationships. Arrow keys rotate, Shift and arrows pan, plus and minus zoom, Home resets. Use List to browse all resources.`} />
     {!renderError && <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-label="Visible graph labels">
-      {labels.filter(label => label.y >= (props.topInset ?? 0)).map(label => {
+      {labels.filter(label => label.y + 24 * (label.ay ?? 0) >= (props.topInset ?? 0)).map(label => {
         const node = props.nodes.find(n => n.uri === label.uri); if (!node) return null;
         return <button key={node.uri} type="button" data-graph-node={node.uri} aria-label={`Inspect ${displayName(node)}`} aria-description={node.kind} title={`${displayName(node)} · ${node.name} · ${node.kind}`}
           onClick={() => props.onSelect(node.uri)} onDoubleClick={() => props.onExpand(node)}

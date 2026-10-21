@@ -109,7 +109,9 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
     const revealed = overlay.nodes.map(n => n.uri);
     const recent = changedWithin(merged, view.since, [...revealed, ...(entryNode ? [entryNode.uri] : []), ...(view.selected ? [view.selected] : [])]);
     const strong = view.entry && entryNode && view.links === "strong"
-      ? strongNeighborhood(recent, entryNode.uri, view.hops, revealed)
+      // The plain-links fallback is decided on the unfiltered map: a date window that removes every strong edge
+      // still walks (and so shows only what stays reachable), instead of showing everything left.
+      ? strongNeighborhood(recent, entryNode.uri, view.hops, revealed, view.since !== "all" && merged.edges.some(e => edgeStrength(e) === "strong"))
       : { ...recent, ...empty };
     const visible = visibleGraph(strong, view, hidden, hideOrphans);
     if (!view.entry && view.links === "strong" && visible.edges.some(e => edgeStrength(e) === "strong")) {
@@ -120,7 +122,8 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
   },
     // Selection is deliberately excluded: it cannot invalidate renderer data.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [merged, overlay, filterKey, hidden, hideOrphans, view.entry, entryNode, view.links, view.hops, view.since]);
+    // The date filter exempts the selection, so a selection change matters only while a window is set.
+    [merged, overlay, filterKey, hidden, hideOrphans, view.entry, entryNode, view.links, view.hops, view.since, view.since === "all" ? undefined : view.selected]);
   const weakShown = weakChoice ?? scene.weak.size <= 5;
   const displayed = useMemo(() => {
     if (weakShown || !scene.strong || !view.entry) return scene;
@@ -195,6 +198,7 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
       source: item.direction === "outgoing" ? selected.uri : item.uri,
       target: item.direction === "outgoing" ? item.uri : selected.uri,
       relation: item.relation, kind: item.source,
+      ...(item.edge_type ? { edge_type: item.edge_type } : {}),
     }];
     if (merged.nodes.length >= SCENE_LIMIT && !merged.nodes.some(n => n.uri === item.uri)) {
       if (selected) setExpansionError({ uri: selected.uri, message: "This map has reached 2,000 resources. Explore connections to start a smaller map." });
@@ -224,7 +228,7 @@ function GraphWorkspace({ vault, mode, setMode, dimension, setDimension }: {
         }}
         nodeCount={displayed.nodes.length} edgeCount={displayed.edges.length}
         strongWalk={view.entry && scene.strong ? { perHop: scene.perHop, weak: scene.weak.size, weakShown, onToggleWeak: () => setWeakChoice(!weakShown) } : undefined}
-        collections={collections}
+        collections={collections} dated={merged.nodes.some(n => !!n.updated_at)}
         focusTitle={focusTitle} displayMode={mode} onDisplayModeChange={next => {
           setMode(next);
           if (next === "graph" && !graphRevealed.current) {

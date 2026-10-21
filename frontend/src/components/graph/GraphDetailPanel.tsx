@@ -210,6 +210,11 @@ export function GraphDetailPanel({
   );
 }
 
+function strengthOf(row: RelationRow): "strong" | "weak" | undefined {
+  const value = (row as { edge_type?: unknown }).edge_type;
+  return value === "strong" || value === "weak" ? value : undefined;
+}
+
 function normalizeRelations(rows: RelationRow[]): { incoming: RelatedRef[]; outgoing: RelatedRef[] } {
   const groups: { incoming: RelatedRef[]; outgoing: RelatedRef[] } = { incoming: [], outgoing: [] };
   // A body link that repeats a strong relation with the same resource (either direction) is listed once, as the relation.
@@ -225,6 +230,7 @@ function normalizeRelations(rows: RelationRow[]): { incoming: RelatedRef[]; outg
       kind: KIND_SET.has(row.resource_type || "") ? row.resource_type as NodeKind : inferredKind,
       relation: row.relation as RelationKind, direction: row.direction,
       source: row.kind,
+      ...(strengthOf(row) ? { edge_type: strengthOf(row) } : {}),
     });
   }
   return groups;

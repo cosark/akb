@@ -23,7 +23,7 @@ export function GraphNodeMarker({ kind, neutral = false }: { kind: NodeKind; neu
 
 /** The colour of each hop distance on the canvas, with its label. */
 export function HopLegend({ hops }: { hops: 1 | 2 | 3 }) {
-  return <span className="flex items-center gap-2" aria-label="Hop colours">
+  return <span role="group" className="flex items-center gap-2" aria-label="Hop colours">
     {HOP_TOKENS.slice(0, hops + 1).map((token, hop) => <span key={token} className="flex items-center gap-1 text-foreground-muted">
       <svg viewBox="0 0 16 16" aria-hidden className="h-3 w-3 shrink-0" style={{ color: `var(--color-${token})` }}><circle cx="8" cy="8" r="5" fill="currentColor" /></svg>
       {hop === 0 ? "Focus" : hop}

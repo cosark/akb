@@ -176,6 +176,14 @@ describe("GraphDetailPanel relations", () => {
     expect(within(region).getAllByRole("button", { name: /^Neighbor/ })).toHaveLength(50);
   });
 
+  it("carries a relation's strength to the followed connection, so a weak explicit relation stays weak", async () => {
+    getRelations.mockResolvedValue({ uri: baseProps.uri, relations: [relation({ edge_type: "weak" })] });
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(await findRow("Related document"));
+    expect(baseProps.onSelectRelated).toHaveBeenCalledWith(expect.objectContaining({ uri: "akb://akb/doc/y", source: "explicit", edge_type: "weak" }));
+  });
+
   it("infers a file target from its canonical URI when legacy responses omit resource_type", async () => {
     getRelations.mockResolvedValue({ uri: baseProps.uri, relations: [relation({ resource_type: undefined, uri: "akb://akb/coll/Engineering/file/f-2", name: "Architecture image", relation: "attached_to" })] });
     const user = userEvent.setup();

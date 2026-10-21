@@ -234,3 +234,17 @@ describe("concentric layout around a focus", () => {
     expect(radius("w")).toBeGreaterThan(radius("g"));
   });
 });
+
+describe("rings around a fixed focus", () => {
+  it("centre on where the focus stands, not on the origin", () => {
+    const centre = { x: 300, y: -200, z: 0 };
+    const placed = layoutSpatialGraph({
+      nodes: [{ id: "f", position: centre }, { id: "a", position: { x: 10, y: 5, z: 0 } }, { id: "b", position: { x: -10, y: 0, z: 0 } }],
+      edges: [{ source: "f", target: "a" }, { source: "f", target: "b" }], pinned: ["f"], dimensions: 2,
+      rings: { f: 0, a: 170, b: 170 }, ringCentre: centre,
+    });
+    expect(placed.f).toEqual(centre);
+    for (const id of ["a", "b"]) expect(Math.abs(Math.hypot(placed[id].x - centre.x, placed[id].y - centre.y) - 170)).toBeLessThan(25);
+  });
+});
+

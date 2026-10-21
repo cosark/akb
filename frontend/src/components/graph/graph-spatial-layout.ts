@@ -13,6 +13,8 @@ export interface SpatialLayoutInput {
   dimensions?: GraphDimension;
   /** Around a focus: the ring radius each resource is pulled to (the focus 0, then by hop), so distance reads as position. */
   rings?: Record<string, number>;
+  /** Centre of the rings: the focus' current place when it is fixed (dragged or pinned), else the origin. */
+  ringCentre?: SpatialPoint;
 }
 
 /** Ring radius of a hop around a focus. A weak neighbour sits just outside the ring of the hop it shows at; one with
@@ -143,7 +145,8 @@ export function layoutSpatialGraph(input: SpatialLayoutInput): Record<string, Sp
     const rings = input.rings;
     if (rings) {
       // Concentric placement: each resource is drawn to its hop's ring around the origin (the focus at the centre).
-      simulation.force("rings", forceRadial<SimulationNode>(node => rings[node.id] ?? 470, 0, 0, 0).strength(0.75));
+      const c = input.ringCentre ?? { x: 0, y: 0, z: 0 };
+      simulation.force("rings", forceRadial<SimulationNode>(node => rings[node.id] ?? 470, c.x, c.y, c.z).strength(0.75));
     } else if (pinned.size === 0) simulation.force("center", forceCenter<SimulationNode>(0, 0, 0));
     simulation.tick(200);
     return Object.fromEntries(nodes.map(({ id, x, y, z }) => {
