@@ -60,6 +60,41 @@ authenticated endpoint and client lifecycle.
 The fixture uses the SDK's public `Client` and Streamable HTTP transport in the
 pytest process; it does not invoke Inspector, Node, or a separate MCP driver.
 
+`test_table_schema_e2e.py` checks the real table and Vault schema HTTP responses
+against the same runtime's served OpenAPI contract after create, alter, and
+migration, including replay of the same migration key. These six cases run in
+the mandatory pytest gate with the shared descriptor/reset/PAT lifecycle;
+missing runtime setup fails preparation rather than skipping coverage. To run
+only these cases against a repository-owned `serve` runtime, use the pytest
+command below with `backend/tests/mcp_e2e/test_table_schema_e2e.py` as the test
+path and keep `--confcutdir=backend/tests/mcp_e2e` and `--runtime-descriptor`.
+
+`test_graph_catalog_e2e.py` checks provenance, orphan membership and titles,
+link/unlink/move/delete identity, MCP results and actual Reader/Outsider access
+through the same mandatory runtime fixture lifecycle. It creates its secondary
+users in the disposable fixture and does not skip ACL checks for missing PATs.
+The selected runtime backend is exercised through HTTP; Native catalog paging,
+concurrent edits and stable endpoint identity are additionally required in the
+live-PG lane via `test_graph_native_catalog_pg.py` and
+`test_native_graph_resource_identity_pg.py`.
+
+`test_adoption_vault_delete_e2e.py` requires planned, applied and blocked
+adoption deletion through HTTP, with a non-admin owner, Reader and system
+operator. It checks denied deletion, retained UUIDs, same-name recreation and
+rejected replay through the same reset/PAT fixtures. The live-PG adoption suite
+also checks upgrade retention and both deletion/adoption lock orders. Apply
+commits each target separately: a deleted later target returns 409 after earlier
+live targets may have committed; read the retained plan to inspect partial progress.
+
+`test_rollout_authority_e2e.py` requires one- and two-installation recovery
+through the real worker, with a non-admin owner and registry operator. A NULL
+canary makes a real NOT NULL migration fail; authorized row repair and resume
+must preserve the source job, checksum, grant and data. The cases also cover
+original-request replay while blocked, denial of new requests without active
+authority, credential rotation/revocation and denial of historical reads/replays
+after uninstall even when an unrelated installation becomes active. They use
+the mandatory descriptor/reset/PAT lifecycle without optional credentials.
+
 The detailed security suite also covers declarative table constraints and
 indexes, stable permission envelopes, private-document and graph boundaries,
 SQL failure-state integrity, and PAT write scopes. The PG-native ACL backstops
@@ -428,6 +463,13 @@ The workflow supplies the fixture credential environment and the PostgreSQL
 execution command without exposing credential values to the descriptor or
 runtime files. The curated list and assertion-count behavior come from the
 shared suite runner, not from duplicated workflow shell steps.
+
+The combined API/browser job has a 45-minute budget. In CI, Playwright's whole
+browser suite is bounded to 30 minutes, leaving time for runtime preparation,
+the API suites, cleanup, and failure-log upload. Existing per-test timeouts and
+assertions remain unchanged. A browser-suite timeout is a failing check, not a
+successful or skipped run; its diagnostics stay in `frontend-e2e.log` within the
+runtime's failure artifacts.
 
 ### Clean Ubuntu 24.04 host
 

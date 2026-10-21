@@ -1053,6 +1053,7 @@ class NativeDocumentService(DocumentService):
                 frontmatter["status"] = req.status
             if req.tags is not None:
                 frontmatter["tags"] = req.tags
+            # Match Git: legacy null/omission are no-ops, empty strings clear.
             if req.domain is not None:
                 frontmatter["domain"] = req.domain
             if req.summary is not None:

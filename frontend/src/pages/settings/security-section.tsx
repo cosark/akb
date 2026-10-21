@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Activity, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { ShieldCheck, TriangleAlert } from "lucide-react";
@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Panel, PanelHeader } from "@/components/ui/panel";
 import type { User } from "./profile-section";
+import { useResourceNavigation } from "@/contexts/resource-navigation-context";
 
 function reasonText(reason: string | null | undefined): string {
   switch (reason) {
@@ -48,13 +49,16 @@ function failureText(error: unknown) {
 }
 
 type Preview = { data: AccountLifecycle; snapshot: AuthSessionSnapshot };
-export function SecuritySection({ user, onBusyChange }: { user: User; onBusyChange: (busy: boolean) => void }) {
+export function SecuritySection({ user, onBusyChange, onDirtyChange, ownsOperation, visible = true }: { user: User; onBusyChange: (busy: boolean) => void; onDirtyChange?: (dirty: boolean) => void; ownsOperation?: () => boolean; visible?: boolean }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { completeSessionNavigation } = useResourceNavigation();
   const [preview, setPreview] = useState<Preview | null>(null);
   const [vaults, setVaults] = useState<DeletionBlockers | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [loadingVaults, setLoadingVaults] = useState(false);
+  const loadingVaultsRef = useRef(false);
   const busyRef = useRef(false);
   const [error, setError] = useState("");
   const [needsSignIn, setNeedsSignIn] = useState(false);
@@ -64,6 +68,9 @@ export function SecuritySection({ user, onBusyChange }: { user: User; onBusyChan
   const mounted = useRef(true);
   const readSequence = useRef(0);
   const failedSession = useRef<AuthSessionSnapshot | null>(null);
+  useEffect(() => { onBusyChange(busy); }, [busy, onBusyChange]);
+  useEffect(() => { onDirtyChange?.(Boolean(password) || step === "delete"); }, [password, step, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const setWorking = (value: boolean) => { busyRef.current = value; setBusy(value); onBusyChange(value); };
 
   async function refresh(openReview = false) {
@@ -92,11 +99,16 @@ export function SecuritySection({ user, onBusyChange }: { user: User; onBusyChan
   }
   useEffect(() => {
     mounted.current = true;
-    void refresh();
     return () => { mounted.current = false; readSequence.current += 1; onBusyChange(false); };
     // Each identity mounts a new section. Reads never automatically retry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.user_id]);
+  useEffect(() => {
+    if (visible) void refresh();
+    else readSequence.current += 1;
+    // Reprove capabilities after checking, without suspending a started job.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, user.user_id]);
   useEffect(() => {
     const invalidate = () => {
       if (preview && !isCurrentAuthSession(preview.snapshot)) {
@@ -133,21 +145,22 @@ export function SecuritySection({ user, onBusyChange }: { user: User; onBusyChan
     setWorking(true); setError("");
     let end: (() => void) | undefined;
     let completed = false;
+    const currentOperation = () => ownsOperation ? ownsOperation() : mounted.current;
     try {
       end = beginAccountLifecycle(snapshot);
       if (kind === "sessions") await revokeAccountSessions(snapshot, data.user_id);
       else await deleteAccount(snapshot, data.user_id, data.username, password);
-      if (!isCurrentAuthSession(snapshot)) return;
+      if (!currentOperation() || !isCurrentAuthSession(snapshot)) return;
       await queryClient.cancelQueries();
-      if (!isCurrentAuthSession(snapshot)) return;
+      if (!currentOperation() || !isCurrentAuthSession(snapshot)) return;
       queryClient.clear();
       if (clearCompletedAccountSession(snapshot)) {
         completed = true;
         const reason = kind === "delete" ? "account-deleted" : data.revoke_sessions.scope === "sso_browser_sessions" ? "sso-sessions-revoked" : "sessions-revoked";
-        navigate(`/auth?reason=${reason}`, { replace: true });
+        completeSessionNavigation(() => navigate(`/auth?reason=${reason}`, { replace: true }));
       }
     } catch (e) {
-      if (!mounted.current || !isCurrentAuthSession(snapshot)) return;
+      if (!currentOperation() || !isCurrentAuthSession(snapshot)) return;
       setError(failureText(e));
       failedSession.current = snapshot;
       setNeedsSignIn(e instanceof ApiError && e.status === 401);
@@ -156,8 +169,9 @@ export function SecuritySection({ user, onBusyChange }: { user: User; onBusyChan
       setPreview(null);
     } finally {
       end?.();
-      if (mounted.current) {
-        setPassword(""); setWorking(false);
+      setWorking(false);
+      if (currentOperation()) {
+        setPassword("");
         if (!completed && !isCurrentAuthSession(snapshot)) {
           setPreview(null); setStep("none");
           setError("Your sign-in session changed. Check your account status and review the action again.");
@@ -177,30 +191,32 @@ export function SecuritySection({ user, onBusyChange }: { user: User; onBusyChan
       await queryClient.cancelQueries();
       if (!isCurrentAuthSession(snapshot)) return;
       queryClient.clear();
-      if (clearCompletedAccountSession(snapshot)) navigate("/auth?reason=session-unverified", { replace: true });
+      if (clearCompletedAccountSession(snapshot)) completeSessionNavigation(() => navigate("/auth?reason=session-unverified", { replace: true }));
     } finally { if (mounted.current) setWorking(false); }
   }
   async function moreVaults() {
-    if (!preview || !vaults?.next_cursor || busyRef.current) return;
-    setWorking(true);
+    if (!preview || !vaults?.next_cursor || busyRef.current || loadingVaultsRef.current) return;
+    const sequence = readSequence.current;
+    loadingVaultsRef.current = true; setLoadingVaults(true);
     try {
       const page = await getDeletionBlockers(preview.snapshot, vaults.next_cursor);
-      if (isCurrentAuthSession(preview.snapshot) && page.user_id === user.user_id) setVaults({ ...page, owned_vaults: [...vaults.owned_vaults, ...page.owned_vaults] });
-    } catch (e) { setError(failureText(e)); }
-    finally { if (mounted.current) setWorking(false); }
+      if (mounted.current && sequence === readSequence.current && isCurrentAuthSession(preview.snapshot) && page.user_id === user.user_id) setVaults({ ...page, owned_vaults: [...vaults.owned_vaults, ...page.owned_vaults] });
+    } catch (e) { if (mounted.current && sequence === readSequence.current && isCurrentAuthSession(preview.snapshot)) setError(failureText(e)); }
+    finally { loadingVaultsRef.current = false; if (mounted.current) setLoadingVaults(false); }
   }
   const feedback = error && <Alert variant="destructive">{error}</Alert>;
   const effects = preview?.data.deletion.effects;
-  return <section className="max-w-3xl space-y-6" aria-labelledby="security-title" aria-busy={busy || loading}>
+  return <><Activity mode={visible ? "visible" : "hidden"}><section className="max-w-3xl space-y-6" aria-labelledby="security-title" aria-busy={busy || loading || loadingVaults}>
     <div><h2 id="security-title" className="flex items-center gap-2 text-lg font-semibold"><ShieldCheck className="h-5 w-5 text-link" aria-hidden />Security</h2><p className="mt-1 text-sm text-foreground-muted">Manage your login sessions and account.</p></div>
     {step !== "review" && step !== "delete" && feedback}
     {loading && <p role="status" className="text-sm text-foreground-muted">Checking account security…</p>}
     {busy && <p role="status" className="text-sm text-foreground-muted">Working… Keep this page open while we verify the result.</p>}
     {!loading && !preview && <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={busy} onClick={() => { setError(""); void refresh(); }}>Check account status</Button>{needsSignIn && <Button variant="outline" disabled={busy} onClick={() => void signInAgain()}>Sign in again</Button>}</div>}
     <Panel><PanelHeader label="Login sessions" /><div className="space-y-3 p-4 text-sm"><p>{sessionDescription}</p><p className="text-foreground-muted">{sessionExclusions}</p>{preview && !canRevoke && <Alert variant="info">{reasonText(preview.data.revoke_sessions.reason)}</Alert>}<Button variant="outline" disabled={busy || loading || !canRevoke} onClick={() => { returnFocus.current = document.activeElement as HTMLElement; setError(""); setStep("sessions"); }}>Sign out all sessions</Button></div></Panel>
-    {managedAccount ? <Panel><PanelHeader label="Managed account" /><div className="space-y-3 p-4 text-sm"><p>{reasonText("managed_account")}</p><p className="text-foreground-muted">Signing out keeps your account and Vault data available for your next SSO sign-in.</p></div></Panel> : <Panel><PanelHeader label={<span className="flex items-center gap-2 text-destructive"><TriangleAlert className="h-4 w-4" aria-hidden />Danger zone</span>} /><div className="space-y-3 p-4 text-sm"><h3 className="font-semibold">Delete account</h3><p>This permanently deletes your account and personal access tokens. This cannot be undone. Shared vault content and publication links remain available.</p>{preview && !preview.data.deletion.supported && <Alert variant="info">{reasonText(preview.data.deletion.reason)}</Alert>}{preview?.data.deletion.blockers.map(b => <Alert key={b.code} variant="warning">{blockerText(b.code, b.count)}</Alert>)}{vaults && <ul className="space-y-2">{vaults.owned_vaults.map(v => <li key={v.id} className="break-words"><Link className="text-link hover:underline" to={`/vault/${encodeURIComponent(v.name)}/settings`}>{v.name} — manage ownership</Link></li>)}</ul>}{vaults?.next_cursor && <Button variant="outline" disabled={busy} onClick={() => void moreVaults()}>Show more owned vaults</Button>}<Button variant="destructive" disabled={busy || loading || !preview?.data.deletion.supported} onClick={() => { returnFocus.current = document.activeElement as HTMLElement; setError(""); setPassword(""); void refresh(true); }}>Review account deletion</Button></div></Panel>}
-    <ConfirmDialog open={step === "sessions"} onOpenChange={open => { if (!open) close(); }} returnFocusRef={returnFocus} title="Sign out all sessions?" description={`${sessionDescription} ${sessionExclusions}`} variant="destructive" confirmLabel="Sign out all sessions" busy={busy} onConfirm={() => execute("sessions")} />
-    <Dialog open={step === "review"} onOpenChange={open => { if (!open) close(); }}><DialogContent onCloseAutoFocus={event => { if (step !== "delete") { event.preventDefault(); returnFocus.current?.focus(); } }}><DialogHeader><DialogTitle>Review account deletion</DialogTitle><DialogDescription>Review the impact on {user.username} before continuing. This action cannot be undone.</DialogDescription></DialogHeader><div className="space-y-3 text-sm">{feedback}{needsSignIn && <Button variant="outline" disabled={busy} onClick={() => void signInAgain()}>Sign in again</Button>}{preview && <><p>Personal access tokens to delete: {effects?.active_pats_revoked ?? "Unavailable"}</p><p>Shared publication links preserved: {effects?.shared_publications_preserved ?? "Unavailable"}</p>{preview.data.deletion.blockers.map(b => <Alert key={b.code} variant="warning">{blockerText(b.code, b.count)}</Alert>)}</>}{!preview && <Button variant="outline" disabled={loading || busy} onClick={() => { setError(""); void refresh(); }}>Check account status</Button>}<Label htmlFor="account-current-password">Current password</Label><Input id="account-current-password" type="password" autoComplete="current-password" value={password} disabled={busy || loading || !canDelete} onChange={e => setPassword(e.target.value)} /></div><DialogFooter><Button variant="outline" onClick={close} disabled={busy} autoFocus>Cancel</Button><Button variant="destructive" disabled={busy || loading || !canDelete || !password} onClick={() => setStep("delete")}>Continue to confirmation</Button></DialogFooter></DialogContent></Dialog>
-    <ConfirmDialog open={step === "delete"} onOpenChange={open => { if (!open && !busyRef.current) { setStep(current => current === "delete" ? "none" : current); setPassword(""); } }} returnFocusRef={returnFocus} title="Permanently delete account?" description="Your account and personal access tokens will be deleted. Shared vault content and publication links will be preserved." variant="destructive" confirmationText={user.username} confirmationLabel="Type your username to confirm" confirmLabel="Permanently delete account" busy={busy} onConfirm={() => execute("delete")} />
-  </section>;
+    {managedAccount ? <Panel><PanelHeader label="Managed account" /><div className="space-y-3 p-4 text-sm"><p>{reasonText("managed_account")}</p><p className="text-foreground-muted">Signing out keeps your account and Vault data available for your next SSO sign-in.</p></div></Panel> : <Panel><PanelHeader label={<span className="flex items-center gap-2 text-destructive"><TriangleAlert className="h-4 w-4" aria-hidden />Danger zone</span>} /><div className="space-y-3 p-4 text-sm"><h3 className="font-semibold">Delete account</h3><p>This permanently deletes your account and personal access tokens. This cannot be undone. Shared vault content and publication links remain available.</p>{preview && !preview.data.deletion.supported && <Alert variant="info">{reasonText(preview.data.deletion.reason)}</Alert>}{preview?.data.deletion.blockers.map(b => <Alert key={b.code} variant="warning">{blockerText(b.code, b.count)}</Alert>)}{vaults && <ul className="space-y-2">{vaults.owned_vaults.map(v => <li key={v.id} className="break-words"><Link className="text-link hover:underline" to={`/vault/${encodeURIComponent(v.name)}/settings`}>{v.name} — manage ownership</Link></li>)}</ul>}{vaults?.next_cursor && <Button variant="outline" disabled={busy} loading={loadingVaults} onClick={() => void moreVaults()}>{loadingVaults ? "Loading owned vaults…" : "Show more owned vaults"}</Button>}<Button variant="destructive" disabled={busy || loading || !preview?.data.deletion.supported} onClick={() => { returnFocus.current = document.activeElement as HTMLElement; setError(""); setPassword(""); void refresh(true); }}>Review account deletion</Button></div></Panel>}
+  </section></Activity>
+    <ConfirmDialog open={visible && step === "sessions"} onOpenChange={open => { if (!open) close(); }} returnFocusRef={returnFocus} title="Sign out all sessions?" description={`${sessionDescription} ${sessionExclusions}`} variant="destructive" confirmLabel="Sign out all sessions" busy={busy} onConfirm={() => execute("sessions")} />
+    <Dialog open={visible && step === "review"} onOpenChange={open => { if (!open) close(); }}><DialogContent onCloseAutoFocus={event => { if (step !== "delete") { event.preventDefault(); returnFocus.current?.focus(); } }}><DialogHeader><DialogTitle>Review account deletion</DialogTitle><DialogDescription>Review the impact on {user.username} before continuing. This action cannot be undone.</DialogDescription></DialogHeader><div className="space-y-3 text-sm">{feedback}{needsSignIn && <Button variant="outline" disabled={busy} onClick={() => void signInAgain()}>Sign in again</Button>}{preview && <><p>Personal access tokens to delete: {effects?.active_pats_revoked ?? "Unavailable"}</p><p>Shared publication links preserved: {effects?.shared_publications_preserved ?? "Unavailable"}</p>{preview.data.deletion.blockers.map(b => <Alert key={b.code} variant="warning">{blockerText(b.code, b.count)}</Alert>)}</>}{!preview && <Button variant="outline" disabled={loading || busy} onClick={() => { setError(""); void refresh(); }}>Check account status</Button>}<Label htmlFor="account-current-password">Current password</Label><Input id="account-current-password" type="password" autoComplete="current-password" value={password} disabled={busy || loading || !canDelete} onChange={e => setPassword(e.target.value)} /></div><DialogFooter><Button variant="outline" onClick={close} disabled={busy} autoFocus>Cancel</Button><Button variant="destructive" disabled={busy || loading || !canDelete || !password} onClick={() => setStep("delete")}>Continue to confirmation</Button></DialogFooter></DialogContent></Dialog>
+    <ConfirmDialog open={visible && step === "delete"} onOpenChange={open => { if (!open && !busyRef.current) { setStep(current => current === "delete" ? "none" : current); setPassword(""); } }} returnFocusRef={returnFocus} title="Permanently delete account?" description="Your account and personal access tokens will be deleted. Shared vault content and publication links will be preserved." variant="destructive" confirmationText={user.username} confirmationLabel="Type your username to confirm" confirmLabel="Permanently delete account" busy={busy} onConfirm={() => execute("delete")} />
+  </>;
 }

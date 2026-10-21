@@ -18,7 +18,7 @@ const baseMember = {
 };
 
 // The role control is now a themed dropdown (Radix DropdownMenu) rather than a
-// native <select>, so its options live in a popover opened from the badge.
+// native <select>, so its options live in the shared neutral role picker.
 async function openRoleMenu() {
   const user = userEvent.setup();
   await user.click(screen.getByLabelText(/change role for alice/i));
@@ -33,7 +33,7 @@ describe("RoleSelect", () => {
     await openRoleMenu();
     const items = await screen.findAllByRole("menuitemradio");
     expect(items.map((i) => i.textContent?.trim())).toEqual([
-      "reader", "writer", "admin",
+      "Reader", "Writer", "Admin",
     ]);
     expect(items[0]).toHaveAttribute("aria-checked", "true");
   });

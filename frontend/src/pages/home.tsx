@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ArrowRight, Box, FileText, FolderPlus, Plus, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,18 +14,13 @@ import { HomeRecentUpdates } from "@/components/home-recent-updates";
 import type { VaultRow } from "@/components/vault-list";
 import { useVaultFavorites } from "@/hooks/use-vault-favorites";
 import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
-import { listVaults, getVaultInfo, listPATs, getAuthConfig } from "@/lib/api";
+import { listPATs, getAuthConfig } from "@/lib/api";
+import { useHomeVaultDirectory, useHomeVaultMetrics, type VaultMetrics } from "@/hooks/use-home-inventory";
 import { readRecentDocumentViews, type RecentDocumentView } from "@/lib/recent-document-views";
 
 const PREVIEW_LIMIT = 4;
 const focus = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 const cardGrid = "grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4";
-
-interface VaultMetrics {
-  document_count?: number;
-  table_count?: number;
-  file_count?: number;
-}
 
 export default function HomePage() {
   const user = useCurrentUser();
@@ -37,13 +32,8 @@ export default function HomePage() {
 function HomeWorkspace({ userId, accessChecking, accessRevision }: { userId: string; accessChecking: boolean; accessRevision: number }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const [vaults, setVaults] = useState<VaultRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const [directoryRevision, setDirectoryRevision] = useState(-1);
+  const { directory, vaults, loading, error } = useHomeVaultDirectory(userId, accessChecking, accessRevision);
   const [summaryRevision, setSummaryRevision] = useState(0);
-  const [metrics, setMetrics] = useState<Record<string, VaultMetrics>>({});
-  const [metricsDone, setMetricsDone] = useState<Set<string>>(new Set());
   const [recentViews, setRecentViews] = useState<RecentDocumentView[]>([]);
   const { isFavorite, toggleFavorite, favOrder } = useVaultFavorites();
   const [connection, setConnection] = useState<"loading" | "unused" | "used" | "unknown">("loading");
@@ -51,37 +41,13 @@ function HomeWorkspace({ userId, accessChecking, accessRevision }: { userId: str
   const [setupAvailable, setSetupAvailable] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const createTrigger = useRef<HTMLButtonElement | null>(null);
-  const generation = useRef(0);
-
-  const loadVaults = useCallback(async () => {
-    const request = ++generation.current;
-    setLoading(true); setError(false);
-    try {
-      const data = await listVaults();
-      if (request === generation.current) {
-        if (!Array.isArray(data.vaults)) throw new Error("Invalid Vault directory");
-        setVaults(data.vaults);
-        setDirectoryRevision(accessRevision);
-      }
-    } catch {
-      if (request === generation.current) setError(true);
-    } finally {
-      if (request === generation.current) setLoading(false);
-    }
-  }, [accessRevision]);
 
   function refreshVaults() {
     // Explicit retries/mutations refresh both independently scoped snapshots.
     // Initial directory completion must not restart the already running total.
     setSummaryRevision(revision => revision + 1);
-    void loadVaults();
+    void directory.refetch();
   }
-
-  useEffect(() => {
-    const requests = generation;
-    void loadVaults();
-    return () => { requests.current++; };
-  }, [loadVaults]);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,23 +77,7 @@ function HomeWorkspace({ userId, accessChecking, accessRevision }: { userId: str
     return [...favorites, ...others].slice(0, PREVIEW_LIMIT);
   }, [vaults, isFavorite, favOrder]);
 
-  useEffect(() => {
-    let cancelled = false;
-    // At most four cards are enriched; favorites cannot expand Home into a directory.
-    const missing = previewVaults.filter(vault => !metricsDone.has(vault.name));
-    if (!missing.length) return;
-    void Promise.all(missing.map(async vault => {
-      try {
-        const info = await getVaultInfo(vault.name);
-        return { name: vault.name, value: { document_count: info?.document_count, table_count: info?.table_count, file_count: info?.file_count } };
-      } catch { return { name: vault.name, value: {} }; }
-    })).then(results => {
-      if (cancelled) return;
-      setMetrics(current => ({ ...current, ...Object.fromEntries(results.map(item => [item.name, item.value])) }));
-      setMetricsDone(current => new Set([...current, ...results.map(item => item.name)]));
-    });
-    return () => { cancelled = true; };
-  }, [previewVaults, metricsDone]);
+  const metrics = useHomeVaultMetrics(previewVaults, userId, accessChecking || !directory.isSuccess, accessRevision);
 
   const recentlyViewed = useMemo(() => {
     if (loading || error) return [];
@@ -155,7 +105,7 @@ function HomeWorkspace({ userId, accessChecking, accessRevision }: { userId: str
   }
 
   const noVaults = !loading && !error && vaults.length === 0;
-  const verifyingDirectory = accessChecking || loading || (!error && directoryRevision !== accessRevision);
+  const verifyingDirectory = accessChecking || loading;
 
   return <><h1 className="sr-only">Home</h1>
     <HomeWorkspaceSummary userId={userId} accessKey={`${accessRevision}:${summaryRevision}`} accessChecking={accessChecking} vaultCount={!verifyingDirectory && !error ? vaults.length : undefined} directoryLoading={verifyingDirectory} />
@@ -183,7 +133,7 @@ function HomeWorkspace({ userId, accessChecking, accessRevision }: { userId: str
       </Panel> : <>
         {error && <Alert className="mb-4">Could not refresh your vaults. <Button variant="link" onClick={refreshVaults}>Retry</Button></Alert>}
         <ul className={cardGrid}>{previewVaults.map(vault => <li key={vault.id} className="min-w-0">
-          <HomeVaultCard vault={vault} metrics={metrics[vault.name]} metricsReady={metricsDone.has(vault.name)} favorite={isFavorite(vault.id)} onToggleFavorite={() => toggleVaultFavorite(vault)} />
+          <HomeVaultCard vault={vault} metrics={metrics[vault.name]?.metrics} metricsReady={metrics[vault.name]?.ready ?? false} metricsError={metrics[vault.name]?.error} onRetryMetrics={metrics[vault.name]?.retry} favorite={isFavorite(vault.id)} onToggleFavorite={() => toggleVaultFavorite(vault)} />
         </li>)}</ul>
       </>}
     </section>
@@ -209,12 +159,12 @@ function RecentDocumentCard({ item, compact = false }: { item: RecentDocumentVie
   const parts = item.path.split("/").filter(Boolean);
   const collection = parts.length > 1 ? parts.slice(0, -1).join(" / ") : "";
   return <Panel className="h-full">
-    <Link to={`/vault/${encodeURIComponent(item.vault)}/doc/${encodeURIComponent(item.path)}`} className={`group flex h-full gap-3 p-4 transition-token hover:bg-surface-hover ${focus} focus-visible:ring-inset`}>
+    <Link to={`/vault/${encodeURIComponent(item.vault)}/doc/${encodeURIComponent(item.path)}`} className={`group flex h-full gap-3 px-4 ${compact ? "py-3" : "py-4"} transition-token hover:bg-surface-hover ${focus} focus-visible:ring-inset`}>
       <FileText className="mt-0.5 h-4 w-4 shrink-0 text-link" aria-hidden />
       <div className={compact ? "min-w-0 flex-1 sm:flex sm:items-center sm:justify-between sm:gap-6" : "min-w-0 flex-1"}>
         <div className="min-w-0">
         <h3 className="line-clamp-2 break-words text-sm font-semibold leading-snug group-hover:text-link" title={item.title}>{item.title}</h3>
-        <p className="mt-2 truncate text-xs text-foreground-muted" title={`${item.vault}${collection ? ` / ${collection}` : ""}`}>{item.vault}{collection ? ` / ${collection}` : ""}</p>
+        <p className="mt-1 truncate text-xs text-foreground-muted" title={`${item.vault}${collection ? ` / ${collection}` : ""}`}>{item.vault}{collection ? ` / ${collection}` : ""}</p>
         </div>
         <p className={`text-xs text-subtle ${compact ? "mt-2 shrink-0 sm:mt-0" : "mt-1"}`}>Viewed <RelativeTime iso={item.viewedAt} /></p>
       </div>
@@ -222,8 +172,8 @@ function RecentDocumentCard({ item, compact = false }: { item: RecentDocumentVie
   </Panel>;
 }
 
-function HomeVaultCard({ vault, metrics, metricsReady, favorite, onToggleFavorite }: {
-  vault: VaultRow; metrics?: VaultMetrics; metricsReady: boolean; favorite: boolean; onToggleFavorite: () => void;
+function HomeVaultCard({ vault, metrics, metricsReady, metricsError, onRetryMetrics, favorite, onToggleFavorite }: {
+  vault: VaultRow; metrics?: VaultMetrics; metricsReady: boolean; metricsError?: boolean; onRetryMetrics?: () => void; favorite: boolean; onToggleFavorite: () => void;
 }) {
   const counts = [
     { label: "Documents", value: metrics?.document_count },
@@ -239,6 +189,7 @@ function HomeVaultCard({ vault, metrics, metricsReady, favorite, onToggleFavorit
         {counts.length > 0 ? <dl className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-foreground-muted">{counts.map(item => <div key={item.label} className="flex items-baseline gap-1"><dt>{item.label}</dt><dd className="font-medium tabular-nums text-foreground">{item.value.toLocaleString()}</dd></div>)}</dl> : !metricsReady ? <span className="text-xs text-subtle">Loading details…</span> : <span className="inline-flex items-center gap-1 text-sm text-link">Open vault<ArrowRight className="h-3.5 w-3.5" aria-hidden /></span>}
       </div>
     </Link>
+    {metricsError && <div className="border-t border-border px-4 py-2 text-xs text-foreground-muted" role="status">Details unavailable. <Button variant="link" size="sm" aria-label={`Retry details for ${vault.name}`} onClick={onRetryMetrics}>Retry</Button></div>}
     <Button id={`home-favorite-${vault.id}`} variant="ghost" size="icon" aria-label={`${favorite ? "Remove" : "Add"} ${vault.name} ${favorite ? "from" : "to"} favorites`} aria-pressed={favorite} onClick={onToggleFavorite} className="absolute right-2 top-2 h-9 w-9">
       <Star className={`h-4 w-4 ${favorite ? "fill-current text-link" : "text-foreground-muted"}`} aria-hidden />
     </Button>

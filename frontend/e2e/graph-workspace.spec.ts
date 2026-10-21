@@ -455,6 +455,10 @@ test("filters and hidden resources produce the same scene in Graph and List", as
   await graphReady(page, 8);
   await expect(page.getByTestId("graph-canvas")).toHaveAccessibleName(/0 relationships/);
   await selectFromSearch(page, "API Gateway");
+  await graphReady(page, 8);
+  await page.getByRole("button", { name: /^Filters/ }).click();
+  await expect(page.getByRole("menuitemcheckbox", { name: /Hide 6 unconnected resources/ })).toBeChecked();
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Resource actions", exact: true }).click();
   await page.getByRole("menuitem", { name: "Hide from this view", exact: true }).click();
   await graphReady(page, 7);

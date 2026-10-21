@@ -38,10 +38,10 @@ imports this file, so this is the one contract.
 
 ## Architecture
 
-- **Backend**: Python 3.14, FastAPI + Uvicorn, PostgreSQL 16 + pgvector, GitPython (bare repo)
+- **Backend**: Python 3.14, FastAPI + Uvicorn, PostgreSQL 16 + pgvector; PostgreSQL Native revisions by default, GitPython for explicit Bare Git installations
 - **MCP**: Anthropic MCP SDK (Streamable HTTP) — backend serves as HTTP MCP server
 - **Proxy**: `packages/akb-mcp-client/` — Node.js ESM, zero dependencies, stdio ↔ HTTP bridge
-- **Frontend**: React 19 + TypeScript + Vite + Radix UI + Tailwind CSS v4 + Plate (`platejs` markdown editor; lazy-loaded in Edit / New-document flows)
+- **Frontend**: React 19 + TypeScript + Vite + Radix UI + Tailwind CSS v4 + Tiptap (`@akb/markdown-editor`; lazy-loaded in Edit / New-document flows)
 
 ## Frontend Design System
 
@@ -120,17 +120,16 @@ The endpoint-driven suites, isolated repository-owned runtime, and optional
 Ubuntu host bootstrap are documented in
 [`scripts/ci/README.md`](scripts/ci/README.md).
 
-- `backend/tests/test_mcp_e2e.sh` — main E2E (75 tests), covers core CRUD, search, tables, access control
-- `backend/tests/test_edit_e2e.sh` — akb_edit E2E (33 tests)
-- `backend/tests/test_stdio_files_e2e.sh` — file upload/download E2E (18 tests)
-- `backend/tests/test_put_file_param_e2e.sh` — file param E2E (15 tests)
-- `backend/tests/test_security_edge_e2e.sh` — security & edge cases (62 tests)
-- `backend/tests/test_pg_rbac_e2e.sh` — PG-native vault isolation: cross-vault probes via SQL surface variations (44 tests, includes system-catalog access, schema-qualified, quoted, UNION/CTE/EXISTS/subquery, filesystem functions, DDL-shaped attempts, reader-scope writes)
-- `backend/tests/test_graph_replace_e2e.sh` — graph, replace, unicode, cross-vault (29 tests)
-- `backend/tests/test_defensive_e2e.sh` — defensive / lifecycle (33 tests)
-- `backend/tests/test_probes_e2e.sh` — /livez /readyz /health + concurrent-burst regression
-- All tests target whatever `AKB_URL` points at (default `http://localhost:8000`).
-- Tests create ephemeral users/vaults and clean up after themselves.
+- The canonical gate and setup commands live in [scripts/ci/README.md](scripts/ci/README.md).
+- `backend/tests/mcp_e2e/` covers authenticated MCP product behavior through
+  the Python SDK; `test_detail_e2e.py` includes exact-text editing, OCC,
+  Unicode, graph and replacement regressions.
+- Shell suites retain transport, REST, PostgreSQL ACL and local-file
+  boundaries. `test_mcp_e2e.sh` is a transport boundary suite, not the full
+  product gate. Do not substitute it for the SDK suite.
+- Use the repository-owned isolated runtime for the complete gate. Tests
+  create ephemeral data; follow its cleanup contract rather than targeting
+  an unrelated installation.
 
 ## Key Conventions
 
@@ -190,8 +189,9 @@ only.
 - **Backend**: bump `backend/pyproject.toml`, add CHANGELOG entry,
   PR + merge → `git tag -a backend-vX.Y.Z <merge-commit> -m "..."` →
   push → `gh release create backend-vX.Y.Z [--latest] --notes "..."`
-  → `bash deploy/k8s/internal/deploy-internal.sh` (image built from
-  the bumped pyproject version).
+  → build the release image from the bumped version. Deployment is an
+  operator-specific step; use [Native installation](docs/operations/native-installation.md)
+  for supported public deployment instructions.
 - **Proxy**: bump `packages/akb-mcp-client/package.json`, add
   CHANGELOG entry, PR + merge → for an authorized release, run
   `cd packages/akb-mcp-client && npm publish --access public`
@@ -207,14 +207,15 @@ only.
 - **Vector store is a driver-pluggable derived index.** `pgvector`
   (default; can share the main PG instance under a separate
   `vector_index` schema), `qdrant` (separate StatefulSet), or
-  `seahorse` (managed Seahorse Cloud table over BFF + per-table host
-  API; no infra to run). Each driver holds the dense embedding and the
+  `seahorse-cloud` (managed Seahorse Cloud), or the self-hosted
+  `seahorse-db` / `seahorse-db-grpc` drivers. Each driver holds the dense embedding and the
   corpus-side BM25 sparse vector. Selection in `config/app.yaml`
   (`vector_store_driver`).
-- **Write path (POST /documents)** only touches PG + git. No vector-store
-  round-trips on the request thread — chunks go in with
+- **Write path (POST /documents)** persists authoritative revisions in PG
+  for `postgres_native`; explicit `bare_git` installations also use Git.
+  No vector-store round-trips occur on the request thread — chunks go in with
   `vector_indexed_at = NULL`.
-- **Indexing worker** (`embed_worker`, started in `lifespan`) drains
+- **Indexing worker** (`embed_worker`, started in the worker or combined process role) drains
   rows where `vector_indexed_at IS NULL` and runs the full pipeline
   atomically per chunk: embed → BM25 sparse encode →
   `vector_store.upsert_one()` → `vector_indexed_at = NOW()`.
@@ -226,7 +227,16 @@ only.
   vector-store upsert, then `UPDATE chunks SET vector_indexed_at = NOW()`.
   A crash leaves NULL flags; the worker catches up.
 
-## Git Storage
+## Revision storage
+
+New installations use `postgres_native`: authoritative revisions live in
+PostgreSQL and no Git worktree is required. Existing databases require the
+explicit [cutover procedure](docs/operations/native-revision-existing-database-cutover.md);
+changing the selector alone does not migrate data.
+
+### Explicit Bare Git installations
+
+The following Git layout and locking apply only to the Bare Git backend:
 
 - Bare repo per vault at `/data/vaults/{vault_name}.git`
 - **Persistent linked worktree** per vault at

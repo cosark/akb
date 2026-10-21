@@ -23,7 +23,7 @@ _DSN = os.getenv("AKB_TEST_DSN", "postgresql://akb:akb@localhost:15432/akb")
 
 
 async def _migrate(conn):
-    path = _BACKEND / "app/db/migrations/115_publication_password_budgets.py"
+    path = _BACKEND / "app/db/migrations/116_publication_password_budgets.py"
     spec = importlib.util.spec_from_file_location(path.stem, path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

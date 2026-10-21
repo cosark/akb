@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { VaultRefreshProvider } from "@/contexts/vault-refresh-context";
 import { CurrentUserProvider } from "@/contexts/current-user-context";
 import { ResourceLocationProvider, useResourceLocation } from "@/contexts/resource-location-context";
@@ -37,6 +37,7 @@ vi.mock("@/lib/api", () => {
 });
 
 import {
+  ApiError,
   createPublication,
   deleteVaultTableRow,
   getVaultTableRow,
@@ -60,7 +61,8 @@ const rowId = "6ab163e8-6ea4-4d20-8765-bf912716384c";
 
 function LocationProbe() {
   const location = useResourceLocation();
-  return <output data-testid="resource-location">{location ? JSON.stringify(location) : "No resource"}</output>;
+  const route = useLocation(), navigate = useNavigate();
+  return <><output data-testid="resource-location">{location ? JSON.stringify(location) : "No resource"}</output><output data-testid="table-route">{route.pathname + route.search}</output><button onClick={() => navigate(-1)}>History Back</button><button onClick={() => navigate(1)}>History Forward</button></>;
 }
 
 function renderTable(
@@ -72,7 +74,7 @@ function renderTable(
   });
   const content = (revision = 0, checking = false) => (
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[initialEntry]}>
+        <MemoryRouter initialEntries={["/previous", initialEntry]} initialIndex={1}>
           <VaultRefreshProvider refetchVaults={vi.fn()} refetchTree={refetchTree}>
             <CurrentUserProvider user={null} revision={revision} checking={checking}>
               <ResourceLocationProvider identity="test-account" revision={revision} checking={checking}>
@@ -89,6 +91,7 @@ function renderTable(
   const view = render(content());
   return {
     refetchTree,
+    queryClient,
     ...view,
     beginAccessCheck: () => view.rerender(content(0, true)),
     reverifyAccess: () => view.rerender(content(1)),
@@ -139,6 +142,59 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("table row management", () => {
+  it.each(["short", "x".repeat(240), { note: "json".repeat(100) }, null])("F22: Readers inspect full cell values by keyboard with one roving tab stop", async value => {
+    vaultInfoMock.mockResolvedValue({ role: "reader" });
+    listRowsMock.mockResolvedValue({ kind: "table_query", columns: ["title", "metadata"], items: [{ title: value, metadata: { ok: true } }], total: 1 });
+    const actor = userEvent.setup(); const { container } = renderTable();
+    const cell = await screen.findByRole("cell", { name: "Row 1, title. Press Enter to inspect full value." });
+    expect(container.querySelectorAll('[data-cell-row][tabindex="0"]')).toHaveLength(1);
+    cell.focus(); await actor.keyboard("{Enter}");
+    const dialog = screen.getByRole("dialog", { name: "Cell value" });
+    const full = value === null ? "null" : typeof value === "object" ? JSON.stringify(value) : value;
+    expect(within(dialog).getByLabelText("title")).toHaveTextContent(full);
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    await actor.click(within(dialog).getByRole("button", { name: "Copy snippet" }));
+    expect(write).toHaveBeenCalledWith(full);
+    expect(within(dialog).getByRole("button", { name: "Snippet copied" })).toBeVisible();
+    await actor.keyboard("{Escape}");
+    await waitFor(() => expect(cell).toHaveFocus());
+    await actor.keyboard("{ArrowRight}{Enter}");
+    expect(within(screen.getByRole("dialog", { name: "Cell value" })).getByLabelText("metadata")).toHaveTextContent('{"ok":true}');
+    expect(screen.queryByRole("button", { name: "Add row" })).not.toBeInTheDocument();
+  });
+  it("F23: user filters, page and sort create history while retaining unrelated query values", async () => {
+    vaultInfoMock.mockResolvedValue({ role: "reader" });
+    listRowsMock.mockResolvedValue({ columns: ["title", "severity"], items: [{ title: "An incident", severity: "high" }], total: 150 });
+    const actor = userEvent.setup(); renderTable(vi.fn(), "/vault/ops/table/incidents?external=keep");
+    await actor.click(await screen.findByRole("button", { name: "Filters" }));
+    const filter = screen.getByRole("dialog", { name: "Add a filter" });
+    await actor.type(within(filter).getByLabelText("Value"), "incident");
+    await actor.click(within(filter).getByRole("button", { name: "Apply filter" }));
+    const filtered = screen.getByTestId("table-route").textContent;
+    await actor.click(await screen.findByRole("button", { name: "Next page" }));
+    await waitFor(() => expect(listRowsMock).toHaveBeenLastCalledWith("ops", "incidents", expect.objectContaining({ offset: 50 })));
+    const paged = screen.getByTestId("table-route").textContent;
+    await actor.click(screen.getByRole("button", { name: /Sort by title/ }));
+    await waitFor(() => expect(listRowsMock).toHaveBeenLastCalledWith("ops", "incidents", expect.objectContaining({ order: "title.asc,id.asc", offset: 0 })));
+    const sorted = screen.getByTestId("table-route").textContent;
+    await actor.click(screen.getByRole("button", { name: "History Back" }));
+    expect(screen.getByTestId("table-route")).toHaveTextContent(paged!);
+    await actor.click(screen.getByRole("button", { name: "History Back" }));
+    expect(screen.getByTestId("table-route")).toHaveTextContent(filtered!);
+    await actor.click(screen.getByRole("button", { name: "History Forward" }));
+    await actor.click(screen.getByRole("button", { name: "History Forward" }));
+    expect(screen.getByTestId("table-route")).toHaveTextContent(sorted!);
+    expect(screen.getByTestId("table-route")).toHaveTextContent("external=keep");
+  });
+  it("F23: automatic out-of-range correction replaces its entry", async () => {
+    vaultInfoMock.mockResolvedValue({ role: "reader" });
+    listRowsMock.mockResolvedValue({ columns: ["title"], items: [{ title: "One" }], total: 1 });
+    const actor = userEvent.setup(); renderTable(vi.fn(), "/vault/ops/table/incidents?page=99&external=keep");
+    await waitFor(() => expect(listRowsMock).toHaveBeenLastCalledWith("ops", "incidents", expect.objectContaining({ offset: 0 })));
+    expect(screen.getByTestId("table-route")).toHaveTextContent("external=keep");
+    await actor.click(screen.getByRole("button", { name: "History Back" }));
+    expect(screen.getByTestId("table-route")).toHaveTextContent("/previous");
+  });
   it.each(["checking", "failed", "catalog failure"])("blocks an open publication draft during %s access verification", async (state) => {
     vaultInfoMock.mockResolvedValue({ role: "writer", is_archived: false, is_external_git: false });
     vi.mocked(previewTablePublicationQuery).mockResolvedValue({ kind: "table_query", columns: ["title"], items: [{ title: "API outage" }], total: 1 });
@@ -467,4 +523,40 @@ describe("table row management", () => {
       { expectedUpdatedAt: "2026-09-02T04:45:00Z" },
     ));
   });
+});
+
+it("shows records while optional schema discovery is pending", async () => {
+  vaultInfoMock.mockResolvedValue({ role: "writer" });
+  listTablesMock.mockReturnValue(new Promise(() => {}));
+  renderTable();
+  await screen.findByText("API outage");
+  expect(screen.getByRole("button", { name: "Add row" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Schema" }));
+  expect(await screen.findByRole("status", { name: "Loading table schema" })).toBeInTheDocument();
+});
+it("keeps records available and offers local schema retry after a catalog error", async () => {
+  vaultInfoMock.mockResolvedValue({ role: "writer" });
+  listTablesMock.mockRejectedValue(new Error("Catalog unavailable"));
+  renderTable();
+  await screen.findByText("API outage");
+  fireEvent.click(screen.getByRole("button", { name: "Schema" }));
+  expect(await screen.findByRole("button", { name: "Retry schema" })).toBeEnabled();
+  expect(screen.queryByText("Column metadata was not included in the table catalog response.")).not.toBeInTheDocument();
+});
+
+it("does not resurrect denied schema after a transient retry", async () => {
+  vaultInfoMock.mockResolvedValue({ role: "writer" });
+  const { queryClient } = renderTable();
+  await screen.findByText("API outage");
+  fireEvent.click(screen.getByRole("button", { name: "Schema" }));
+  await screen.findAllByText("Operational incidents");
+  listTablesMock.mockRejectedValue(new ApiError("Denied", 403, {}));
+  await queryClient.refetchQueries({ queryKey: ["vault-tables"] });
+  await waitFor(() => expect(screen.queryByText("Operational incidents")).not.toBeInTheDocument());
+  listTablesMock.mockRejectedValue(new ApiError("Unavailable", 503, {}));
+  await queryClient.refetchQueries({ queryKey: ["vault-tables"] });
+  expect(screen.queryByText("Operational incidents")).not.toBeInTheDocument();
+  listTablesMock.mockResolvedValue({ items: [{ name: "incidents", description: "Fresh schema", columns: [{ name: "title", type: "text" }] }] });
+  await queryClient.refetchQueries({ queryKey: ["vault-tables"] });
+  expect((await screen.findAllByText("Fresh schema")).length).toBeGreaterThan(0);
 });

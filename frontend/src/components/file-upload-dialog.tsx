@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type DragEvent,
@@ -8,6 +9,10 @@ import {
 import { FileUp, FolderOpen, Paperclip } from "lucide-react";
 import {
   uploadVaultFile,
+  VaultFileUploadUncertainError,
+  authSessionSnapshot,
+  isCurrentAuthSession,
+  type AuthSessionSnapshot,
   type FileUploadStage,
   type VaultFileUploadResult,
 } from "@/lib/api";
@@ -25,6 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
 
 const STAGE_LABELS: Record<FileUploadStage, string> = {
   preparing: "Preparing upload…",
@@ -32,22 +38,40 @@ const STAGE_LABELS: Record<FileUploadStage, string> = {
   confirming: "Finalizing file…",
 };
 
-export function FileUploadDialog({
-  open,
-  onOpenChange,
-  vault,
-  initialCollection = "",
-  onUploaded,
-  returnFocusRef,
-}: {
+interface FileUploadDialogProps {
   open: boolean;
+  visible?: boolean;
   onOpenChange: (open: boolean) => void;
   vault: string;
   initialCollection?: string;
   onUploaded: (file: VaultFileUploadResult) => void;
   returnFocusRef?: RefObject<HTMLElement | null>;
-}) {
+}
+
+export function FileUploadDialog(props: FileUploadDialogProps) {
+  const user = useCurrentUser();
+  const { checking } = useAccessVerification();
+  const session = authSessionSnapshot();
+  // Foreground proof is a visibility boundary, not a new upload owner. Keep
+  // the job outside the temporarily unmounted DialogContent so a file-picker
+  // focus cycle cannot discard a File, a pending result, or Check upload ref.
+  return <FileUploadForm key={JSON.stringify([props.vault, user?.user_id, session.generation])} {...props} accessChecking={checking} session={session} />;
+}
+
+function FileUploadForm({
+  open,
+  visible = true,
+  onOpenChange,
+  vault,
+  initialCollection = "",
+  onUploaded,
+  returnFocusRef,
+  accessChecking,
+  session,
+}: FileUploadDialogProps & { accessChecking: boolean; session: AuthSessionSnapshot }) {
+  const active = useRef(true);
   const inputRef = useRef<HTMLInputElement>(null);
+  const inputId = `vault-file-input-${useId()}`;
   const [file, setFile] = useState<File | null>(null);
   const [collection, setCollection] = useState("");
   const [description, setDescription] = useState("");
@@ -55,8 +79,19 @@ export function FileUploadDialog({
   const [uploading, setUploading] = useState(false);
   const [stage, setStage] = useState<FileUploadStage>("preparing");
   const [error, setError] = useState("");
+  const [uncertain, setUncertain] = useState<VaultFileUploadUncertainError | null>(null);
+  const [completed, setCompleted] = useState<VaultFileUploadResult | null>(null);
+  const delivered = useRef<VaultFileUploadResult | null>(null);
+  const wasOpen = useRef(false);
 
   useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+
+  useEffect(() => {
+    if (wasOpen.current === open) return;
+    wasOpen.current = open;
     if (open) {
       setCollection(initialCollection.trim());
       return;
@@ -67,10 +102,21 @@ export function FileUploadDialog({
     setDragging(false);
     setStage("preparing");
     setError("");
+    setUncertain(null);
+    setCompleted(null);
+    delivered.current = null;
   }, [open, initialCollection]);
 
+  useEffect(() => {
+    if (!open || !visible || accessChecking || !completed || delivered.current === completed ||
+        !active.current || !isCurrentAuthSession(session)) return;
+    delivered.current = completed;
+    onUploaded(completed);
+    onOpenChange(false);
+  }, [open, visible, accessChecking, completed, session, onUploaded, onOpenChange]);
+
   function choose(next: File | null) {
-    if (!next) return;
+    if (!next || !isCurrentAuthSession(session)) return;
     setFile(next);
     setError("");
   }
@@ -82,32 +128,51 @@ export function FileUploadDialog({
   }
 
   async function submit() {
-    if (!file || uploading) return;
+    if (!file || uploading || completed || !visible || accessChecking || !isCurrentAuthSession(session)) return;
     setUploading(true);
     setError("");
     try {
-      const uploaded = await uploadVaultFile(vault, file, {
-        collection,
-        description,
-        onStageChange: setStage,
-      });
-      onUploaded(uploaded);
-      onOpenChange(false);
+      const uploaded = uncertain
+        ? await uncertain.checkUpload()
+        : await uploadVaultFile(vault, file, {
+            collection,
+            description,
+            onStageChange: (next) => { if (active.current) setStage(next); },
+          });
+      if (!active.current || !isCurrentAuthSession(session)) return;
+      setCompleted(uploaded);
     } catch (caught: unknown) {
+      if (!active.current) return;
+      if (caught instanceof VaultFileUploadUncertainError) setUncertain(caught);
       setError(
         caught instanceof Error
           ? caught.message
           : "The file could not be uploaded. Check the file and try again.",
       );
     } finally {
-      setUploading(false);
+      if (active.current) setUploading(false);
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !uploading && onOpenChange(next)}>
+    <>
+    {/* The native picker may return after its focus event starts proof. Keep
+        its element/listener owned with the job, not the hidden dialog portal. */}
+    <input
+      ref={inputRef}
+      id={inputId}
+      type="file"
+      className="hidden"
+      tabIndex={-1}
+      disabled={uploading || Boolean(uncertain)}
+      onChange={(event) => {
+        choose(event.target.files?.[0] ?? null);
+        event.target.value = "";
+      }}
+    />
+    <Dialog open={open && visible && !accessChecking} onOpenChange={(next) => !uploading && !accessChecking && visible && onOpenChange(next)}>
       <DialogContent
-        className="max-w-2xl gap-0 p-0"
+        className="flex max-w-2xl flex-col gap-0 overflow-hidden p-0"
         onEscapeKeyDown={(event) => uploading && event.preventDefault()}
         onPointerDownOutside={(event) => uploading && event.preventDefault()}
         onCloseAutoFocus={(event) => {
@@ -116,7 +181,7 @@ export function FileUploadDialog({
           returnFocusRef.current.focus();
         }}
       >
-        <DialogHeader className="border-b border-border px-6 py-5 pr-14">
+        <DialogHeader className="shrink-0 border-b border-border px-6 py-5 pr-14">
           <DialogTitle className="flex items-center gap-2">
             <FileUp className="h-5 w-5 text-primary" aria-hidden />
             Upload a file
@@ -127,9 +192,9 @@ export function FileUploadDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 p-6">
+        <div className="min-h-0 space-y-4 overflow-y-auto p-6">
           <div>
-            <Label className="mb-1.5 block" htmlFor="vault-file-input">
+            <Label className="mb-1.5 block" htmlFor={inputId}>
               File <span className="text-foreground-muted">*</span>
             </Label>
             <button
@@ -142,7 +207,7 @@ export function FileUploadDialog({
               onDragOver={(event) => event.preventDefault()}
               onDragLeave={() => setDragging(false)}
               onDrop={handleDrop}
-              disabled={uploading}
+              disabled={uploading || Boolean(uncertain)}
               className={cn(
                 "flex min-h-28 w-full items-center gap-4 rounded-[var(--radius-lg)] border border-dashed px-4 py-4 text-left transition-token",
                 "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface",
@@ -181,17 +246,6 @@ export function FileUploadDialog({
                 )}
               </span>
             </button>
-            <input
-              ref={inputRef}
-              id="vault-file-input"
-              type="file"
-              className="sr-only"
-              disabled={uploading}
-              onChange={(event) => {
-                choose(event.target.files?.[0] ?? null);
-                event.target.value = "";
-              }}
-            />
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -210,7 +264,7 @@ export function FileUploadDialog({
                   onChange={(event) => setCollection(event.target.value)}
                   placeholder="research/notes"
                   className="pl-9"
-                  disabled={uploading}
+                  disabled={uploading || Boolean(uncertain)}
                 />
               </div>
               <p className="mt-1.5 text-xs leading-relaxed text-foreground-muted">
@@ -227,14 +281,14 @@ export function FileUploadDialog({
                 onChange={(event) => setDescription(event.target.value)}
                 placeholder="What this file contains"
                 rows={2}
-                disabled={uploading}
+                disabled={uploading || Boolean(uncertain)}
                 className="min-h-10 resize-none"
               />
             </div>
           </div>
 
           {error && (
-            <Alert variant="destructive" title="Upload failed">
+            <Alert variant="destructive" title={uncertain ? "Upload confirmation unavailable" : "Upload failed"}>
               {error}
             </Alert>
           )}
@@ -245,14 +299,14 @@ export function FileUploadDialog({
           )}
         </div>
 
-        <DialogFooter className="border-t border-border bg-surface-2 px-6 py-4">
+        <DialogFooter className="shrink-0 border-t border-border bg-surface-2 px-6 py-4">
           <Button
             type="button"
             variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={uploading}
           >
-            Cancel
+            {uncertain ? "Close" : "Cancel"}
           </Button>
           <Button
             type="button"
@@ -262,11 +316,12 @@ export function FileUploadDialog({
             disabled={!file}
           >
             {!uploading && <FileUp className="h-4 w-4" aria-hidden />}
-            {uploading ? STAGE_LABELS[stage] : "Upload file"}
+            {uploading ? STAGE_LABELS[stage] : uncertain ? "Check upload" : "Upload file"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    </>
   );
 }
 

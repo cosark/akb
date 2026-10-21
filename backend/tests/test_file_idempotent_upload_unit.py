@@ -277,6 +277,7 @@ async def pool():
         "055_native_revision_m1_file_storage.py",
         "067_vault_file_upload_state.py",
         "068_vault_file_lifecycle_indexes.py",
+        "079_worker_claim_lifecycle.py",
         "104_file_write_capability_key.py",
     ):
         mig_path = backend_dir / "app" / "db" / "migrations" / mig_name
@@ -436,6 +437,50 @@ async def test_same_bytes_same_name_twice_is_one_row(pool, vault_id):
 
         assert second == first, "the second upload must adopt the first row"
         assert await _row_count(conn, vault_id) == 1
+
+
+async def test_confirmation_replay_does_not_rewrite_saved_metadata_or_timestamp(pool, vault_id):
+    async with pool.acquire() as conn:
+        fid = await _put(conn, vault_id, _s3_key("v", "", "stable.txt"))
+        values = dict(size_bytes=7, content_hash=_HASH_A, hash_algorithm="sha256", etag="first", storage_version="v1")
+        assert await vault_files_repo.confirm_file_upload_metadata(conn, fid, vault_id, **values)
+        before = dict(await conn.fetchrow("SELECT * FROM vault_files WHERE id = $1", fid))
+        assert not await vault_files_repo.confirm_file_upload_metadata(conn, fid, vault_id, **{**values, "etag": "second"})
+        leased = await vault_files_repo.lease_file_upload_confirmation(conn, vault_id, fid)
+        after = dict(await conn.fetchrow("SELECT * FROM vault_files WHERE id = $1", fid))
+        assert leased["upload_state"] == "confirmed"
+        assert before == after
+
+
+async def test_pending_cancel_waiting_for_confirmation_never_deletes_the_winner(pool, vault_id):
+    async with pool.acquire() as conn:
+        fid = await _put(conn, vault_id, _s3_key("v", "", "race.txt"))
+    async with pool.acquire() as confirming:
+        async with confirming.transaction():
+            assert await vault_files_repo.confirm_file_upload_metadata(
+                confirming, fid, vault_id, size_bytes=7, content_hash=_HASH_A,
+                hash_algorithm="sha256", etag="first", storage_version="v1",
+            )
+
+            async def cancel():
+                async with pool.acquire() as conn:
+                    return await vault_files_repo.delete_pending_file(conn, vault_id, fid)
+
+            cancellation = asyncio.create_task(cancel())
+            await asyncio.sleep(0.03)
+            assert not cancellation.done()
+        assert await asyncio.wait_for(cancellation, 2) is None
+    async with pool.acquire() as conn:
+        assert await conn.fetchval("SELECT upload_state FROM vault_files WHERE id = $1", fid) == "confirmed"
+
+
+async def test_pending_cancel_expired_reservation_is_scoped_and_idempotent(pool, vault_id):
+    async with pool.acquire() as conn:
+        fid = await _put(conn, vault_id, _s3_key("v", "", "expired.txt"))
+        await conn.execute("UPDATE vault_files SET updated_at = NOW() - INTERVAL '2 days' WHERE id = $1", fid)
+        assert await vault_files_repo.delete_pending_file(conn, uuid.uuid4(), fid) is None
+        assert (await vault_files_repo.delete_pending_file(conn, vault_id, fid))["id"] == fid
+        assert await vault_files_repo.delete_pending_file(conn, vault_id, fid) is None
 
 
 async def test_re_adopting_stale_pending_file_wins_gc_race(pool, vault_id):
@@ -906,6 +951,23 @@ async def test_confirm_on_a_legacy_key_is_unchanged(pool, vault_id, confirmable)
     result = await confirmable(vault_id, file_id, key, _BYTES_B)
 
     assert result["content_hash"] == _HASH_B
+
+
+async def test_confirm_response_loss_replay(pool, vault_id, confirmable, monkeypatch):
+    from app.services import file_service as fs
+
+    key = _s3_key("v", "IS", "response-lost.html")
+    async with pool.acquire() as conn:
+        fid = await _put(conn, vault_id, key)
+    saved = await confirmable(vault_id, fid, key, _BYTES_A)
+    monkeypatch.setattr(fs.s3_adapter, "head", lambda _key: pytest.fail("saved replay must not inspect mutable storage"))
+    service = fs.FileService()
+    replay = await service.confirm_upload(vault_id, str(fid), actor_id="tester")
+    assert replay == saved
+    assert await service.cancel_upload(vault_id, str(fid), actor_id="tester") == {"cancelled": False, "state": "confirmed"}
+    async with pool.acquire() as conn:
+        assert await conn.fetchval("SELECT upload_state FROM vault_files WHERE id = $1", fid) == "confirmed"
+        assert await conn.fetchval("SELECT count(*) FROM events WHERE vault_id = $1 AND kind = 'file.put'", vault_id) == 1
 
 
 async def test_confirmation_lease_refreshes_pending_file_gc_deadline(pool, vault_id):

@@ -38,7 +38,7 @@ export default function VaultNewPage() {
           </nav>
           <PageHeader
             title="Create a vault"
-            subtitle="A vault is a Git-backed knowledge root. Documents, tables, and files live inside it. Pick a short, lowercase name that is unique across this AKB installation — it becomes part of the canonical akb:// URI and the repo identifier."
+            subtitle="Keep related documents, tables, and files together. Choose a name, then invite your team when you are ready."
             className="mb-6"
           />
         </>
