@@ -124,4 +124,15 @@ describe("VaultSectionNavigation", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Graph" })).toHaveAttribute("aria-current", "page");
   });
+
+  it("links Graph focused on the document being read", () => {
+    renderNavigation("/vault/team/doc/guides%2Fremote.md");
+    expect(screen.getAllByRole("link", { name: "Graph" })[0]).toHaveAttribute("href", "/vault/team/graph?entry=guides%2Fremote.md");
+  });
+
+  it("keeps the plain Graph link elsewhere", () => {
+    renderNavigation("/vault/team/members");
+    expect(screen.getAllByRole("link", { name: "Graph" })[0]).toHaveAttribute("href", "/vault/team/graph");
+  });
 });
+

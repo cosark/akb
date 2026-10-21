@@ -1,4 +1,5 @@
-import { useLayoutEffect, useRef, useState, type MouseEvent } from "react";
+import { useContext, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
+import { QueryClientContext, type QueryClient } from "@tanstack/react-query";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { ChevronDown } from "lucide-react";
 import { Link, matchRoutes, useLocation } from "react-router-dom";
@@ -27,15 +28,28 @@ export function VaultSectionNavigation({ vault }: { vault: string }) {
     match?.route.boundary !== "vault-shell" || match.params.name !== vault
     || !["/vault/:name/activity", "/vault/:name/doc/:id", "/vault/:name/file/:id", "/vault/:name/table/:table", ...Object.values(sectionPaths)].includes(match.route.path)
   ) return null;
-  return <VaultNavigationLinks key={vault} vault={vault} route={match.route.path} />;
+  return <VaultNavigationLinks key={vault} vault={vault} route={match.route.path} documentId={match.route.path === "/vault/:name/doc/:id" ? match.params.id : undefined} />;
+}
+
+/** The vault-relative path of the document a document page shows: from its loaded data when cached (the route may
+ *  name it by id), else the route parameter itself. */
+function documentPathFor(queryClient: QueryClient | undefined, vault: string, id: string | undefined): string | undefined {
+  if (!id) return undefined;
+  for (const [, data] of queryClient?.getQueriesData<{ path?: unknown }>({ queryKey: ["document", vault, id] }) ?? []) {
+    if (data && typeof data.path === "string" && data.path) return data.path;
+  }
+  return id;
 }
 
 const linkLayout = "inline-flex h-11 items-center gap-1.5 whitespace-nowrap px-2 text-sm lg:h-10";
 // Padding includes the management divider, so overflow measures its real width.
 const managementStartLayout = "pl-5 before:absolute before:left-1 before:top-1/2 before:h-4 before:w-px before:-translate-y-1/2 before:bg-border-strong";
 
-function VaultNavigationLinks({ vault, route }: { vault: string; route: string }) {
-  const actions = getVaultPageActions(vault).filter(action => action.key !== "search");
+function VaultNavigationLinks({ vault, route, documentId }: { vault: string; route: string; documentId?: string }) {
+  // From an open document, Graph opens focused on it (the same entry the document's own graph link uses).
+  const documentPath = documentPathFor(useContext(QueryClientContext), vault, documentId);
+  const actions = getVaultPageActions(vault).filter(action => action.key !== "search")
+    .map(action => action.key === "graph" && documentPath ? { ...action, href: `${action.href}?entry=${encodeURIComponent(documentPath)}` } : action);
   const { requestNavigation } = useResourceNavigation();
   const navRef = useRef<HTMLElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
