@@ -174,6 +174,16 @@ async def test_rollout_request_is_idempotent_and_worker_resumes_backfill(monkeyp
         # upgrade's authorization gap. General data access stays active-only.
         observed = await rollout.get_rollout_as_app(principal, first["job_id"], correlation_id="solo")
         assert observed["job_id"] == first["job_id"]
+        retried = await rollout.request_rollout_as_app(
+            principal, release_id=new_id, manifest_checksum_value=checksum,
+            idempotency_key=key, correlation_id="solo-request-replay",
+        )
+        assert retried["job_id"] == first["job_id"] and retried["replayed"] is True
+        with pytest.raises(ForbiddenError):
+            await rollout.request_rollout_as_app(
+                principal, release_id=new_id, manifest_checksum_value=checksum,
+                idempotency_key=str(uuid.uuid4()), correlation_id="solo-new-request",
+            )
         with pytest.raises(ForbiddenError):
             await identity.authorize_app_request(
                 principal, vault_id=vault_id, capability="rollout:read", correlation_id="data-stays-closed",
@@ -219,14 +229,24 @@ async def test_rollout_request_is_idempotent_and_worker_resumes_backfill(monkeyp
             await conn.execute("UPDATE installation_grants SET status='revoked',revoked_at=NOW() WHERE installation_id=$1 AND status='active'", installation_id)
         with pytest.raises(ForbiddenError):
             await rollout.get_rollout_as_app(principal, first["job_id"], correlation_id="revoked")
+        with pytest.raises(ForbiddenError):
+            await rollout.request_rollout_as_app(
+                principal, release_id=new_id, manifest_checksum_value=checksum,
+                idempotency_key=key, correlation_id="revoked-request-replay",
+            )
         async with pool.acquire() as conn:
             await conn.execute("UPDATE vault_app_installations SET lifecycle='uninstalled',desired_release_id=NULL WHERE id=$1", installation_id)
             unrelated_vault = await conn.fetchval("INSERT INTO vaults(name,git_path) VALUES('unrelated','/tmp/unrelated.git') RETURNING id")
             unrelated = await conn.fetchval("INSERT INTO vault_app_installations(app_id,vault_id,desired_release_id,current_release_id,lifecycle) VALUES($1,$2,$3,$3,'active') RETURNING id", app_id, unrelated_vault, new_id)
-            await conn.execute("INSERT INTO installation_grants(installation_id,generation,capabilities,issuer) VALUES($1,1,$2,'test')", unrelated, ["rollout:read"])
+            await conn.execute("INSERT INTO installation_grants(installation_id,generation,capabilities,issuer) VALUES($1,1,$2,'test')", unrelated, ["rollout:read", "rollout:request"])
         await identity.authorize_app_capability(principal, capability="rollout:read", correlation_id="unrelated-anchor")
         with pytest.raises(ForbiddenError):
             await rollout.get_rollout_as_app(principal, first["job_id"], correlation_id="uninstalled")
+        with pytest.raises(ForbiddenError):
+            await rollout.request_rollout_as_app(
+                principal, release_id=new_id, manifest_checksum_value=checksum,
+                idempotency_key=key, correlation_id="uninstalled-request-replay",
+            )
 
 
 async def test_app_rollout_does_not_duplicate_a_pending_installation_target(monkeypatch):

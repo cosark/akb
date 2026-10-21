@@ -955,6 +955,7 @@ async def request_rollout(
     correlation_id: str,
     actor: str,
     actor_id: str,
+    _principal: AppPrincipal | None = None,
 ) -> dict[str, Any]:
     app_id = _as_uuid(app_id, field="app_id")
     release_id = _as_uuid(release_id, field="release_id")
@@ -962,6 +963,8 @@ async def request_rollout(
     checksum = _hex(manifest_checksum_value, field="manifest checksum")
     if requested_by_kind not in {"admin", "app"}:
         raise ValidationError("requested_by_kind is invalid")
+    if requested_by_kind == "app" and (_principal is None or _principal.app_id != app_id):
+        raise ForbiddenError("App request denied")
     pool = await get_pool()
     try:
         async with pool.acquire() as conn:
@@ -973,11 +976,20 @@ async def request_rollout(
                     key,
                 )
                 if existing:
+                    if _principal is not None:
+                        await _authorize_rollout_job(
+                            conn, _principal, existing["id"], capability="rollout:request",
+                            correlation_id=correlation_id,
+                        )
                     if existing["release_id"] != release_id or existing["manifest_checksum"] != checksum:
                         raise ConflictError("Idempotency-Key was already used with different rollout input")
                     result = await _load_public_job(conn, app_id, existing["id"])
                     result["replayed"] = True
                     return result
+                if _principal is not None:
+                    await authorize_app_capability(
+                        _principal, capability="rollout:request", correlation_id=correlation_id, conn=conn,
+                    )
                 release = await conn.fetchrow(
                     "SELECT id, version, manifest, manifest_checksum FROM app_releases WHERE app_id=$1 AND id=$2",
                     app_id,
@@ -1124,7 +1136,6 @@ async def request_rollout_as_app(
     idempotency_key: str,
     correlation_id: str,
 ) -> dict[str, Any]:
-    await authorize_app_capability(principal, capability="rollout:request", correlation_id=correlation_id)
     return await request_rollout(
         principal.app_id,
         release_id=release_id,
@@ -1134,6 +1145,7 @@ async def request_rollout_as_app(
         correlation_id=correlation_id,
         actor=f"app:{principal.app_id}",
         actor_id=str(principal.app_id),
+        _principal=principal,
     )
 
 

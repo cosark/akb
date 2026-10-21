@@ -11,9 +11,9 @@ specifically; the proxy has its own log in
 
 - Apps can observe and resume their own rollout while its only installation
   is installing, upgrading, or blocked. Authority is checked against that
-  job's live targets and current grants, including before a resume replay;
+  job's live targets and current grants, including original request and resume replays;
   unrelated active installations no longer confer access to old jobs.
-  Ordinary data and inventory access retain their active-only policy.
+  New rollout requests, ordinary data and inventory access retain their active-only policy.
 
 - Deleting a Vault no longer fails after a legacy app adoption plan or apply.
   Adoption plans and immutable audit evidence retain their original Vault and

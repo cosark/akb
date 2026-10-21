@@ -1,8 +1,6 @@
-"""Opt-in real-worker rollout lifecycle and recovery authorization proof.
+"""Mandatory real-worker rollout recovery and current job authority proof.
 
-Set AKB_ROLLOUT_TEST_URL, AKB_E2E_PAT (Vault owner) and AKB_E2E_ADMIN_PAT.
-Creates only random test Vaults/apps. Registry/rollout audit history is retained.
-No SQL, worker controls, extra authority anchors, or timeout changes are used.
+The shared runtime owns reset, credentials and disposable audit history.
 """
 
 from __future__ import annotations
@@ -10,13 +8,14 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
-import os
-import ssl
 import time
 import uuid
 
 import httpx
 import pytest
+
+from .conftest import _prepare_secondary_user
+from .runtime import RuntimeContext
 
 _CAPABILITIES = ["installation:read", "inventory:read", "rollout:read", "rollout:request"]
 
@@ -66,20 +65,17 @@ def _poll(client, path, field, terminal):
 
 
 @pytest.fixture
-def rollout_clients():
-    origin = os.getenv("AKB_ROLLOUT_TEST_URL")
-    if not origin:
-        pytest.skip("set AKB_ROLLOUT_TEST_URL for real worker/HTTP lifecycle checks")
-    owner, admin = os.getenv("AKB_E2E_PAT"), os.getenv("AKB_E2E_ADMIN_PAT")
-    if not owner or not admin:
-        pytest.fail("supply owner and system-admin fixture PATs")
-    ca_file = os.getenv("AKB_E2E_CA_FILE")
-    verify = ssl.create_default_context(cafile=ca_file) if ca_file else True
+def rollout_clients(runtime_session: RuntimeContext):
+    origin = runtime_session.descriptor.app_origin
+    _name, owner, _secrets = _prepare_secondary_user(runtime_session)
+    admin = runtime_session.pat
     with (
-        httpx.Client(base_url=origin, headers={"Authorization": "Bearer " + owner}, verify=verify, timeout=30) as member,
-        httpx.Client(base_url=origin, headers={"Authorization": "Bearer " + admin}, verify=verify, timeout=30) as operator,
-        httpx.Client(base_url=origin, verify=verify, timeout=30) as app,
+        httpx.Client(base_url=origin, headers={"Authorization": "Bearer " + owner}, trust_env=False, timeout=30) as member,
+        httpx.Client(base_url=origin, headers={"Authorization": "Bearer " + admin}, trust_env=False, timeout=30) as operator,
+        httpx.Client(base_url=origin, trust_env=False, timeout=30) as app,
     ):
+        assert _ok(member.get("/api/v1/auth/me"))["is_admin"] is False
+        assert _ok(operator.get("/api/v1/auth/me"))["is_admin"] is True
         yield member, operator, app
 
 
@@ -112,7 +108,8 @@ def test_real_blocked_upgrade_and_resume_without_an_active_anchor(rollout_client
         desired = _release(app_key, required=True, source=baseline["manifest"]["schema"]["fingerprint"])
         new = _ok(operator.post(f"/api/v1/apps/{app_id}/releases", json=desired))
         body = {"release_id": new["id"], "manifest_checksum": new["manifest_checksum"]}
-        job = _ok(app.post("/api/v1/app/rollouts", json=body, headers={"Idempotency-Key": str(uuid.uuid4())}), 202)
+        request_key = {"Idempotency-Key": str(uuid.uuid4())}
+        job = _ok(app.post("/api/v1/app/rollouts", json=body, headers=request_key), 202)
         app_path = f"/api/v1/app/rollouts/{job['job_id']}"
         # The worker really executes SET NOT NULL against a NULL row.
         source = _poll(app, app_path, "status", {"blocked", "applied"})
@@ -121,6 +118,11 @@ def test_real_blocked_upgrade_and_resume_without_an_active_anchor(rollout_client
         assert any(step["operation"] == "set_not_null" and step["state"] == "failed"
                    for target in source["targets"] for step in target["steps"])
         assert _ok(operator.get(f"/api/v1/apps/{app_id}/rollouts/{job['job_id']}")) == source
+        retried = _ok(app.post("/api/v1/app/rollouts", json=body, headers=request_key))
+        assert retried["job_id"] == job["job_id"] and retried["replayed"] is True
+        # A new rollout still requires ordinary active installation authority.
+        assert app.post("/api/v1/app/rollouts", json=body,
+                        headers={"Idempotency-Key": str(uuid.uuid4())}).status_code == 403
         assert app.post("/api/v1/app/authorize", json={"vault_id": vaults[0][1], "capability": "installation:read"}).status_code == 403
         # Rotation invalidates the old app token even during a blocked job.
         rotated = _ok(operator.post(f"/api/v1/apps/{app_id}/credentials/{credential_id}/rotate", json={}))
@@ -152,6 +154,18 @@ def test_real_blocked_upgrade_and_resume_without_an_active_anchor(rollout_client
             _ok(member.delete(f"/api/v1/apps/{app_id}/installations/{vid}"), 200, 202)
         assert app.get(app_path).status_code == 403
         assert app.post(app_path + "/resume", json=body, headers=key).status_code == 403
+        # An unrelated active installation must not reopen historical targets
+        # through GET, resume, or the original POST's idempotent replay.
+        anchor = "rollout-anchor-test-" + uuid.uuid4().hex[:12]
+        anchor_id = _ok(member.post("/api/v1/vaults", params={"name": anchor}))["vault_id"]
+        vaults.append((anchor, anchor_id))
+        anchor_path = f"/api/v1/apps/{app_id}/installations/{anchor_id}"
+        _ok(member.put(anchor_path, json={"release_id": new["id"], "capabilities": _CAPABILITIES}), 200, 202)
+        assert _poll(operator, anchor_path, "lifecycle", {"active", "blocked"})["lifecycle"] == "active"
+        _ok(app.post("/api/v1/app/authorize", json={"vault_id": anchor_id, "capability": "installation:read"}))
+        assert app.get(app_path).status_code == 403
+        assert app.post(app_path + "/resume", json=body, headers=key).status_code == 403
+        assert app.post("/api/v1/app/rollouts", json=body, headers=request_key).status_code == 403
         _ok(operator.delete(f"/api/v1/apps/{app_id}/credentials/{credential_id}"))
         assert app.get(app_path).status_code == 401
     finally:

@@ -86,6 +86,15 @@ also checks upgrade retention and both deletion/adoption lock orders. Apply
 commits each target separately: a deleted later target returns 409 after earlier
 live targets may have committed; read the retained plan to inspect partial progress.
 
+`test_rollout_authority_e2e.py` requires one- and two-installation recovery
+through the real worker, with a non-admin owner and registry operator. A NULL
+canary makes a real NOT NULL migration fail; authorized row repair and resume
+must preserve the source job, checksum, grant and data. The cases also cover
+original-request replay while blocked, denial of new requests without active
+authority, credential rotation/revocation and denial of historical reads/replays
+after uninstall even when an unrelated installation becomes active. They use
+the mandatory descriptor/reset/PAT lifecycle without optional credentials.
+
 The detailed security suite also covers declarative table constraints and
 indexes, stable permission envelopes, private-document and graph boundaries,
 SQL failure-state integrity, and PAT write scopes. The PG-native ACL backstops
