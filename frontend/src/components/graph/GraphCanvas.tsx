@@ -180,7 +180,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, Props>(function GraphCa
           onClick={() => props.onSelect(node.uri)} onDoubleClick={() => props.onExpand(node)}
           style={{ left: label.x, top: label.y, transform: `translate(${(label.ax ?? -0.5) * 100}%, ${(label.ay ?? 0) * 100}%)` }}
           className={cn("pointer-events-auto absolute flex min-h-6 max-w-56 items-center gap-1 rounded-[var(--radius-xs)] px-1 text-xs text-foreground-muted [text-shadow:0_0_4px_var(--color-surface),0_0_2px_var(--color-surface)] hover:text-link focus-visible:bg-surface focus-visible:outline-2 focus-visible:outline-ring", props.selected === node.uri && "font-semibold text-link") }>
-          <span className="line-clamp-2 text-center leading-tight">
+          <span className={cn("text-center leading-tight [overflow-wrap:anywhere]", props.hops?.get(node.uri) === 0 ? "line-clamp-3" : "line-clamp-2")}>
             {showCategory && categoryOf(node) && <span className="mr-1 text-[10px] uppercase tracking-wide text-foreground-muted/80">{categoryOf(node)}</span>}
             {displayName(node)}
           </span>{props.pinned.has(node.uri) && <Pin className="h-3 w-3 shrink-0" aria-label="Position pinned" />}
