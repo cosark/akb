@@ -1,4 +1,4 @@
-import { StrictMode, useState } from "react";
+import { Activity, StrictMode, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -11,6 +11,23 @@ const content = <DialogContent aria-describedby={undefined}><DialogTitle>Example
 afterEach(() => { cleanup(); expect(isModalOpen()).toBe(false); });
 
 describe("Dialog modal ownership", () => {
+  it("suspends a retained private dialog outside the accessibility and tab order", async () => {
+    const user = userEvent.setup();
+    const view = (open: boolean) => <><button>Outside</button><Activity mode={open ? "visible" : "hidden"}><Dialog open><DialogContent aria-describedby={undefined}><DialogTitle>Retained draft</DialogTitle><input aria-label="Private draft" defaultValue="secret" /></DialogContent></Dialog></Activity></>;
+    const { rerender } = render(view(true));
+    const input = screen.getByRole("textbox", { name: "Private draft" });
+    await user.type(input, "-changed");
+    rerender(view(false));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Private draft" })).not.toBeInTheDocument();
+    expect(input).not.toBeVisible();
+    screen.getByRole("button", { name: "Outside" }).focus();
+    await user.tab();
+    expect(input).not.toHaveFocus();
+    rerender(view(true));
+    expect(screen.getByRole("textbox", { name: "Private draft" })).toBe(input);
+    expect(input).toHaveValue("secret-changed");
+  });
   it("tracks uncontrolled trigger/close and defaultOpen without leaking under StrictMode", async () => {
     const user = userEvent.setup();
     const { unmount } = render(<StrictMode><Probe /><Dialog defaultOpen><DialogTrigger>Launch</DialogTrigger>{content}</Dialog></StrictMode>);

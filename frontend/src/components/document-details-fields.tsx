@@ -49,6 +49,7 @@ export function DocumentDetailsFields({
           disabled={disabled}
         />
       </div>
+      <p className="border-t border-border pt-4 text-xs font-medium text-foreground-muted">Classification · optional</p>
       <div className="space-y-1.5">
         <Label htmlFor={`${idPrefix}-type`}>Document type</Label>
         <SelectMenu

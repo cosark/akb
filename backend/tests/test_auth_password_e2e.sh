@@ -94,13 +94,13 @@ HTTP=$(curl -sk -o /dev/null -w "%{http_code}" -X POST \
 JWT=$(login_only "$USER" "$USER_PW_NEW")
 [ -n "$JWT" ] && pass "new pw accepted" || fail "new pw login" "no JWT"
 
-# Wrong current → 401
+# Wrong current is a form error; the valid login session remains usable.
 HTTP=$(curl -sk -o /dev/null -w "%{http_code}" -X POST \
   "$BASE_URL/api/v1/auth/change-password" \
   -H "Authorization: Bearer $JWT" \
   -H 'Content-Type: application/json' \
   -d "{\"current_password\":\"WRONG\",\"new_password\":\"another-secret-77\"}")
-[ "$HTTP" = "401" ] && pass "wrong current → 401" || fail "wrong current" "got $HTTP"
+[ "$HTTP" = "400" ] && pass "wrong current → 400" || fail "wrong current" "got $HTTP"
 
 # New too short → 400
 HTTP=$(curl -sk -o /dev/null -w "%{http_code}" -X POST \

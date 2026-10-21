@@ -1,11 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MarkdownEditor } from "@/components/markdown-editor";
 import { normalizeEditorLinkUrl } from "@/lib/editor-link";
 import * as api from "@/lib/api";
 
 describe("MarkdownEditor formatting toolbar", () => {
+  it("keeps all commands mounted when narrow formatting tools expand", async () => {
+    const observers: ResizeObserverCallback[] = [];
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: ResizeObserverCallback) { observers.push(callback); }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    });
+    try {
+      const user = userEvent.setup();
+      render(<MarkdownEditor value="Draft" vault="team" onChange={vi.fn()} />);
+      const toolbar = screen.getByRole("toolbar", { name: "Text formatting" });
+      act(() => { for (const callback of observers) callback([{ contentRect: { width: 300 } } as ResizeObserverEntry], {} as ResizeObserver); });
+      const expand = screen.getByRole("button", { name: "Expand formatting tools" });
+      expect(expand).toHaveAttribute("aria-expanded", "false");
+      expect(toolbar).toHaveClass("flex-nowrap!");
+      await user.click(expand);
+      expect(screen.getByRole("button", { name: "Collapse formatting tools" })).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByRole("toolbar", { name: "Text formatting" })).toBe(toolbar);
+      expect(screen.getByRole("button", { name: "Insert table" })).toBeEnabled();
+      expect(toolbar).not.toHaveClass("flex-nowrap!");
+    } finally { vi.unstubAllGlobals(); }
+  });
   it("uses one tab stop and arrow keys to move through toolbar controls", async () => {
     const user = userEvent.setup();
     render(<MarkdownEditor value="Draft" vault="team" onChange={vi.fn()} />);
@@ -142,6 +165,9 @@ describe("MarkdownEditor formatting toolbar", () => {
 
     await user.click(modeButton);
     await user.click(screen.getByRole("menuitemradio", { name: "Visual" }));
+    // Tiptap restores Visual focus on the next animation frame. Opening the
+    // menu before that handoff finishes lets the pending focus close it.
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Document content" })).toHaveFocus());
     await user.click(modeButton);
     await user.click(screen.getByRole("menuitemradio", { name: "Markdown" }));
 

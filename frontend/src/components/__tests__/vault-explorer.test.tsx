@@ -6,7 +6,8 @@ import { Link, MemoryRouter } from "react-router-dom";
 import { VaultExplorer } from "@/components/vault-explorer";
 import { CurrentUserProvider } from "@/contexts/current-user-context";
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@/lib/api", async (original) => ({
+  ...await original<typeof import("@/lib/api")>(),
   browseVault: vi.fn(),
   getVaultInfo: vi.fn(),
   // Mutations are not exercised by these tests but the explorer imports
@@ -373,12 +374,23 @@ describe("VaultExplorer — rendering", () => {
     expect(within(dialog).getByText("Files")).toBeInTheDocument();
   });
 
-  it("keeps one compact actions trigger beside the collection name", async () => {
+  it("opens row options without expanding and restores focus before title activation", async () => {
+    const user = userEvent.setup();
     renderAt("/vault/v");
-    const name = await screen.findByText("architecture");
-    const row = name.closest('[role="treeitem"]');
-    expect(row).not.toBeNull();
+    const title = await screen.findByRole("button", { name: /^architecture$/i });
+    const row = title.closest('[role="treeitem"]')!;
+    const options = within(row as HTMLElement).getByRole("button", { name: "Collection actions for architecture" });
     expect(within(row as HTMLElement).getAllByRole("button")).toHaveLength(2);
+    expect(row).toHaveAttribute("aria-expanded", "false");
+    await user.click(options);
+    expect(row).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("menuitem", { name: "Search in collection" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    expect(options).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(title).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(row).toHaveAttribute("aria-expanded", "true");
   });
 
   it("auto-reveals ancestors of the active document", async () => {
@@ -605,7 +617,10 @@ describe("VaultExplorer — role gating", () => {
     await user.click(screen.getByRole("menuitem", { name: /upload file/i }));
     const dialog = screen.getByRole("dialog");
     const file = new File(["image"], "diagram.png", { type: "image/png" });
-    await user.upload(within(dialog).getByLabelText(/^File/i), file);
+    // The native picker remains with the upload owner outside the transient
+    // dialog portal so foreground proof cannot detach its change listener.
+    await user.click(within(dialog).getByRole("button", { name: /Choose a file or drop/ }));
+    fireEvent.change(screen.getByLabelText(/^File/i), { target: { files: [file] } });
     await user.click(within(dialog).getByRole("button", { name: /^Upload file$/i }));
     expect(uploadMock).toHaveBeenCalledWith(
       "v",

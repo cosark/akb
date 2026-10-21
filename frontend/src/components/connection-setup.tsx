@@ -48,7 +48,7 @@ function SetupChoice({ label, name, value, options, disabled, onChange, appearan
   </fieldset>;
 }
 
-export function ConnectionSetup({ mcpOauthEnabled, onTokenCreated, onSecretCreated, onBusyChange, invalidatedTokenId, onDirtyChange, initialDraft, replacement = false, onReceipt, layout = "compact" }: {
+export function ConnectionSetup({ mcpOauthEnabled, onTokenCreated, onSecretCreated, onBusyChange, invalidatedTokenId, onDirtyChange, initialDraft, replacement = false, onReceipt, layout = "compact", ownsOperation }: {
   layout?: "compact" | "workspace" | "settings";
   mcpOauthEnabled: boolean;
   onTokenCreated?: () => void;
@@ -59,6 +59,7 @@ export function ConnectionSetup({ mcpOauthEnabled, onTokenCreated, onSecretCreat
   initialDraft?: PatDraft;
   replacement?: boolean;
   onReceipt?: (receipt: PatReceipt, snapshot: AuthSessionSnapshot) => void;
+  ownsOperation?: () => boolean;
 }) {
   const id = useId();
   const [agent, setAgent] = useState<McpAgent>("claude");
@@ -77,7 +78,7 @@ export function ConnectionSetup({ mcpOauthEnabled, onTokenCreated, onSecretCreat
   const [session, setSession] = useState(authSessionSnapshot);
   const dirty = formDirty || !!freshToken || !!existingToken;
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
-  useEffect(() => () => { onDirtyChange?.(false); onBusyChange?.(false); }, [onDirtyChange, onBusyChange]);
+  useEffect(() => () => { if (ownsOperation?.() !== true) { onDirtyChange?.(false); onBusyChange?.(false); } }, [onDirtyChange, onBusyChange, ownsOperation]);
   useEffect(() => {
     const check = () => {
       if (isCurrentAuthSession(session)) return;
@@ -120,6 +121,11 @@ export function ConnectionSetup({ mcpOauthEnabled, onTokenCreated, onSecretCreat
   const accessMethod = useOauth ? "oauth" : freshToken ? "create" : credentialMode;
   const configVisible = useOauth || (usableToken && (!freshToken || showSecret));
   return <div className="min-w-0 text-sm" data-layout={layout}>
+    <ol aria-label="Connection setup overview" className="mb-4 grid grid-cols-3 gap-2 border-b border-border pb-4 text-xs text-foreground-muted">
+      {["Prepare access", "Configure your tool", "Try the connection"].map((step, index) => <li key={step} className="min-w-0 leading-relaxed">
+        <span className="mb-1 block font-semibold tabular-nums text-link">Step {index + 1}</span>{step}
+      </li>)}
+    </ol>
     <div>
       <SetupChoice label="AI tool" appearance="tabs" name={`${id}-agent`} value={agent} disabled={creating} onChange={value => setAgent(value as McpAgent)} options={Object.entries(MCP_AGENT_LABELS).map(([value, label]) => ({ value, label }))} />
     </div>
@@ -146,7 +152,7 @@ export function ConnectionSetup({ mcpOauthEnabled, onTokenCreated, onSecretCreat
       {/* Keep issuance state mounted across credential/OAuth switches. Only a
           completed issuance or leaving setup may discard this form session. */}
       {!freshToken && issuanceStarted && <div hidden={useOauth || credentialMode !== "create"}>
-        <PatIssuanceForm initial={initialDraft} replacement={replacement} onDirtyChange={setFormDirty} onBusyChange={value => { setCreating(value); onBusyChange?.(value); }} onMetadataChanged={onTokenCreated} onCreated={(result, snapshot) => {
+        <PatIssuanceForm ownsOperation={ownsOperation} initial={initialDraft} replacement={replacement} onDirtyChange={setFormDirty} onBusyChange={value => { setCreating(value); onBusyChange?.(value); }} onMetadataChanged={onTokenCreated} onCreated={(result, snapshot) => {
             setFreshToken(result.token); setFreshTokenId(result.token_id); setReceipt(result); setSession(snapshot); setCredentialMode("create"); setShowSecret(true); setInvalidationNotice(null); onSecretCreated?.(); onReceipt?.(result, snapshot);
           }} />
       </div>}
