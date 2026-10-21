@@ -47,6 +47,10 @@ for (const width of [375, 1440, 2560]) for (const dark of [false, true]) {
     await expect(details).toBeVisible();
     const collection = composer.getByLabel(/^Collection/);
     await expect(collection).toHaveValue("notes");
+    // The lazy editor replaces a taller fallback. Measure after it mounts so
+    // the two rectangles cannot straddle that layout change on a cold runner.
+    const body = composer.locator('[contenteditable="true"]').first();
+    await expect(body).toBeVisible();
     const writingBox = (await writing.boundingBox())!;
     const detailsBox = (await details.boundingBox())!;
     if (width >= 1440) {
@@ -60,7 +64,6 @@ for (const width of [375, 1440, 2560]) for (const dark of [false, true]) {
       await expect(composer.getByRole("button", { name: "Edit collection: notes", exact: true })).toBeInViewport({ ratio: 1 });
     }
     await composer.getByLabel(/^Title/).fill("Working together: product decisions");
-    const body = composer.locator('[contenteditable="true"]').first();
     await expect(body).toBeVisible();
     await body.fill("Write decisions with their context so the next person can pick up where you left off.");
     await expect(composer.getByRole("button", { name: "Create document" })).toBeEnabled();

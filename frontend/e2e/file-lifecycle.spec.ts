@@ -76,7 +76,11 @@ test("large JSON is download-only and smaller JSON expands by one page", async (
   await expect(page.getByText('"entry-199"', { exact: true })).toBeVisible();
   await expect(page.getByText('"entry-200"', { exact: true })).toHaveCount(0);
   await page.route("**/file-preview-fixture/**", route => route.fulfill({ contentType: "application/json", body: JSON.stringify({ huge: "한".repeat(200_000) }) }));
+  await page.route("**/api/v1/files/fixture/f-reading/download", route => route.fulfill({ json: { download_url: "/file-preview-fixture/renewed-source", expires_in: 60 } }));
   await page.getByRole("button", { name: "Refresh link", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Refresh link", exact: true })).toBeEnabled();
+  await expect(page.getByText('"entry-199"', { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Reload preview", exact: true }).click();
   await expect(page.getByText(/too large for an inline preview/)).toBeVisible();
   await expect(page.getByRole("link", { name: "Download file" })).toBeVisible();
   await expect(page.getByRole("region", { name: "JSON file content" })).toHaveCount(0);

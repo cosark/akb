@@ -113,7 +113,12 @@ for (const slow of [false, true]) test(`document entry avoids a second loading p
   }
   await expect(page.getByText("Stable document body.", { exact: true })).toBeVisible();
   await page.waitForLoadState("networkidle");
-  expect(reads).toBe(1);
+  // Vite dev runs StrictMode's initial unsubscribe/remount. Consuming the
+  // query's abort signal cancels that first query, so dev makes two initial
+  // HTTP attempts; a production build makes one. Neither may refetch again
+  // when the document body mounts after the page has received its response.
+  const development = await page.locator('script[src$="/@vite/client"]').count() > 0;
+  expect(reads).toBe(development ? 2 : 1);
   await expect(page.getByText("Updating document", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("status", { name: "Loading document", exact: true })).toHaveCount(0);
 });
