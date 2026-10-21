@@ -19,6 +19,18 @@ specifically; the proxy has its own log in
   sorting and large-table sorts during ordinary navigation. Initial index builds
   can block writes; schedule large upgrades accordingly.
 
+### Reliability
+
+- Return sanitized `503` dependency/timeout errors consistently over REST
+  and MCP, rather than invalid-SQL errors, generic HTTP 500s, or false zero Table
+  counts. Preserve connection-loss errors masked by asyncpg transaction cleanup.
+- Cancel and drain abandoned bodyless document, recent-feed and Table GET
+  requests. Keep writes, raw SQL, authentication callbacks and streams out of
+  automatic disconnect cancellation; no operation is automatically replayed.
+- Bound readiness DB initialization and ping together, preserve the successful
+  30-second readiness cache and soft vector-store check, and omit connection
+  details from public probe errors. See `docs/operations/database-recovery.md`.
+
 ### Search
 
 - The bundled PostgreSQL image applies VChord-BM25's existing snapshot and SQL

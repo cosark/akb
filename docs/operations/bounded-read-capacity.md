@@ -189,3 +189,10 @@ new non-admin owner; Reader and Outsider actors are minted through the same
 isolated API. No optional endpoint or actor PAT can skip this coverage. The
 historical large-corpus measurements above are separate from this review's
 focused correctness validation; they are not claimed as newly rerun results.
+
+Integration with PR #761 preserves sanitized transient errors and cancellation
+of selected abandoned GET reads, including Table catalog/page requests. Counted
+catalog reads propagate dependency failures rather than reporting a false zero;
+schema-only reads still avoid the count altogether. The cancellation probe above
+is historical evidence from before that separate fix, not the current cancellation
+contract. See [database recovery](database-recovery.md) for its scope and limits.
