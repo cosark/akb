@@ -37,15 +37,16 @@ for (const width of [375, 2560]) for (const dark of [false, true]) {
         ];
         const scope = url.searchParams.get("collection") || "";
         const kind = url.searchParams.get("content_type") || "all";
+        const nameQuery = url.searchParams.get("name_query") || "";
         const selected = items.filter(item => {
           const itemPath = (item.type === "table" || item.type === "file")
             ? `${item.collection || ""}/${item.name}` : item.path;
           const inScope = !scope || itemPath.startsWith(`${scope}/`);
           const inKind = kind === "all" || `${item.type}s` === kind || (kind === "documents" && item.type === "collection");
-          return inScope && inKind;
+          return inScope && inKind && (!nameQuery || `${item.name} ${itemPath}`.toLowerCase().includes(nameQuery.toLowerCase()));
         });
         return route.fulfill({ json: { vault: "alpha", path: scope,
-          archive_scope: "unarchived", scanned: selected.length, complete: true, next_cursor: null,
+          name_query: nameQuery || null, archive_scope: "unarchived", scanned: selected.length, complete: true, next_cursor: null,
           context: scope ? { type: "collection", name: items.find(item => item.type === "collection" && item.path === scope)?.name || scope, path: scope,
             uri: `akb://alpha/coll/${scope}` } : { type: "vault", name: "alpha", path: "", uri: "akb://alpha" },
           items: selected,
@@ -97,7 +98,7 @@ for (const width of [375, 2560]) for (const dark of [false, true]) {
     await expect(scope).toHaveCount(0);
     await expect(input).toBeVisible();
     await expect(input).toHaveValue("deploy");
-    await expect(page.getByRole("status").filter({ hasText: `Name: deploy · Collection: ${collection}` })).toBeVisible();
+    await expect(page.getByText(`Name: deploy · Collection: ${collection}`, { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Document: Deployment nested guide", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Document: Deployment outside", exact: true })).toHaveCount(0);
     await scopedFilters.click();

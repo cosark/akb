@@ -83,7 +83,10 @@ function PublishCurrent({ value, onlyOnResource = false }: { value: ResourceLoca
 
 beforeEach(() => {
   browseMock.mockReset();
-  browseMock.mockResolvedValue(sample);
+  browseMock.mockImplementation(async (_vault: string, _collection: string, _depth: number, options: { name_query?: string } = {}) => ({
+    ...sample, name_query: options.name_query,
+    items: options.name_query ? sample.items.filter(item => `${item.name} ${item.path}`.toLocaleLowerCase().includes(options.name_query!.toLocaleLowerCase())) : sample.items,
+  }));
   vaultInfoMock.mockReset();
   // Default to reader so the existing tests don't accidentally render
   // the mutation affordances. Tests that need writer+ override this.
@@ -131,12 +134,12 @@ describe("focused content navigation", () => {
     await user.click(screen.getByRole("button", { name: "Filter content, 1 active" }));
     expect(query).toBeVisible();
     expect(screen.queryByRole("button", { name: "Collection search scope" })).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Name: Schema");
+    expect(screen.getByText("Name: Schema")).toBeVisible();
     expect(screen.getByRole("link", { name: /Document:\s*Schema/ })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "guides" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "guides" })).not.toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Reset filters" }));
     expect(query).toHaveFocus();
-    expect(screen.getByRole("button", { name: "guides" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "guides" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Filter content" }));
     expect(screen.getByRole("searchbox", { name: "Filter resources" })).toHaveValue("");
   });
@@ -148,7 +151,7 @@ describe("focused content navigation", () => {
     await user.click(screen.getByRole("menuitem", { name: "Search in collection" }));
     await waitFor(() => expect(screen.getByRole("searchbox", { name: "Filter resources" })).toHaveFocus());
     await user.click(screen.getByRole("button", { name: "Filter content, 1 active" }));
-    expect(screen.getByRole("status")).toHaveTextContent("Collection: architecture");
+    expect(screen.getByText("Collection: architecture")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Reset filters" }));
     expect(screen.getByRole("button", { name: "guides" })).toBeVisible();
   });
@@ -168,7 +171,7 @@ describe("focused content navigation", () => {
     expect(search).toHaveFocus();
     expect(screen.getByRole("button", { name: "Filter content, 1 active" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Collection search scope" })).toHaveTextContent("architecture");
-    expect(screen.queryByRole("button", { name: "guides" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "guides" })).not.toBeInTheDocument());
   });
 
   it("updates the focused list after a document state change without manual refresh", async () => {
@@ -287,7 +290,7 @@ describe("collection exploration", () => {
     </MemoryRouter>);
     await explore(user, "architecture");
     expect(screen.getByRole("navigation", { name: "Collection exploration" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "guides" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "guides" })).not.toBeInTheDocument());
     await user.click(screen.getByRole("link", { name: "Change reading mode" }));
     expect(screen.getByRole("navigation", { name: "Collection exploration" })).toBeVisible();
     await user.click(screen.getByRole("link", { name: "Open another destination" }));
@@ -458,10 +461,10 @@ describe("collection shortcut navigation", () => {
     const query = screen.getByRole("searchbox", { name: "Filter resources" });
     await waitFor(() => expect(query).toHaveFocus());
     expect(screen.getByRole("button", { name: "Collection search scope" })).toHaveTextContent("architecture");
-    expect(screen.queryByRole("button", { name: "guides" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "guides" })).not.toBeInTheDocument());
     await user.type(query, "diagram");
     expect(screen.getByRole("treeitem", { name: /File:\s*diagram.png/ })).toBeInTheDocument();
-    expect(screen.queryByRole("treeitem", { name: /Document:\s*Schema/ })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("treeitem", { name: /Document:\s*Schema/ })).not.toBeInTheDocument());
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -590,7 +593,7 @@ describe("VaultExplorer — rendering", () => {
     await user.click(screen.getByRole("menuitemradio", { name: /^Documents/ }));
     await user.click(screen.getByRole("button", { name: "Resource type" }));
     const tables = screen.getByRole("menuitemradio", { name: /^Tables/ });
-    expect(tables).toHaveTextContent("Not loaded in this view");
+    expect(tables).toHaveTextContent("Browse tables");
     expect(tables).not.toHaveTextContent("0 tables");
   });
 
@@ -763,7 +766,7 @@ describe("VaultExplorer — interaction", () => {
     const filter = screen.getByLabelText(/filter resources/i);
     await user.type(filter, "schema");
     expect(screen.getByRole("treeitem", { name: /Schema/ })).toBeInTheDocument();
-    expect(screen.queryByRole("treeitem", { name: /Start/ })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("treeitem", { name: /Start/ })).not.toBeInTheDocument());
   });
 
   it("filters by resource kind without making users traverse unrelated rows", async () => {
@@ -783,6 +786,7 @@ describe("VaultExplorer — interaction", () => {
     const user = userEvent.setup();
     browseMock.mockResolvedValueOnce({
       vault: "v",
+      complete: true, next_cursor: null,
       path: "",
       items: [
         { type: "collection", name: "large", path: "large" },
@@ -808,10 +812,9 @@ describe("VaultExplorer — interaction", () => {
     expect(screen.getByRole("treeitem", { name: "Files, 1 item" })).toBeInTheDocument();
     expect(screen.getByRole("treeitem", { name: /owners/i })).toBeInTheDocument();
     expect(screen.getByRole("treeitem", { name: /diagram.png/i })).toBeInTheDocument();
-    expect(screen.queryByRole("treeitem", { name: /Doc 0021/i })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("treeitem", { name: /Show 50 more documents/i }));
+    expect(screen.getByRole("treeitem", { name: /Doc 0021/i })).toBeInTheDocument();
     expect(screen.getByRole("treeitem", { name: /Doc 0070/i })).toBeInTheDocument();
-    expect(screen.queryByRole("treeitem", { name: /Doc 0071/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: /Doc 0075/i })).toBeInTheDocument();
   });
 
   it("ArrowDown moves focus through the visible list", async () => {

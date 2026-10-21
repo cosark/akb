@@ -2116,7 +2116,9 @@ export interface BrowseOptions {
   archive_scope?: ArchiveScope;
   page_size?: number;
   cursor?: string;
-  content_type?: "all" | "collections" | "documents" | "tables" | "files";
+  content_type?: "all" | "collections" | "resources" | "documents" | "tables" | "files";
+  name_query?: string;
+  signal?: AbortSignal;
 }
 
 export const browseVault = (vault: string, collection?: string, depth = 1, options: BrowseOptions = {}) => {
@@ -2126,6 +2128,7 @@ export const browseVault = (vault: string, collection?: string, depth = 1, optio
   if (options.page_size !== undefined) p.set("page_size", String(options.page_size));
   if (options.cursor) p.set("cursor", options.cursor);
   if (options.content_type) p.set("content_type", options.content_type);
+  if (options.name_query) p.set("name_query", options.name_query);
   return api<{
     archive_scope?: ArchiveScope;
     vault: string;
@@ -2143,7 +2146,8 @@ export const browseVault = (vault: string, collection?: string, depth = 1, optio
     scanned?: number | null;
     complete?: boolean | null;
     next_cursor?: string | null;
-  }>(`/browse/${encodeURIComponent(vault)}?${p}`);
+    name_query?: string | null;
+  }>(`/browse/${encodeURIComponent(vault)}?${p}`, { signal: options.signal });
 };
 
 export interface KnowledgeImportResult {

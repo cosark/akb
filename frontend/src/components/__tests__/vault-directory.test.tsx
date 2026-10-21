@@ -92,7 +92,7 @@ describe("VaultDirectory cards", () => {
     const rows = Array.from({ length: 31 }, (_, index) => ({ id: `v-${index}`, name: `vault-${String(index).padStart(2, "0")}`, role: index === 30 ? "owner" : "reader", description: index === 30 ? "Architecture archive" : "Team notes" }));
     renderDirectory([], rows);
     expect(within(screen.getByRole("list", { name: "Available vaults" })).getAllByRole("listitem")).toHaveLength(30);
-    await user.click(screen.getByRole("button", { name: "Show more vaults (1 remaining)" }));
+    await user.click(screen.getByRole("button", { name: "Show more vaults" }));
     expect(within(screen.getByRole("list", { name: "Available vaults" })).getAllByRole("listitem")).toHaveLength(31);
     await user.click(screen.getByRole("button", { name: "List view" }));
     expect(within(screen.getByRole("list", { name: "Available vaults" })).getAllByRole("listitem")).toHaveLength(31);

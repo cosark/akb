@@ -254,6 +254,7 @@ class BrowseResponse(BaseModel):
     scanned: int | None = None
     complete: bool | None = None
     next_cursor: str | None = None
+    name_query: str | None = None
 
 
 class SearchResult(BaseModel):

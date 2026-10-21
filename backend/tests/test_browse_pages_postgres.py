@@ -251,3 +251,67 @@ async def test_mixed_kind_pages_keep_duplicate_names_and_hide_unconfirmed_files(
         assert seen[2].row_count is None  # no hidden exact COUNT or fabricated zero
         scoped = await facade.browse("browse-mixed", depth=-1, page_size=10, content_type="files")
         assert len(scoped.items) == 2 and all(item.type == "file" for item in scoped.items)
+
+
+async def test_name_search_finds_current_native_titles_after_empty_pages():
+    async with _fresh_database() as pool:
+        vault = await _make_vault(pool, "browse-name")
+        await _seed(pool, vault, ["a.md", "b.md", "c.md"])
+        native = NativeRevisionService(pool)
+        await native.replace_text(
+            namespace_id=vault, surface="document", path="c.md", actor="writer",
+            payload="---\ntitle: 마지막 Needle 제목\nstatus: active\n---\nbody",
+            mutation_id=uuid.uuid4(), summary="An activity message, not the title",
+        )
+        facade = NativeDocumentService(pool=pool)
+        cursor, seen, empty = None, [], 0
+        for _ in range(4):
+            page = await facade.browse(
+                "browse-name", depth=-1, content_type="resources", page_size=1,
+                name_query=" needle ", cursor=cursor, archive_scope="all",
+            )
+            assert page.name_query == "needle" and page.scanned <= 1
+            empty += not page.items
+            seen.extend(item.name for item in page.items)
+            cursor = page.next_cursor
+            if page.complete:
+                assert cursor is None
+                break
+            assert cursor
+        assert seen == ["마지막 Needle 제목"] and empty == 2
+        old = await facade.browse("browse-name", content_type="resources", page_size=100, name_query="Item 2", archive_scope="all")
+        assert old.complete and old.items == []
+
+
+async def test_name_search_cursor_is_bound_and_resource_pages_exclude_collections():
+    async with _fresh_database() as pool:
+        vault = await _make_vault(pool, "browse-name-cursor")
+        await _seed(pool, vault, ["a.md", "b.md"])
+        async with pool.acquire() as conn:
+            await conn.execute("INSERT INTO collections(vault_id,path,name) VALUES($1,'empty','Empty')", vault)
+        facade = NativeDocumentService(pool=pool)
+        page = await facade.browse("browse-name-cursor", content_type="resources", page_size=1, name_query="missing")
+        assert page.items == [] and page.next_cursor
+        with pytest.raises(ValidationError, match="cursor"):
+            await facade.browse("browse-name-cursor", content_type="resources", page_size=1, name_query="different", cursor=page.next_cursor)
+        all_resources = await facade.browse("browse-name-cursor", content_type="resources", page_size=10, archive_scope="all")
+        assert [item.type for item in all_resources.items] == ["document", "document"]
+
+
+async def test_catalog_name_search_filters_before_limit_and_escapes_wildcards(monkeypatch):
+    from app.services import document_service
+
+    async with _fresh_database() as pool:
+        vault = await _make_vault(pool, "browse-literal-name")
+        async with pool.acquire() as conn:
+            for path, title in (("a.md", "Other"), ("b.md", "Literal 50%_\\ title"), ("c.md", "Literal 50abc title")):
+                await conn.execute("INSERT INTO documents(vault_id,path,title) VALUES($1,$2,$3)", vault, path, title)
+            await conn.execute("INSERT INTO collections(vault_id,path,name) VALUES($1,'slug','Human name')", vault)
+        async def get_pool():
+            return pool
+        monkeypatch.setattr(document_service, "get_pool", get_pool)
+        facade = document_service.DocumentService(git=SimpleNamespace())
+        page = await facade.browse("browse-literal-name", content_type="resources", page_size=1, name_query="50%_\\")
+        assert [item.path for item in page.items] == ["b.md"] and page.complete
+        collection = await facade.browse("browse-literal-name", content_type="collections", page_size=1, name_query="human")
+        assert [item.path for item in collection.items] == ["slug"] and collection.complete

@@ -16,12 +16,13 @@ for (const width of [375, 1440]) for (const dark of [false, true]) {
     }, dark);
     await context.route("**/health/**", route => route.fulfill({ json: {} }));
     await context.route("**/api/v1/**", route => {
-      const path = new URL(route.request().url()).pathname;
+      const url = new URL(route.request().url());
+      const path = url.pathname;
       if (path.endsWith("/auth/config")) return route.fulfill({ json: { schema_version: 2, auth_mode: "local", local_auth: { enabled: true }, keycloak: { enabled: false, browser_session_ready: false }, providers: [], mcp_oauth: { enabled: false } } });
       if (path.endsWith("/auth/me")) return route.fulfill({ json: { user_id: "parent-reader", username: "reader", email: "reader@example.invalid", display_name: "Reader", auth_method: "local", is_admin: false } });
       if (path.endsWith("/vaults")) return route.fulfill({ json: { vaults: [{ id: "fixture", name: "fixture", role: "reader" }] } });
       if (path.endsWith("/info")) return route.fulfill({ json: { name: "fixture", role: "reader", document_count: 1, collection_count: 4, table_count: 0, file_count: 0 } });
-      if (path.includes("/browse/")) return route.fulfill({ json: { items: [
+      if (path.includes("/browse/")) return route.fulfill({ json: { path: url.searchParams.get("collection") || "", complete: true, next_cursor: null, name_query: url.searchParams.get("name_query"), items: [
         { type: "collection", name: "guides", path: "guides" },
         { type: "collection", name: "팀 자료 & 운영", path: "팀 자료 & 운영" },
         { type: "collection", name: "설계 #1", path: parentPath },
@@ -55,10 +56,11 @@ for (const width of [375, 1440]) for (const dark of [false, true]) {
     await trail.getByRole("link", { name: "All collections", exact: true }).click();
     await workspace.getByRole("link", { name: "Open collection guides", exact: true }).click();
     await expect(workspace.getByRole("heading", { name: "guides", exact: true })).toBeVisible();
-    await workspace.getByRole("textbox", { name: "Find a collection", exact: true }).fill("child?");
+    await trail.getByRole("link", { name: "All collections", exact: true }).click();
+    await workspace.getByRole("textbox", { name: "Search collections and content", exact: true }).fill("child?");
     await workspace.getByRole("link", { name: `Open collection ${selectedPath}`, exact: true }).click();
     await expect(parent).toBeVisible();
-    await expect(workspace.getByRole("textbox", { name: "Find a collection", exact: true })).toHaveValue("");
+    await expect(workspace.getByRole("textbox", { name: "Search collections and content", exact: true })).toHaveValue("");
     await parent.click();
     await expect(page).toHaveURL(target(parentPath));
     if (width < 1024) await expect(page.getByRole("button", { name: "Open vault navigation", exact: true })).toHaveAttribute("aria-expanded", "false");

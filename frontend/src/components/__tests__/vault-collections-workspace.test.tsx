@@ -36,7 +36,21 @@ function mount(path = "/vault/team", blocked = false) {
   const content = (id: string, checking = false, revision = 0) => <QueryClientProvider client={client}><MemoryRouter initialEntries={[path]}><CurrentUserProvider user={{ user_id: id, username: id, email: `${id}@test.invalid`, display_name: null, is_admin: false, auth_method: "local", key_class: null }} checking={checking} revision={revision}><ResourceNavigationProvider><Guard blocked={blocked} /><VaultCollectionsWorkspace key={`${id}:${revision}`} vault="team" enabled={!checking} /><Location /></ResourceNavigationProvider></CurrentUserProvider></MemoryRouter></QueryClientProvider>;
   return { ...render(content("reader")), client, content };
 }
-beforeEach(() => { localStorage.clear(); vi.mocked(browseVault).mockReset().mockResolvedValue({ vault: "team", path: "", complete: true, next_cursor: null, items }); });
+function browseResponse(vault: string, collection?: string, depth = -1, options: Parameters<typeof browseVault>[3] = {}) {
+  const prefix = collection ? collection + "/" : "";
+  const query = options.name_query?.toLocaleLowerCase() ?? "";
+  const selected = items.filter(item => {
+    const path = item.type === "table" ? `${item.collection}/${item.path}` : item.type === "file" ? `${item.collection}/${item.name}` : item.path;
+    return path.startsWith(prefix) && (depth < 0 || !path.slice(prefix.length).includes("/"))
+      && (options.content_type !== "collections" || item.type === "collection")
+      && (options.content_type !== "resources" || item.type !== "collection")
+      && (!query || `${item.name} ${path}`.toLocaleLowerCase().includes(query));
+  });
+  return { vault, path: collection ?? "", complete: true, next_cursor: null, name_query: options.name_query,
+    context: collection ? { type: "collection" as const, uri: `akb://${vault}/coll/${collection}`, path: collection, name: collection.split("/").at(-1)! } : undefined,
+    items: selected };
+}
+beforeEach(() => { localStorage.clear(); vi.mocked(browseVault).mockReset().mockImplementation(async (...args) => browseResponse(...args)); });
 
 describe("Vault collection workspace", () => {
   it("shows real collections and follows a native collection link to its document, table and file contents", async () => {
@@ -45,7 +59,7 @@ describe("Vault collection workspace", () => {
     const list = await screen.findByRole("list", { name: "Collections" });
     expect(within(list).getAllByRole("link")).toHaveLength(2);
     expect(within(list).queryByRole("link", { name: "Open collection overview" })).toBeNull();
-    expect(within(list).getByRole("link", { name: "Open collection guides" })).toHaveTextContent("1 document · 1 table · 1 file");
+    expect(within(list).getByRole("link", { name: "Open collection guides" })).toHaveTextContent("guides");
     await user.click(within(list).getByRole("link", { name: "Open collection guides" }));
     expect(screen.getByLabelText("Current location")).toHaveTextContent("/vault/team?collection=guides");
     const contents = screen.getByRole("region", { name: "Collection resources" });
@@ -66,18 +80,18 @@ describe("Vault collection workspace", () => {
     mount();
     const recent = await screen.findByRole("navigation", { name: "Recently visited collections" });
     expect(within(recent).getAllByRole("link")).toHaveLength(1);
-    await user.type(screen.getByRole("textbox", { name: "Find a collection" }), "index");
+    await user.type(screen.getByRole("textbox", { name: "Search collections and content" }), "index");
     expect(screen.queryByRole("navigation", { name: "Recently visited collections" })).toBeNull();
-    expect(screen.getByRole("link", { name: "Open collection architecture/indexing" })).toHaveAttribute("href", "/vault/team?collection=architecture%2Findexing");
+    expect(await screen.findByRole("link", { name: "Open collection architecture/indexing" })).toHaveAttribute("href", "/vault/team?collection=architecture%2Findexing");
   });
 
   it("resets a prior search when another navigator selects a collection", async () => {
     const user = userEvent.setup();
     mount();
     await screen.findByRole("link", { name: "Open collection guides" });
-    await user.type(screen.getByRole("textbox", { name: "Find a collection" }), "index");
+    await user.type(screen.getByRole("textbox", { name: "Search collections and content" }), "index");
     await user.click(screen.getByRole("button", { name: "External collection shortcut" }));
-    expect(screen.getByRole("textbox", { name: "Find a collection" })).toHaveValue("");
+    expect(screen.getByRole("textbox", { name: "Search collections and content" })).toHaveValue("");
     expect(screen.getByRole("region", { name: "Collection resources" })).toHaveTextContent("Runbook");
     expect(screen.queryByRole("list", { name: "Matching collections" })).toBeNull();
   });
@@ -103,11 +117,11 @@ describe("Vault collection workspace", () => {
 
   it("returns to the selected result's parent after searching across branches", async () => {
     const user = userEvent.setup();
-    mount("/vault/team?collection=guides");
-    await screen.findByRole("heading", { name: "guides" });
-    await user.type(screen.getByRole("textbox", { name: "Find a collection" }), "indexing");
-    await user.click(screen.getByRole("link", { name: "Open collection architecture/indexing" }));
-    expect(screen.getByRole("textbox", { name: "Find a collection" })).toHaveValue("");
+    mount();
+    await screen.findByRole("heading", { name: "Collections" });
+    await user.type(screen.getByRole("textbox", { name: "Search collections and content" }), "indexing");
+    await user.click(await screen.findByRole("link", { name: "Open collection architecture/indexing" }));
+    expect(screen.getByRole("textbox", { name: "Search collections and content" })).toHaveValue("");
     await user.click(screen.getByRole("link", { name: "Back to collection architecture" }));
     expect(screen.getByRole("heading", { name: "architecture" })).toBeVisible();
   });
@@ -144,20 +158,20 @@ describe("Vault collection workspace", () => {
     }));
     mount("/vault/team?collection=deleted");
     await screen.findByText(/This collection is unavailable/);
-    await userEvent.type(screen.getByRole("textbox", { name: "Find a collection" }), "deleted");
+    await userEvent.type(screen.getByRole("textbox", { name: "Search collections and content" }), "deleted");
     expect(screen.getByText(/This collection is unavailable/)).toBeVisible();
     expect(screen.queryByRole("link", { name: "Open collection deleted" })).toBeNull();
   });
 
-  it("omits exact inventory for a partial page and loads the next page explicitly", async () => {
+  it("omits recursive inventory and offers the keyboard paging fallback", async () => {
     vi.mocked(browseVault).mockResolvedValueOnce({ vault: "team", path: "", complete: false, next_cursor: "next", items });
     const user = userEvent.setup();
     mount();
     const card = await screen.findByRole("link", { name: "Open collection guides" });
     expect(card).not.toHaveTextContent("1 document");
-    expect(vi.mocked(browseVault)).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("button", { name: "Load more items" }));
-    await waitFor(() => expect(vi.mocked(browseVault)).toHaveBeenLastCalledWith("team", undefined, -1, expect.objectContaining({ page_size: 100, cursor: "next" })));
+    expect(vi.mocked(browseVault).mock.calls.filter(call => call[3]?.content_type === "collections")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Load more collections" }));
+    await waitFor(() => expect(vi.mocked(browseVault)).toHaveBeenLastCalledWith("team", undefined, 0, expect.objectContaining({ page_size: 100, cursor: "next", content_type: "collections" })));
   });
 
   it("does not inherit another account's cached tree while access is being verified", async () => {

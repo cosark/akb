@@ -32,8 +32,8 @@ interface BrowseItem {
   [k: string]: any;
 }
 
-/** Account/grant-scoped pages. Loading another page is an explicit action,
- * never a background full-Vault download disguised as pagination. */
+/** Account/grant-scoped pages. Scroll demand and scoped searches request one
+ * bounded page at a time rather than downloading a whole Vault up front. */
 export function vaultTreeQueryKey(
   userId: string | undefined,
   revision: number,
@@ -46,21 +46,25 @@ export function vaultTreeQueryKey(
 export function useVaultTree(
   vault: string | undefined,
   archiveScope: ArchiveScope = "unarchived",
-  options: { content_type?: BrowseOptions["content_type"]; collection?: string; depth?: number; enabled?: boolean } = {},
+  options: { content_type?: BrowseOptions["content_type"]; collection?: string; depth?: number; name_query?: string; enabled?: boolean } = {},
 ) {
   const user = useCurrentUser();
   const { checking, revision } = useAccessVerification();
   const query = useInfiniteQuery({
-    queryKey: [...vaultTreeQueryKey(user?.user_id, revision, vault ?? "", archiveScope), options.content_type ?? "all", options.collection ?? "", ...(options.depth === undefined ? [] : [options.depth])],
+    queryKey: [...vaultTreeQueryKey(user?.user_id, revision, vault ?? "", archiveScope), options.content_type ?? "all", options.collection ?? "", ...(options.depth === undefined ? [] : [options.depth]), ...(options.name_query ? [options.name_query] : [])],
     initialPageParam: undefined as string | undefined,
     queryFn: async (context) => {
       const { pageParam, client, queryKey } = context;
       try {
-        return await browseVault(vault!, options.collection, options.depth ?? -1, {
+        const result = await browseVault(vault!, options.collection, options.depth ?? -1, {
           page_size: 100, archive_scope: archiveScope,
           ...(options.content_type ? { content_type: options.content_type } : {}),
           ...(pageParam ? { cursor: pageParam } : {}),
+          ...(options.name_query ? { name_query: options.name_query } : {}),
+          signal: context.signal,
         });
+        if (options.name_query && result.name_query !== options.name_query) throw new Error("Name search is unavailable. Please try again later.");
+        return result;
       } catch (error) {
         if (!context.signal.aborted && error instanceof ApiError && [401, 403].includes(error.status)) {
           client.getQueryCache().find({ queryKey, exact: true })?.setState({ data: undefined, dataUpdatedAt: 0 });
@@ -126,10 +130,12 @@ export function useVaultTree(
   return {
     tree,
     items,
+    path: lastPage?.path,
     accessDenied,
     complete: lastPage?.complete === true,
     paginationUnsupported: Boolean(lastPage && typeof lastPage.complete !== "boolean"),
     hasMore: query.hasNextPage,
+    pageCount: data?.pages.length ?? 0,
     loadingMore: query.isFetchingNextPage,
     loadMore: () => { if (!checking && options.enabled !== false && query.hasNextPage && !query.isFetching) void query.fetchNextPage(); },
     loading: items === null && !error && Boolean(vault),
@@ -152,6 +158,10 @@ export function useCollectionProof(vault: string, path: string, enabled = true) 
   const row = !query.showingPreviousScope && !query.accessDenied && !query.error
     ? query.items?.find(item => item.type === "collection" && item.path === path) : undefined;
   const node: TreeNode | undefined = row ? { kind: "collection", name: row.name, path: row.path, raw: row } : undefined;
+  useEffect(() => {
+    // Verification is a lookup, not a directory the user should have to page.
+    if (enabled && path && !row && query.hasMore && !query.loadingMore && !query.refreshing && !query.error && !query.showingPreviousScope) query.loadMore();
+  }, [enabled, path, row, query.hasMore, query.loadingMore, query.refreshing, query.error, query.showingPreviousScope, query.pageCount, query.loadMore]);
   return { ...query, verified: Boolean(row),
     missing: enabled && Boolean(path) && !query.showingPreviousScope && !query.error && query.complete && !query.refreshing && !row,
     node };

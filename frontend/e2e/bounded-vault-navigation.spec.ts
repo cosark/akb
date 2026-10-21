@@ -1,81 +1,99 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 test.skip(process.env.AKB_FE_E2E_MODE === "mock", "Owns isolated HTTP responses; never writes user data.");
 
+async function fixture(page: Page, dark: boolean) {
+  await page.addInitScript(({ dark }) => {
+    localStorage.setItem("akb_token", "bounded-navigation-fixture");
+    localStorage.setItem("akb_theme", dark ? "dark" : "light");
+    localStorage.setItem("akb.treeVisible", "1");
+  }, { dark });
+  const requests: URL[] = [];
+  let attempts = 0;
+  await page.route("**/health/**", route => route.fulfill({ json: {} }));
+  await page.route("**/api/v1/**", async route => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    if (path.endsWith("/auth/config")) return route.fulfill({ json: { schema_version: 2, auth_mode: "local", local_auth: { enabled: true }, keycloak: { enabled: false, browser_session_ready: false }, providers: [], mcp_oauth: { enabled: false } } });
+    if (path.endsWith("/auth/me")) return route.fulfill({ json: { user_id: "paging-reader", username: "reader", display_name: "Reader", email: "reader@example.invalid", auth_method: "local", is_admin: false } });
+    if (path.endsWith("/vaults")) return route.fulfill({ json: { vaults: [{ id: "alpha", name: "alpha", role: "reader" }] } });
+    if (path.endsWith("/info")) return route.fulfill({ json: { name: "alpha", role: "reader", document_count: 101, collection_count: 101, is_archived: false, is_external_git: false } });
+    if (path.includes("/browse/")) {
+      requests.push(url);
+      const kind = url.searchParams.get("content_type") || "all";
+      const query = url.searchParams.get("name_query");
+      const cursor = url.searchParams.get("cursor");
+      const base = { vault: "alpha", path: "", archive_scope: "unarchived", name_query: query, scanned: 100 };
+      if (query) {
+        if (cursor) {
+          await new Promise(resolve => setTimeout(resolve, 250));
+          return route.fulfill({ json: { ...base, complete: true, next_cursor: null, items: [{ type: "document", name: "Unloaded needle title", path: "unrelated-filename.md" }] } });
+        }
+        return route.fulfill({ json: { ...base, complete: false, next_cursor: "search-next", items: [] } });
+      }
+      if (cursor) {
+        if (kind === "all" && ++attempts === 1) return route.fulfill({ status: 503, json: { error: "Read temporarily unavailable", code: "service_unavailable" } });
+        return route.fulfill({ json: { ...base, complete: true, next_cursor: null, items: [kind === "collections" ? { type: "collection", name: "Last collection", path: "z-last" } : { type: "document", name: "Last document", path: "z-last.md" }] } });
+      }
+      return route.fulfill({ json: { ...base, complete: false, next_cursor: `${kind}-next`, items: Array.from({ length: 100 }, (_, index) => kind === "collections" ? { type: "collection", name: `Collection ${index}`, path: `collection-${String(index).padStart(3, "0")}` } : { type: "document", name: `Document ${String(index).padStart(3, "0")}`, path: `doc-${String(index).padStart(3, "0")}.md` }) } });
+    }
+    if (path.includes("/documents/") && !path.endsWith("/history")) return route.fulfill({ json: { title: "Document 000", path: "doc-000.md", content: "# Document", status: "active" } });
+    return route.fulfill({ json: { items: [], history: [], relations: [], subscribed: false, unread_count: 0 } });
+  });
+  return { requests, get attempts() { return attempts; } };
+}
+
 for (const width of [375, 1440]) for (const dark of [false, true]) {
-  test(`bounded navigation preserves rows and scope guidance at ${width}px ${dark ? "dark" : "light"}`, async ({ page }, testInfo) => {
+  test(`scroll paging preserves rows and recovers at ${width}px ${dark ? "dark" : "light"}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     await page.emulateMedia({ reducedMotion: "reduce" });
-    await page.addInitScript(({ dark }) => {
-      localStorage.setItem("akb_token", "bounded-navigation-fixture");
-      localStorage.setItem("akb_theme", dark ? "dark" : "light");
-      localStorage.setItem("akb.treeVisible", "1");
-      localStorage.setItem("akb-explorer-expanded:alpha", JSON.stringify(["guides"]));
-    }, { dark });
-    const browseRequests: URL[] = [];
-    let nextAttempts = 0;
-    let grepRequests = 0;
-    await page.route("**/health/**", route => route.fulfill({ json: {} }));
-    await page.route("**/api/v1/**", route => {
-      const url = new URL(route.request().url());
-      const path = url.pathname;
-      if (path.endsWith("/auth/config")) return route.fulfill({ json: { schema_version: 2, auth_mode: "local", local_auth: { enabled: true }, keycloak: { enabled: false, browser_session_ready: false }, providers: [], mcp_oauth: { enabled: false } } });
-      if (path.endsWith("/auth/me")) return route.fulfill({ json: { user_id: "paging-reader", username: "reader", display_name: "Reader", email: "reader@example.invalid", auth_method: "local", is_admin: false } });
-      if (path.endsWith("/vaults")) return route.fulfill({ json: { vaults: [{ id: "alpha", name: "alpha", role: "reader" }] } });
-      if (path.endsWith("/info")) return route.fulfill({ json: { name: "alpha", role: "reader", document_count: 101, collection_count: 1, is_archived: false, is_external_git: false } });
-      if (path.includes("/browse/")) {
-        browseRequests.push(url);
-        if (url.searchParams.get("cursor")) {
-          nextAttempts++;
-          if (nextAttempts === 1) return route.fulfill({ status: 503, json: { error: "Read temporarily unavailable", code: "service_unavailable" } });
-          return route.fulfill({ json: { vault: "alpha", path: "", archive_scope: "unarchived", scanned: 1, complete: true, next_cursor: null, items: [
-            { type: "document", name: "Second loaded document", path: "guides/second.md", uri: "akb://alpha/coll/guides/doc/second.md" },
-          ] } });
-        }
-        return route.fulfill({ json: { vault: "alpha", path: "", archive_scope: "unarchived", scanned: 100, complete: false, next_cursor: "next-position", items: [
-          { type: "collection", name: "Guides", path: "guides", uri: "akb://alpha/coll/guides" },
-          { type: "document", name: "First loaded document", path: "guides/first.md", uri: "akb://alpha/coll/guides/doc/first.md" },
-        ] } });
-      }
-      if (path.endsWith("/grep")) {
-        grepRequests++;
-        return route.fulfill({ status: 422, json: { error: "Candidate resources exceed 10000. Narrow the Collection scope; result limit does not reduce scanning.", code: "grep_scope_too_large", hint: "Use collection." } });
-      }
-      return route.fulfill({ json: { items: [], history: [], relations: [], subscribed: false, unread_count: 0 } });
-    });
-    await page.goto("/vault/alpha");
+    const state = await fixture(page, dark);
+    await page.goto("/vault/alpha/doc/doc-000.md");
     if (width < 1024) await page.getByRole("button", { name: "Open vault navigation", exact: true }).click();
-    const first = page.getByRole("link", { name: "Document: First loaded document", exact: true });
-    await expect(first).toBeVisible();
-    await expect(page.getByText(/Only part of this scope is loaded/)).toBeVisible();
-    expect(browseRequests).toHaveLength(1);
-    expect(browseRequests[0].searchParams.get("page_size")).toBe("100");
-    await page.screenshot({ path: testInfo.outputPath("partial-tree.png") });
-    const next = page.getByRole("button", { name: "Load next page", exact: true });
-    await next.focus();
-    await page.keyboard.press("Enter");
-    await expect(page.getByText("Read temporarily unavailable", { exact: true })).toBeVisible();
-    await expect(first).toBeVisible();
-    const retry = page.getByRole("button", { name: "Retry loading more items", exact: true });
+    const explorer = page.getByRole("navigation", { name: "alpha explorer", exact: true });
+    const rows = explorer.getByRole("link", { name: /^Document:/ });
+    await expect(rows).toHaveCount(100);
+    expect(state.requests.some(url => url.searchParams.has("cursor"))).toBe(false);
+    await rows.last().scrollIntoViewIfNeeded();
+    const retry = explorer.getByRole("button", { name: "Retry: load more content", exact: true });
+    await expect(retry).toBeVisible();
+    await expect(rows).toHaveCount(100);
+    await page.waitForTimeout(300);
+    expect(state.attempts).toBe(1);
     await retry.focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("link", { name: "Document: Second loaded document", exact: true })).toBeVisible();
-    await expect(first).toBeVisible();
+    await expect(explorer.getByRole("link", { name: "Document: Last document", exact: true })).toBeVisible();
+    await expect(rows).toHaveCount(101);
     await expect(page.getByText(/Only part of this scope is loaded/)).toHaveCount(0);
-    expect(browseRequests.slice(1).map(url => url.searchParams.get("cursor"))).toEqual(["next-position", "next-position"]);
+    expect(state.requests.every(url => url.searchParams.get("page_size") === "100")).toBe(true);
+    await page.getByRole("searchbox", { name: "Filter resources" }).fill("needle");
+    await expect.poll(() => state.requests.some(url => url.searchParams.get("cursor") === "search-next")).toBe(true);
+    await expect(explorer.getByText("No resources match these filters.")).toHaveCount(0);
+    await expect(explorer.getByRole("link", { name: "Document: Unloaded needle title", exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath("bounded-tree.png") });
-
-    await page.goto("/search?q=needle&mode=literal&v=alpha");
-    await expect(page.getByText("Narrow the search scope", { exact: true })).toBeVisible();
-    await expect(page.getByText("Search unavailable", { exact: true })).toHaveCount(0);
-    // Development StrictMode can issue the initial effect twice. Recovery
-    // must not issue another unchanged-scope request in either build mode.
-    const beforeRecovery = grepRequests;
-    await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
-    await page.getByRole("button", { name: "Choose a Collection in Filters" }).click();
-    await expect(page.getByRole("textbox", { name: "Collection path (including children)" })).toBeFocused();
-    expect(grepRequests).toBe(beforeRecovery);
-    await page.screenshot({ path: testInfo.outputPath("grep-scope-guidance.png") });
+    await page.screenshot({ path: testInfo.outputPath("automatic-paging-search.png") });
   });
 }
+
+test("main Collections and content advance independently on scroll", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const state = await fixture(page, false);
+  await page.goto("/vault/alpha");
+  const workspace = page.getByRole("region", { name: "Collection workspace", exact: true });
+  const collections = workspace.getByRole("list", { name: "Collections", exact: true });
+  for (let step = 0; step < 6; step++) {
+    await collections.getByRole("link").last().scrollIntoViewIfNeeded();
+    if (state.requests.some(url => url.searchParams.get("cursor") === "collections-next")) break;
+    await page.waitForTimeout(100);
+  }
+  await expect(collections.getByRole("link", { name: "Open collection z-last", exact: true })).toBeAttached();
+  const resources = workspace.getByRole("region", { name: "Collection resources", exact: true });
+  for (let step = 0; step < 6; step++) {
+    await resources.getByRole("link").last().scrollIntoViewIfNeeded();
+    if (state.requests.some(url => url.searchParams.get("cursor") === "resources-next")) break;
+    await page.waitForTimeout(100);
+  }
+  await expect(resources.getByRole("link", { name: /Last document/ })).toBeAttached();
+  expect(state.requests.some(url => url.searchParams.get("cursor") === "collections-next")).toBe(true);
+  expect(state.requests.some(url => url.searchParams.get("cursor") === "resources-next")).toBe(true);
+});

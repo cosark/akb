@@ -8,6 +8,7 @@ import { useCurrentUser } from "@/contexts/current-user-context";
 import { useOpenVaultCreateDialog } from "@/contexts/vault-create-dialog-context";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AutoLoadMore } from "@/components/ui/auto-load-more";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Panel } from "@/components/ui/panel";
@@ -141,8 +142,7 @@ export function VaultDirectory({ vaults }: { vaults: DirectoryVault[] }) {
       <p className="mt-1 text-sm text-foreground-muted">{filter === "favorites" && !query ? "Use the star beside a vault to keep it close." : "Try another name or show all available vaults."}</p>
       <Button variant="link" className="mt-2" onClick={() => { setQuery(""); setFilter("all"); setVisible(PAGE); }}>Show all vaults</Button>
     </div>}
-    {matches.length > visible && <Button variant="outline" className="mt-3 w-full" onClick={() => setVisible(count => count + PAGE)}>
-      Show more vaults ({(matches.length - visible).toLocaleString()} remaining)
-    </Button>}
+    <AutoLoadMore hasMore={matches.length > visible} requestKey={`${query}:${filter}:${visible}:${matches.length}`}
+      label="Show more vaults" onLoadMore={() => setVisible(count => count + PAGE)} />
   </section>;
 }

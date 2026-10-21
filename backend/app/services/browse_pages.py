@@ -55,7 +55,7 @@ def _encode_cursor(scope: str, row: dict) -> str:
 async def browse_page(
     service, pool, vault: str, *, native: bool, collection: str | None, depth: int,
     content_type: str, include_hashes: bool, include_archived: bool,
-    archive_scope: ArchiveScope | None, page_size: int, cursor: str | None,
+    archive_scope: ArchiveScope | None, page_size: int, cursor: str | None, name_query: str | None = None,
 ) -> BrowseResponse:
     async with pool.acquire() as conn:
         # The size guard, selected Heads, and payload reads share one snapshot.
@@ -64,21 +64,24 @@ async def browse_page(
             return await _browse_page(
                 service, pool, conn, vault, native=native, collection=collection, depth=depth,
                 content_type=content_type, include_hashes=include_hashes, include_archived=include_archived,
-                archive_scope=archive_scope, page_size=page_size, cursor=cursor,
+                archive_scope=archive_scope, page_size=page_size, cursor=cursor, name_query=name_query,
             )
 
 
 async def _browse_page(
     service, pool, conn, vault: str, *, native: bool, collection: str | None, depth: int,
     content_type: str, include_hashes: bool, include_archived: bool,
-    archive_scope: ArchiveScope | None, page_size: int, cursor: str | None,
+    archive_scope: ArchiveScope | None, page_size: int, cursor: str | None, name_query: str | None = None,
 ) -> BrowseResponse:
     if type(page_size) is not int or not 1 <= page_size <= MAX_PAGE_SIZE:
         raise ValidationError(f"page_size must be between 1 and {MAX_PAGE_SIZE}")
     if type(depth) is not int or not -1 <= depth <= 2**31 - 1:
         raise ValidationError("depth must be -1 or a non-negative integer")
-    if content_type not in ("all", "collections", "documents", "tables", "files"):
+    if content_type not in ("all", "collections", "resources", "documents", "tables", "files"):
         raise ValidationError("Unsupported browse content_type")
+    if name_query is not None and (not isinstance(name_query, str) or len(name_query) > 200 or "\x00" in name_query):
+        raise ValidationError("name_query must be at most 200 characters without NUL")
+    name_query = name_query.strip() if name_query else ""
     scope = resolve_archive_scope(archive_scope, include_archived)
     prefix = normalize_collection_path(collection) if collection is not None else ""
     vault_row = await conn.fetchrow("SELECT id, description FROM vaults WHERE name = $1", vault)
@@ -86,7 +89,7 @@ async def _browse_page(
         raise NotFoundError("Vault", vault)
     vault_id = vault_row["id"]
     binding = hashlib.sha256(json.dumps(
-        [str(vault_id), native, prefix, depth, content_type, scope],
+        [str(vault_id), native, prefix, depth, content_type, scope] + ([name_query.casefold()] if name_query else []),
         ensure_ascii=False, separators=(",", ":"),
     ).encode()).hexdigest()
     after = _decode_cursor(cursor, binding)
@@ -113,27 +116,40 @@ async def _browse_page(
             description=vault_row["description"],
         )
 
+    params: list = [vault_id]
+    if name_query:
+        params.append("%" + like_escape(name_query) + "%")
+    def names_predicate(name: str, path: str) -> str:
+        return f" AND ({name} ILIKE $2 ESCAPE '\\' OR {path} ILIKE $2 ESCAPE '\\')" if name_query else ""
+
     arms = []
     if content_type in ("all", "documents", "collections"):
-        arms.append("SELECT 0 AS kind, id, path, 0::bigint AS body_bytes FROM collections WHERE vault_id = $1")
-    if content_type in ("all", "documents"):
+        arms.append("SELECT 0 AS kind, id, path, 0::bigint AS body_bytes FROM collections WHERE vault_id = $1" + names_predicate("name", "path"))
+    if content_type in ("all", "documents", "resources"):
         arms.append(
             "SELECT 1 AS kind, rs.resource_id AS id, rs.current_path AS path, 0::bigint AS body_bytes "
             "FROM native_resources rs "
             "WHERE rs.namespace_id = $1 AND rs.surface = 'document' AND rs.lifecycle = 'live'"
-            if native else "SELECT 1 AS kind, id, path, 0::bigint AS body_bytes FROM documents WHERE vault_id = $1"
+            if native else "SELECT 1 AS kind, id, path, 0::bigint AS body_bytes FROM documents WHERE vault_id = $1" + names_predicate("title", "path")
         )
     if scope != "archived":
         for kind, relation in ((2, "vault_tables"), (3, "vault_files")):
-            if content_type not in ("all", f"{_KINDS[kind]}s"):
+            if content_type not in ("all", "resources", f"{_KINDS[kind]}s"):
                 continue
             confirmed = f" AND {confirmed_file_predicate('r')}" if kind == 3 else ""
             arms.append(
                 f"SELECT {kind} AS kind, r.id, COALESCE(c.path || '/', '') || r.name AS path, 0::bigint AS body_bytes "
                 f"FROM {relation} r LEFT JOIN collections c ON c.id = r.collection_id "
-                f"WHERE r.vault_id = $1{confirmed}"
+                f"WHERE r.vault_id = $1{confirmed}" + names_predicate("r.name", "COALESCE(c.path || '/', '') || r.name")
             )
-    params: list = [vault_id]
+    # Native names live in verified revision frontmatter. Never substitute the
+    # frozen legacy title or require asynchronous indexing for a fresh rename.
+    # Keep scanning bounded identities (including empty match pages), then
+    # match canonical names below. Other catalogs can filter before LIMIT.
+    if name_query and native and content_type in ("all", "documents", "resources"):
+        # The Native document arm doesn't use the name parameter. Reference it
+        # even in document-only scopes so PostgreSQL can infer its text type.
+        arms = [arm + " AND $2::text IS NOT NULL" for arm in arms]
     clauses = []
     if prefix:
         params.append(like_escape(prefix) + "/%")
@@ -183,9 +199,14 @@ async def _browse_page(
     by_id = await _hydrate(service, pool, conn, vault, vault_id, selected, native=native, include_hashes=include_hashes)
     items = [by_id[(row["kind"], row["id"])] for row in selected if (row["kind"], row["id"]) in by_id]
     items = [item for item in items if item.type != "document" or status_matches(item.status, scope)]
+    if name_query and native:
+        needle = name_query.casefold()
+        items = [item for item in items if item.type != "document"
+                 or needle in item.name.casefold() or needle in item.path.casefold()]
     return BrowseResponse(
         vault=vault, path=prefix, archive_scope=scope, context=context, items=items,
         scanned=len(selected), complete=not more,
+        name_query=name_query or None,
         next_cursor=_encode_cursor(binding, selected[-1]) if more else None,
         hint=(
             "More identities remain; follow next_cursor even when this page has no visible items. "

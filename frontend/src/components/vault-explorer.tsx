@@ -28,11 +28,12 @@ import {
 } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { AutoLoadMore } from "@/components/ui/auto-load-more";
 import { RailCollapseButton, RailFilterField, RailFilterToggle, RailIdentity, RailManagement, RailSearchToolbar } from "@/components/navigation-rail-controls";
 import { OverflowRevealTitle } from "@/components/ui/overflow-reveal-title";
 import { CollectionExplorerContext } from "@/components/collection-explorer-context";
 import { VaultSidebarBackLink } from "@/components/vault-navigation-controls";
-import { LoadingState } from "@/components/ui/loading-state";
+import { InlineLoadingState, LoadingState } from "@/components/ui/loading-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SkillBadge } from "@/components/ui/skill-badge";
 import { buildTree, useCollectionProof, useVaultTree, useExpandedPaths, type NodeKind, type TreeNode } from "@/hooks/use-vault-tree";
@@ -41,7 +42,6 @@ import { useVaultRefresh } from "@/contexts/vault-refresh-context";
 import { useOpenDocumentCreateDialog } from "@/contexts/document-create-dialog-context";
 import {
   activePathFromRoute,
-  filterTree,
   filterTreeByKind,
   findResourceGroup,
   flattenVisible,
@@ -85,6 +85,7 @@ import { documentTitleKey } from "@/lib/document-title-conflict";
 import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
 import { toggleWorkspaceShortcut, useWorkspaceShortcuts, workspaceShortcutKey } from "@/lib/workspace-shortcuts";
 import { recordRecentCollection } from "@/lib/recent-collections";
+import { useDebounce } from "@/hooks/use-debounce";
 
 const PAGE_SIZE = 10;
 const TYPEAHEAD_TIMEOUT_MS = 500;
@@ -200,14 +201,21 @@ export function VaultExplorer({
     if (path) revealAncestorsOf(`${path}/_`);
   }, [filterOwner, explorationPath, revealAncestorsOf, cancelFilterFocus]);
   const [kindFilter, setKindFilter] = useState<ResourceKind | "all">("all");
+  const nameQuery = useDebounce(filter.trim());
+  // Keep the existing expandable hierarchy; bounded pages limit each request.
+  const browseDepth = -1;
   const { tree: pageTree, items: pageItems, loading, refreshing, showingPreviousScope, unsupported, error, refetch,
-    complete, paginationUnsupported, hasMore, loadingMore, loadMore } = useVaultTree(vault, archiveScope, {
+    complete, paginationUnsupported, hasMore, loadingMore, loadMore, pageCount } = useVaultTree(vault, archiveScope, {
       collection: collectionScope || explorationPath || undefined,
       content_type: kindFilter === "all" ? "all" : `${kindFilter}s` as "documents" | "tables" | "files",
+      depth: browseDepth,
+      name_query: nameQuery,
     });
+  const searching = filter.trim() !== nameQuery || showingPreviousScope;
+  const inventoryComplete = complete && browseDepth === -1 && !nameQuery && kindFilter === "all" && archiveScope === "all";
   const explorationProof = useCollectionProof(vault, explorationPath, focused && !checkingAccess);
   const tree = useMemo(() => {
-    if (!pageTree || !pageItems || currentResource?.vault !== vault || !currentResource.resourceRef) return pageTree;
+    if (!pageTree || !pageItems || nameQuery || currentResource?.vault !== vault || !currentResource.resourceRef) return pageTree;
     const kind = { Document: "document", File: "file", Table: "table" }[currentResource.kind] as ResourceKind;
     if (archiveScope === "archived" && (kind !== "document" || currentResource.status !== "archived")) return pageTree;
     if (archiveScope === "unarchived" && currentResource.status === "archived") return pageTree;
@@ -226,7 +234,7 @@ export function VaultExplorer({
     collectNavigation(pageTree);
     return buildTree([...navigation, ...pageItems, { type: kind, name: currentResource.title, path: ref,
       uri, collection: currentResource.collectionPath, status: currentResource.status }]);
-  }, [pageTree, pageItems, currentResource, vault, archiveScope]);
+  }, [pageTree, pageItems, currentResource, vault, archiveScope, nameQuery]);
   const resourceRevealKey = currentResource?.vault === vault && currentResource.resourceRef
     ? `${filterOwner}:${currentResource.kind}:${currentResource.resourceRef}` : null;
   const revealedResource = useRef<{ key: string; pathname: string } | null>(null);
@@ -466,11 +474,9 @@ export function VaultExplorer({
     return filterTreeByKind(scopedTree, archiveScope === "archived" ? "document" : kindFilter);
   }, [scopedTree, kindFilter, archiveScope]);
 
-  const filtered = useMemo(() => {
-    if (!kindFiltered) return kindFiltered;
-    const q = filter.trim().toLowerCase();
-    return q ? filterTree(kindFiltered, q) : kindFiltered;
-  }, [kindFiltered, filter]);
+  // The server searches the entire scope; its verified matches and their
+  // ancestry must not be narrowed again to a client-side approximation.
+  const filtered = useMemo(() => nameQuery && pageItems?.length === 0 ? [] : kindFiltered, [nameQuery, pageItems, kindFiltered]);
 
   const forceOpen = filter.length > 0;
 
@@ -487,39 +493,37 @@ export function VaultExplorer({
     () => findDuplicateDocumentPaths(tree ?? []),
     [tree],
   );
-  const resourceTotal =
-    resourceCounts.document + resourceCounts.table + resourceCounts.file;
   const kindOptions = useMemo(
     () => [
       {
         value: "all",
         label: "All",
-        hint: `${resourceTotal.toLocaleString()} ${complete && kindFilter === "all" ? "resources in this scope" : "loaded resources"}`,
+        hint: "All resource types",
       },
       {
         value: "document",
         label: "Documents",
-        hint: kindFilter !== "all" && kindFilter !== "document" ? "Not loaded in this view" : `${resourceCounts.document.toLocaleString()} ${complete ? "documents in this scope" : "loaded documents"}`,
+        hint: "Browse documents",
       },
       {
         value: "table",
         label: "Tables",
-        hint: kindFilter !== "all" && kindFilter !== "table" ? "Not loaded in this view" : `${resourceCounts.table.toLocaleString()} ${complete ? "tables in this scope" : "loaded tables"}`,
+        hint: "Browse tables",
       },
       {
         value: "file",
         label: "Files",
-        hint: kindFilter !== "all" && kindFilter !== "file" ? "Not loaded in this view" : `${resourceCounts.file.toLocaleString()} ${complete ? "files in this scope" : "loaded files"}`,
+        hint: "Browse files",
       },
     ],
-    [resourceCounts, resourceTotal, complete, kindFilter],
+    [],
   );
 
   /** Full flattened row list (without cap). */
   const fullRows = useMemo<FlatRow[]>(() => {
     if (!filtered) return [];
     const paths = explorationPath ? new Set([...expanded, explorationPath]) : expanded;
-    const rows = flattenVisible(filtered, paths, forceOpen, { collapsedKindGroups, kindLimits, activeSig });
+    const rows = flattenVisible(filtered, paths, forceOpen, { collapsedKindGroups, kindLimits, activeSig, previewSize: Infinity });
     // Preserve real collection/group signatures for paging and active-resource
     // reveal, but remove the repeated root row already named by the context bar.
     return explorationPath && filtered[0]?.path === explorationPath
@@ -755,7 +759,7 @@ export function VaultExplorer({
         </label>
         </div>
         {activeFilterCount > 0 && <div className={cn("flex items-start justify-between gap-2 py-2 text-xs text-foreground-muted", focused && "px-3")}>
-          <span className="min-w-0 break-words" role={focused ? "status" : undefined}>{focused
+          <span className="min-w-0 break-words">{focused
             ? [filter.trim() && `Name: ${filter}`, collectionScope && `Collection: ${collectionScope}`, archiveScope !== "unarchived" && (archiveScope === "archived" ? "Archived documents" : "Includes archived"), archiveScope !== "archived" && kindFilter !== "all" && KIND_LABEL[kindFilter]].filter(Boolean).join(" · ")
             : `${activeFilterCount} active ${activeFilterCount === 1 ? "filter" : "filters"}`}</span>
           <button type="button" onClick={() => {
@@ -770,7 +774,7 @@ export function VaultExplorer({
         ref={listRef}
         role={focused ? "navigation" : "tree"}
         aria-label={`${vault} explorer`}
-        aria-busy={loading || refreshing || loadingMore || undefined}
+        aria-busy={loading || refreshing || loadingMore || searching || undefined}
         onKeyDown={onKeyDown}
         className={cn("min-h-0 flex-1 overflow-y-auto rail-scroll", focused && "overscroll-contain px-1.5 pb-3")}
       >
@@ -780,9 +784,7 @@ export function VaultExplorer({
         )}
         {error && <Alert variant="destructive" className="m-2">{error}</Alert>}
         {paginationUnsupported && <Alert variant="warning" className="m-2">This server did not confirm bounded paging. Update the backend to browse large Vaults in bounded requests.</Alert>}
-        {!loading && hasMore && <p role="status" className="px-3 py-2 text-xs text-foreground-muted">
-          Only part of this scope is loaded. Name filters and counts apply to loaded items; choose a Collection or resource type to narrow the server request.
-        </p>}
+        {!loading && (searching || (nameQuery && !complete && visibleRows.length === 0)) && <InlineLoadingState label="Searching content" size="sm" className="px-3 py-2" />}
         {unsupported && (
           <Alert variant="warning" className="m-2">
             This server does not support this document state view yet. Update the server or{" "}
@@ -790,18 +792,17 @@ export function VaultExplorer({
           </Alert>
         )}
         {!loading && !refreshing && !error && !unsupported && explorationPath && !explorationRoot && <div role="status" className="px-3 py-4 text-xs leading-relaxed text-foreground-muted">
-          {explorationProof.loading || explorationProof.refreshing ? "Checking collection…" : explorationProof.error ? "Could not verify this collection." : explorationProof.missing ? "This collection is unavailable. Go back to a parent or choose All collections." : "This collection has not been verified in the loaded list."}
+          {explorationProof.error ? "Could not verify this collection." : explorationProof.missing ? "This collection is unavailable. Go back to a parent or choose All collections." : "Checking collection…"}
           {explorationProof.error && <Button variant="ghost" size="sm" onClick={explorationProof.refetch}>Retry</Button>}
-          {explorationProof.hasMore && <Button variant="ghost" size="sm" loading={explorationProof.loadingMore} onClick={explorationProof.loadMore}>Load more collections to verify this location</Button>}
         </div>}
-        {!loading && !refreshing && !error && !unsupported && complete && (!explorationPath || explorationRoot) && (total === 0 || (explorationPath && !explorationRoot?.children?.length) || (archiveScope === "archived" && resourceCounts.document === 0)) && (
+        {!loading && !refreshing && !searching && !error && !unsupported && complete && (!explorationPath || explorationRoot) && !nameQuery && (total === 0 || (explorationPath && !explorationRoot?.children?.length) || (archiveScope === "archived" && resourceCounts.document === 0)) && (
           <div className="px-3 py-4 text-xs leading-relaxed text-foreground-muted" role="status">
             {archiveScope === "archived" ? `No archived documents in this ${collectionScope || explorationPath ? "Collection" : "Vault"}.` : explorationPath ? "This collection is empty." : "No collections yet — the tree fills in with your first document."}
           </div>
         )}
-        {!loading && !refreshing && !error && !unsupported && total > 0 && visibleRows.length === 0 && (!explorationPath || Boolean(explorationRoot?.children?.length)) && !(archiveScope === "archived" && resourceCounts.document === 0) && (
+        {!loading && !refreshing && !searching && !error && !unsupported && complete && (total > 0 || nameQuery) && visibleRows.length === 0 && (nameQuery || !explorationPath || Boolean(explorationRoot?.children?.length)) && (nameQuery || !(archiveScope === "archived" && resourceCounts.document === 0)) && (
           <div className="coord px-3 py-2" role="status">
-            {complete ? "No resources match these filters." : "No loaded resources match these filters. More items may be available."}
+            No resources match these filters.
             {collectionScope && <button type="button" onClick={() => { changeCollectionScope(""); focusResourceFilter(); }} className="mt-2 block text-link underline focus-visible:ring-2 focus-visible:ring-ring">{explorationPath ? "Search this collection" : "Search all collections"}</button>}
           </div>
         )}
@@ -814,6 +815,7 @@ export function VaultExplorer({
                   key={row.sig}
                   row={row}
                   disclosure={focused}
+                  countComplete={complete}
                   onToggle={() => toggleKindGroup(row.parentPath, row.kind)}
                 />
               );
@@ -856,7 +858,7 @@ export function VaultExplorer({
                     path: node.path,
                     summary: node.raw?.summary,
                     counts,
-                    countsComplete: complete && kindFilter === "all" && archiveScope === "all",
+                    countsComplete: inventoryComplete,
                     editable: canWrite && !isReservedCollection(node.path),
                   });
                 }}
@@ -868,7 +870,7 @@ export function VaultExplorer({
                     tableCount: counts.tables,
                     fileCount: counts.files,
                     subCollectionCount: countSubCollections(node),
-                    countsComplete: complete && kindFilter === "all" && archiveScope === "all",
+                    countsComplete: inventoryComplete,
                   });
                 }}
                 onDeleteResource={(node) => {
@@ -884,25 +886,11 @@ export function VaultExplorer({
             );
           })}
 
-        {!loading &&
-          fullRows.length > visibleRows.length && (
-            <button
-              type="button"
-              onClick={() =>
-                setRenderLimit((current) => current + TREE_RENDER_PAGE)
-              }
-              className="w-full coord px-3 py-2 text-left hover:bg-surface-hover hover:text-link transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background cursor-pointer"
-            >
-              Show next {Math.min(TREE_RENDER_PAGE, fullRows.length - visibleRows.length)} of{" "}
-              {(fullRows.length - visibleRows.length).toLocaleString()}
-            </button>
-          )}
-        {!loading && !unsupported && hasMore && <div className="space-y-1 px-3 py-2">
-          <Button type="button" variant="outline" size="sm" loading={loadingMore} disabled={refreshing} onClick={loadMore}>
-            {error ? "Retry loading more items" : "Load next page"}
-          </Button>
-          <p className="text-xs text-foreground-muted">Up to 100 more identities; previous items stay visible.</p>
-        </div>}
+        <AutoLoadMore hasMore={fullRows.length > visibleRows.length || hasMore} loading={loadingMore}
+          paused={loading || refreshing || searching || unsupported || (visibleRows.length > 0 && visibleRows.every(row => row.type === "kind-group" && !row.isOpen))}
+          error={Boolean(error)} requestKey={`${filterOwner}:${archiveScope}:${kindFilter}:${collectionScope}:${explorationPath}:${nameQuery}:${renderLimit}:${pageCount}`}
+          label="Load more content" loadingLabel={nameQuery && !visibleRows.length ? "" : "Loading more content"}
+          className="px-3" onLoadMore={() => fullRows.length > visibleRows.length ? setRenderLimit(current => current + TREE_RENDER_PAGE) : loadMore()} />
 
       </div>
 
@@ -1339,10 +1327,12 @@ function KindGroupRow({
   row,
   onToggle,
   disclosure,
+  countComplete = true,
 }: {
   row: FlatKindGroupRow;
   onToggle: () => void;
   disclosure?: boolean;
+  countComplete?: boolean;
 }) {
   const label = KIND_LABEL[row.kind] ?? "Resources";
   const ChevronIcon = row.isOpen ? ChevronDown : ChevronRight;
@@ -1352,7 +1342,7 @@ function KindGroupRow({
       role={disclosure ? undefined : "treeitem"}
       aria-level={disclosure ? undefined : row.depth + 1}
       aria-expanded={row.isOpen}
-      aria-label={`${label}, ${row.count.toLocaleString()} ${row.count === 1 ? "item" : "items"}`}
+      aria-label={`${label}, ${countComplete ? "" : "at least "}${row.count.toLocaleString()} ${row.count === 1 ? "item" : "items"}`}
       data-sig={row.sig}
       onClick={onToggle}
       style={{ paddingLeft: `${row.depth * 12 + (disclosure ? 8 : 12)}px` }}
@@ -1364,7 +1354,7 @@ function KindGroupRow({
       />
       <span className="min-w-0 flex-1 truncate">{label}</span>
       <span className="shrink-0 tabular-nums text-foreground-muted">
-        {row.count.toLocaleString()}
+        {row.count.toLocaleString()}{!countComplete && "+"}
       </span>
     </button>
   );

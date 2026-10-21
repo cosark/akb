@@ -1079,4 +1079,4 @@ def test_browse_pagination_receipt_is_published_for_sdk_consumers():
         assert envelope["properties"][field] == {"anyOf": [{"type": kind}, {"type": "null"}]}
         assert field not in envelope["required"]  # legacy responses remain valid
     browse = schema["paths"]["/api/v1/browse/{vault}"]["get"]
-    assert {"page_size", "cursor", "content_type"} <= {p["name"] for p in browse["parameters"]}
+    assert {"page_size", "cursor", "content_type", "name_query"} <= {p["name"] for p in browse["parameters"]}

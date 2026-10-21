@@ -1633,18 +1633,19 @@ class NativeDocumentService(DocumentService):
         archive_scope: ArchiveScope | None = None,
         page_size: int | None = None,
         cursor: str | None = None,
+        name_query: str | None = None,
     ) -> BrowseResponse:
         """Return the legacy browse envelope with Native document Heads."""
         from app.services.search_filters import resolve_archive_scope, status_matches
 
-        if page_size is not None or cursor is not None or content_type == "collections":
+        if page_size is not None or cursor is not None or name_query is not None or content_type in ("collections", "resources"):
             from app.services.browse_pages import browse_page
 
             return await browse_page(
                 self, await self._pool(), vault, native=True, collection=collection, depth=depth,
                 content_type=content_type, include_hashes=include_hashes,
                 include_archived=include_archived, archive_scope=archive_scope,
-                page_size=page_size if page_size is not None else 100, cursor=cursor,
+                page_size=page_size if page_size is not None else 100, cursor=cursor, name_query=name_query,
             )
 
         scope = resolve_archive_scope(archive_scope, include_archived)

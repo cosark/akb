@@ -72,10 +72,53 @@ cursor require a refresh; deletion, moves and grant changes are not frozen for
 the duration of an entire traversal. Do not treat page completion as a
 transactionally consistent export of a changing Vault.
 
-The web explorer loads 100 identities initially and exposes **Load next page**.
-Previously loaded rows remain during loading and retry. Name filtering applies
-to loaded rows, with an explicit partial-view notice. Selecting a Collection or
-resource type also scopes the database request; use Search for body searching.
+The web explorer loads 100 identities initially and automatically requests the
+next page near the end of its scroll pane. The main Collection index browses
+direct children; the expandable sidebar retains its bounded recursive hierarchy.
+Name search includes descendants of the selected Vault/Collection. Existing rows
+remain during loading and retry; focus stays on the current control. A failed
+append stops automatic retries and exposes Retry. Keyboard users also retain a
+quiet next-page action. Vault directory rendering similarly advances on scroll
+from its complete accessible directory, so its name search covers every Vault.
+Overview Collections and resources have independent cursors and rendering batches.
+There is no permanent partial-load explanation or visible Load more workflow.
+
+Keep ordinary navigation/list semantics: automatic paging alone does not make
+a resource directory an ARIA feed. The
+[WAI-ARIA feed pattern](https://www.w3.org/WAI/ARIA/apg/patterns/feed/) explains
+why dynamic loading and assistive-reader focus need explicit coordination.
+The directory therefore retains its keyboard action, existing focus and retry
+control. Follow the [TanStack infinite-query guidance](https://tanstack.com/query/latest/docs/framework/react/guides/infinite-queries)
+to avoid overlapping page fetches and retain the same cursor on retry.
+
+The REST `name_query` parameter searches literal names and paths over the whole
+selected scope, including items not previously loaded in the browser. It is at
+most 200 characters, trimmed, case-insensitive, and part of the cursor binding.
+`%`, `_`, and backslash are literal characters. Use `content_type=resources` to
+page Documents/Tables/Files without Collection navigation rows. These two REST
+additions do not change MCP's legacy page-local `filter` argument.
+
+```text
+GET /api/v1/browse/team?depth=-1&page_size=100&name_query=runbook
+GET /api/v1/browse/team?collection=guides&depth=-1&content_type=resources&page_size=100&name_query=runbook
+```
+
+Catalog names are filtered in SQL before page selection. Native title metadata
+lives in verified current revision frontmatter; frozen legacy titles, event
+summaries and asynchronous search chunks cannot replace it. Native name search
+therefore traverses bounded identity/body pages and returns only verified name
+matches. An empty page may have a cursor: continue until a matching page or
+`complete=true`, including for renamed or empty-body Documents. The frontend
+continues such pages automatically and shows Searching until it can establish an
+empty result. This avoids downloading all resources into the browser or making
+an unbounded backend request, but a rare/absent Native title can still require
+traversing the full selected corpus. Narrow the Collection or resource kind for
+large scopes. No title index, scan-budget increase or read-side metadata mutation
+is introduced. PostgreSQL `ILIKE` and Unicode case folding may differ for unusual
+non-ASCII case mappings; ordinary ASCII name matching is aligned.
+
+Search requests are debounced by 250ms and obsolete reads are cancelled. Search
+is scoped name/path discovery; use Search for document-body searching.
 Counts in a partial or filtered view say **Loaded**, and recursive deletion
 never treats unknown contents as an empty Collection. Breadcrumbs fetch only
 the authorized Collection ancestry rather than downloading the whole Vault.

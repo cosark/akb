@@ -28,7 +28,8 @@ async function fixture(page: Page, { dark = false, reader = false } = {}) {
   }, dark);
   await page.route("**/health**", route => route.fulfill({ json: {} }));
   await page.route("**/api/v1/**", async route => {
-    const path = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    const path = url.pathname;
     let json: object = { items: [], history: [], changes: [], relations: [], tokens: [], templates: [], subscribed: false, unread_count: 0 };
     if (path.endsWith("/auth/config")) json = { schema_version: 2, auth_mode: "local", local_auth: { enabled: true }, keycloak: { enabled: false, browser_session_ready: false }, providers: [], mcp_oauth: { enabled: false } };
     else if (path.endsWith("/auth/me")) json = { user_id: "focus-user", username: "fixture", display_name: "Focus reviewer", email: "focus@example.invalid", auth_method: "local", key_class: null, is_admin: false };
@@ -39,7 +40,8 @@ async function fixture(page: Page, { dark = false, reader = false } = {}) {
       const pending = nextRead; nextRead = undefined;
       if (pending) await pending;
       if (denied) return route.fulfill({ status: 403, json: { detail: "Forbidden" } });
-      json = { archive_scope: "unarchived", complete: true, next_cursor: null, items: [
+      const nameQuery = url.searchParams.get("name_query") || "";
+      const items = [
         ...paths.filter(candidate => !removed || !candidate.startsWith(root)).map(candidate => ({ type: "collection", path: candidate, name: candidate.split("/").at(-1) })),
         { type: "collection", path: siblingPath, name: "other-branch" },
         { type: "collection", path: "outside", name: "outside" },
@@ -51,7 +53,9 @@ async function fixture(page: Page, { dark = false, reader = false } = {}) {
           { type: "file", path: fileId, collection: deepest, name: fileTitle, uri: `akb://fixture/file/${fileId}` },
           { type: "table", path: "services", collection: deepest, name: "services" },
         ] : []),
-      ] };
+      ];
+      json = { archive_scope: "unarchived", complete: true, next_cursor: null, name_query: nameQuery || null,
+        items: items.filter(item => !nameQuery || `${item.name} ${item.path}`.toLowerCase().includes(nameQuery.toLowerCase())) };
     } else if (decodeURIComponent(path).endsWith("/documents/fixture/overview/vault-skill.md")) return route.fulfill({ status: 404, json: { detail: "No guide" } });
     else if (path.includes("/documents/fixture/") && !path.endsWith("/history")) {
       const selected = decodeURIComponent(path).split("/documents/fixture/")[1];
@@ -125,7 +129,7 @@ for (const width of [375, 1440]) for (const dark of [false, true]) {
   });
 }
 
-test("Readers compose exploration with filters and the existing 20 plus 50 resource pagination", async ({ page }) => {
+test("Readers compose exploration with filters and automatically paged resources", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await fixture(page, { reader: true });
   await page.goto(documentUrl);
@@ -134,9 +138,8 @@ test("Readers compose exploration with filters and the existing 20 plus 50 resou
   const explorer = page.getByRole("navigation", { name: "fixture explorer", exact: true });
   const navigation = page.getByRole("navigation", { name: "Collection exploration", exact: true });
   await expect(navigation.getByRole("button", { name: `Back to collection ${root}`, exact: true })).toBeFocused();
-  await expect(explorer.getByRole("link", { name: /^Document:/ })).toHaveCount(20);
-  await explorer.getByRole("button", { name: /^Show 50 more documents/ }).click();
-  await expect(explorer.getByRole("link", { name: /^Document:/ })).toHaveCount(70);
+  await expect(explorer.getByRole("link", { name: /^Document:/ })).toHaveCount(75);
+  await expect(explorer.getByRole("button", { name: /^Show 50 more documents/ })).toHaveCount(0);
   const files = explorer.getByRole("button", { name: "Files, 1 item", exact: true });
   if (await files.getAttribute("aria-expanded") === "false") await files.click();
   await expect(explorer.getByRole("link", { name: `File: ${fileTitle}`, exact: true })).toBeVisible();

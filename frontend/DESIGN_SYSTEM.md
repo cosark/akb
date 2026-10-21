@@ -951,17 +951,29 @@ an `sr-only` summary, never the only signal.
   characters. This is ambiguity recovery, not permanent technical metadata.
   When a Collection mixes resource kinds, or one kind exceeds the 20-row
   preview, Documents / Tables / Files become peer disclosure rows with a quiet
-  tabular count. Each open group renders 20 rows initially and reveals 50 more
-  per request; a resource-type filter bypasses unrelated kinds, so a large
-  document set can never bury tables or files at the end of the tree. A final
-  300-row progressive guard prevents one action from mounting a multi-thousand
-  node Vault. Small single-kind Collections stay flat and compact.
+  tabular count. Each open group shows its loaded rows; a resource-type filter
+  bypasses unrelated kinds. Counts carry `+` until the scoped traversal is complete.
+  Small single-kind Collections stay flat. The expandable sidebar retains its
+  bounded recursive hierarchy; the main index requests direct children. Name
+  search includes descendants of the selected boundary.
   Network work is independently paged: request at most 100 identities at a
-  time and expose Load next page rather than fetching the full Vault behind a
-  DOM-only limit. Keep loaded rows on retry. A partial view explicitly labels
-  loaded counts and name-filter scope; only a server completeness receipt
-  permits an empty-inventory claim. Collection/kind choices also narrow the
-  server request. Unknown Collection contents require the typed recursive
+  time. The shared `AutoLoadMore` boundary observes the owning scroll pane and
+  requests the next page within 240px of its end. The 300-row rendering guard
+  also advances on scroll, without a second visible paging button. Vault directory
+  cards and sidebar rows progressively reveal 30 entries from the complete
+  accessible directory. Overview Collections and content use independent
+  cursors so a large Collection catalog cannot hide the content ledger.
+  Keep existing rows, focus, and scroll position while appending; never move
+  focus merely because a request completed. Delay small append indicators by
+  150ms; failures stop automatic retries and show a local retry action. A quiet
+  keyboard action remains available to readers that do not trigger scrolling.
+  Do not show a permanent partial-load or implementation-limit explanation.
+  Name/path search is debounced for 250ms, cancels obsolete requests, and queries
+  the entire selected Vault/Collection scope on the server. Continue empty
+  matching pages while a cursor remains, without a false no-match state. Only
+  a completeness receipt permits that claim. These are name searches, not body
+  search. Native titles come from verified current revisions, not stale indexes.
+  Unknown recursive Collection contents require the typed recursive
   deletion confirmation, never an empty-Collection assumption. Details labels
   loaded counts unless the complete, unfiltered archive-inclusive scope is
   available. Older servers without paging receipts show an update notice.
@@ -972,7 +984,8 @@ an `sr-only` summary, never the only signal.
   The explorer's Filter resources searches names/paths inside the sidebar,
   never resource bodies or a separate modal. A compact, name-filterable
   Collection selector inside the Filters disclosure defaults to All collections; a selected path
-  limits the tree to that Collection and descendants, excluding sibling prefixes.
+  limits search to that Collection and descendants, excluding sibling prefixes.
+  Browsing without a name query shows that Collection’s direct children.
   Its clear action preserves the text/type/state filters. Collection overflow's
   reader-accessible Search in collection selects that same inline boundary and
   opens Filters and focuses Filter resources without navigation. A collapsed
@@ -1778,7 +1791,7 @@ page; tables and files go directly to their native resource. The full Search rou
 an explicit advanced-search destination for Literal mode, Vault scope, and type
 filters; opening the search panel by itself never changes browser history.
 The app header is the quick-search entry; Collection overflow instead scopes
-the local sidebar name filter. The Vault menu has no duplicate search control.
+the server-backed sidebar name search. The Vault menu has no duplicate search control.
 Header openings default to the route's Vault, or all accessible
 Vaults outside a named Vault route. A manual scope change remains in effect while
 the panel is open and immediately invalidates old results; empty results never

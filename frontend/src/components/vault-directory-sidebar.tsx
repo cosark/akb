@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type MouseEvent } from "re
 import { Link } from "react-router-dom";
 import { Box, Plus, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AutoLoadMore } from "@/components/ui/auto-load-more";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineLoadingState } from "@/components/ui/loading-state";
 import { RailFilterField, RailFilterToggle, RailIdentity, RailManagement, RailSearchToolbar } from "@/components/navigation-rail-controls";
@@ -77,7 +78,8 @@ export function VaultDirectorySidebar({ onCreateVault, onNavigate, onRefetchRead
         {others.length > 0 && <section aria-label="Other vaults">{favorites.length > 0 && <h3 className="px-2 pb-1 pt-2 text-xs font-medium text-foreground-muted">Other vaults</h3>}<ul>{others.map(row)}</ul></section>}
         {!loading && !error && vaults.length === 0 && <p className="px-2 py-3 text-xs text-foreground-muted">No vaults yet.</p>}
         {vaults.length > 0 && matches.length === 0 && <p role="status" className="px-2 py-3 text-xs text-foreground-muted">No vaults match these filters.</p>}
-        {matches.length > visible && <Button variant="ghost" size="sm" onClick={() => setVisible(value => value + 30)} className="mt-1 h-9 w-full text-link max-sm:h-11 pointer-coarse:h-11">Show more vaults</Button>}
+        <AutoLoadMore hasMore={matches.length > visible} paused={loading} requestKey={`${query}:${scope}:${visible}:${matches.length}`}
+          label="Show more vaults" onLoadMore={() => setVisible(value => value + 30)} />
       </nav>
     </div>
   </div>;

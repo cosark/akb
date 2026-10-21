@@ -984,6 +984,7 @@ def _success_envelope_schemas() -> dict[str, dict[str, Any]]:
                     "items": {"$ref": "#/components/schemas/BrowseItem"},
                 },
                 "scanned": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+                "name_query": _nullable_string(),
                 "complete": {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
                 "next_cursor": _nullable_string(),
                 "hint": _nullable_string(),

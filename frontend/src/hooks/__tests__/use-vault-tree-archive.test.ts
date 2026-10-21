@@ -24,7 +24,7 @@ describe("archive-aware Vault tree", () => {
     act(() => result.current.loadMore());
     await waitFor(() => expect(result.current.complete).toBe(true));
     expect(browse).toHaveBeenLastCalledWith("v", undefined, -1, {
-      page_size: 100, archive_scope: "unarchived", cursor: "next",
+      page_size: 100, signal: expect.anything(), archive_scope: "unarchived", cursor: "next",
     });
     expect(result.current.tree?.[0].children?.[0].name).toBe("Current");
   });
@@ -46,7 +46,7 @@ describe("archive-aware Vault tree", () => {
     const { result } = renderHook(() => useVaultTree("v", "unarchived", { collection: "guides", content_type: "files" }));
     await waitFor(() => expect(result.current.complete).toBe(true));
     expect(browse).toHaveBeenCalledWith("v", "guides", -1, {
-      page_size: 100, archive_scope: "unarchived", content_type: "files",
+      page_size: 100, signal: expect.anything(), archive_scope: "unarchived", content_type: "files",
     });
   });
 
@@ -61,7 +61,7 @@ describe("archive-aware Vault tree", () => {
   it("requests a bounded first page and refetches on a status change", async () => {
     const { result } = renderHook(() => useVaultTree("v"));
     await waitFor(() => expect(result.current.tree).not.toBeNull());
-    expect(browse).toHaveBeenCalledWith("v", undefined, -1, { page_size: 100, archive_scope: "unarchived" });
+    expect(browse).toHaveBeenCalledWith("v", undefined, -1, { page_size: 100, signal: expect.anything(), archive_scope: "unarchived" });
     act(() => window.dispatchEvent(new CustomEvent("akb:document-status-changed", { detail: { vault: "other" } })));
     expect(browse).toHaveBeenCalledTimes(1);
     act(() => window.dispatchEvent(new CustomEvent("akb:document-status-changed", { detail: { vault: "v" } })));
@@ -80,7 +80,7 @@ describe("archive-aware Vault tree", () => {
     await act(async () => resolve(response("archived")));
     await waitFor(() => expect(result.current.showingPreviousScope).toBe(false));
     expect(result.current.tree?.[0].children?.[0].raw.status).toBe("archived");
-    expect(browse).toHaveBeenLastCalledWith("v", undefined, -1, { page_size: 100, archive_scope: "archived" });
+    expect(browse).toHaveBeenLastCalledWith("v", undefined, -1, { page_size: 100, signal: expect.anything(), archive_scope: "archived" });
   });
 
   it("reuses a Vault's tree on return and never shows another Vault's tree", async () => {
@@ -101,4 +101,20 @@ describe("archive-aware Vault tree", () => {
     expect(result.current.tree).toEqual([]);
     expect(result.current.loading).toBe(false);
   });
+});
+
+it("cancels obsolete name scopes and does not accept an ignored server query", async () => {
+  const { result, rerender } = renderHook(({ name }: { name: string }) => useVaultTree("v", "unarchived", { name_query: name }), { initialProps: { name: "" } });
+  await waitFor(() => expect(result.current.complete).toBe(true));
+  browse.mockReturnValueOnce(new Promise(() => {}));
+  rerender({ name: "old" });
+  await waitFor(() => expect(browse.mock.calls.at(-1)?.[3]?.name_query).toBe("old"));
+  const oldSignal = browse.mock.calls.at(-1)?.[3]?.signal;
+  browse.mockResolvedValueOnce({ ...response(), name_query: "new" });
+  rerender({ name: "new" });
+  await waitFor(() => expect(result.current.showingPreviousScope).toBe(false));
+  expect(oldSignal?.aborted).toBe(true);
+  browse.mockResolvedValueOnce(response());
+  rerender({ name: "ignored" });
+  await waitFor(() => expect(result.current.error).toContain("Name search is unavailable"));
 });
