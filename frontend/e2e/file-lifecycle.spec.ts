@@ -110,7 +110,8 @@ async function uploadFixture(page: Page) {
 test("native-picker foreground proof preserves the chosen File and upload fields", async ({ page }) => {
   const proof = await uploadFixture(page);
   await page.goto("/vault/fixture");
-  await page.getByRole("button", { name: "Upload file", exact: true }).click();
+  await page.getByRole("button", { name: "New content", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Upload file", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Upload a file" });
   const picker = page.getByLabel(/^File/);
   const pickerId = await picker.getAttribute("id");
@@ -151,7 +152,8 @@ for (const outcome of ["pending", "uncertain"] as const) {
     await page.route("**/api/v1/files/fixture/saved-upload", route => route.fulfill(uncertain ? { status: 404 } : { json: saved }));
     await page.route("**/api/v1/files/fixture/saved-upload/download", route => route.fulfill({ json: { download_url: "/file-preview-fixture/source", expires_in: 60 } }));
     await page.goto("/vault/fixture");
-    await page.getByRole("button", { name: "Upload file", exact: true }).click();
+    await page.getByRole("button", { name: "New content", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Upload file", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Upload a file" });
     await page.getByLabel(/^File/).setInputFiles({ name: "report.txt", mimeType: "text/plain", buffer: Buffer.from("saved") });
     await dialog.getByRole("button", { name: "Upload file", exact: true }).click();

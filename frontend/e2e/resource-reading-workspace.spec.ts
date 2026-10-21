@@ -123,11 +123,13 @@ async function revealVaultNavigation(page: Page) {
 }
 
 async function expectQuietVaultTrail(page: Page, label: string) {
+  const isRoot = label === "Overview";
+  const isFocusedPage = ["Graph", "Public links", "Members", "Settings"].includes(label);
   const trail = page.getByRole("navigation", { name: "Current page", exact: true });
-  await expect(trail.locator('[aria-current="page"]')).toHaveText(label);
-  const vault = trail.getByRole("link", { name: "fixture", exact: true });
+  await expect(trail.locator('[aria-current="page"]')).toHaveText(isRoot ? "fixture" : label);
+  const vault = trail.getByRole("link", { name: isFocusedPage ? "Back to fixture" : "fixture", exact: true });
   await expect(vault).toHaveAttribute("href", "/vault/fixture");
-  await expect(vault.locator(".lucide-box")).toBeVisible();
+  await expect(vault.locator(isFocusedPage ? ".lucide-arrow-left" : ".lucide-box")).toBeVisible();
   await expect(trail.getByRole("button")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Navigate in fixture", exact: true })).toHaveCount(0);
   await expect(trail.locator("svg")).toHaveCount(1);
@@ -135,6 +137,11 @@ async function expectQuietVaultTrail(page: Page, label: string) {
   await expect(current).toBeInViewport({ ratio: 1 });
   const textBounds = (await current.boundingBox())!;
   const vaultBounds = (await vault.boundingBox())!;
+  if (isRoot) {
+    await expect(vault).toHaveAttribute("aria-current", "page");
+    await expect(trail.getByText("/", { exact: true })).toHaveCount(0);
+    return;
+  }
   const gap = textBounds.x - vaultBounds.x - vaultBounds.width;
   expect(gap).toBeGreaterThan(8);
   expect(gap).toBeLessThan(24);
@@ -460,7 +467,7 @@ for (const scope of ["vault", "all"] as const) for (const destination of ["resul
 
 function vaultBreadcrumb(page: Page) {
   return page.getByRole("navigation", { name: /^(Current page|Resource location)$/ })
-    .getByRole("link", { name: "fixture", exact: true });
+    .getByRole("link", { name: /^(Back to )?fixture$/ });
 }
 
 async function openVaultDestination(page: Page, name: string) {
@@ -486,12 +493,14 @@ async function expectVaultDestinationsReachable(page: Page, current?: string) {
 }
 
 function documentActions(page: Page) {
-  return page.getByRole("button", { name: `Actions for ${title}`, exact: true });
+  return page.getByRole("group", { name: "Document reading tools", exact: true })
+    .getByRole("button", { name: `Actions for ${title}`, exact: true });
 }
 
 async function openPublication(page: Page, name: "Publish" | "Public link" = "Public link") {
   await documentActions(page).click();
   await page.getByRole("menuitem", { name, exact: true }).click();
+  await expect(page.getByRole("dialog", { name: name === "Publish" ? "Publish document" : "Public link", exact: true })).toBeVisible();
 }
 
 async function openDocumentDetails(page: Page, section?: "Properties" | "Version history" | "Related documents") {
@@ -749,8 +758,9 @@ for (const width of [375, 768, 1440, 2560]) for (const dark of [false, true]) {
     if (width === 375) {
       const commands = await page.locator('[data-slot="resource-command-row"]').boundingBox();
       // Metadata now belongs to this same toolbar; allow its compact first
-      // line above the 44px touch controls, but no redundant command band.
-      expect(commands!.height).toBeLessThanOrEqual(86);
+      // line above the 44px touch controls and the 1px bottom divider,
+      // but no redundant command band.
+      expect(commands!.height).toBeLessThanOrEqual(87);
     }
     if (width >= 1440) expect(measures.heading.top).toBeLessThanOrEqual(220);
     await expect(page.getByRole("region", { name: "Scrollable table" })).toHaveAttribute("tabindex", "0");
@@ -2244,7 +2254,7 @@ for (const dark of [false, true]) for (const entry of ["document", "search", "qu
 }
 
 test("short prose has no artificial body height", async ({ page }) => {
-  await fixture(page, false, false, "One line of knowledge.");
+  await fixture(page, false, false, "One line of knowledge.", undefined, { summary: "" });
   await page.goto(`/vault/fixture/doc/${encodeURIComponent(path)}`);
   const body = page.locator(".document-reading-flow");
   await expect(body).toHaveText("One line of knowledge.");

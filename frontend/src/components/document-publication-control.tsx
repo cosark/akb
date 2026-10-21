@@ -57,8 +57,7 @@ export function DocumentPublicationControl({
     ? `${window.location.origin}/p/${encodeURIComponent(publicSlug)}`
     : "";
 
-  // Register the live node: a custom Radix anchor can replace the initial
-  // trigger, so a one-time imperative handle would retain a detached button.
+  // Keep the imperative overflow opener attached to the current button.
   const setTriggerRef = useCallback((element: HTMLButtonElement | null) => {
     buttonRef.current = element;
     if (typeof triggerRef === "function") triggerRef(element);
@@ -75,6 +74,17 @@ export function DocumentPublicationControl({
       urlRef.current?.focus({ preventScroll: true });
     }
   }, [publicSlug]);
+
+  function changeOpen(nextOpen: boolean) {
+    if (confirmOpen || publishing || (nextOpen && publishDisabled)) return;
+    if (nextOpen) {
+      restoreMenuFocus.current = true;
+      setCopyResult(null);
+      // Keep the popover inside a preview dialog's focus boundary.
+      setPortalContainer((menuAnchorRef?.current ?? buttonRef.current)?.closest<HTMLElement>('[role="dialog"]') ?? null);
+    }
+    setOpen(nextOpen);
+  }
 
   async function copyLink() {
     setCopyResult(null);
@@ -123,25 +133,26 @@ export function DocumentPublicationControl({
       <Popover
         modal={false}
         open={open && !publishDisabled}
-        onOpenChange={(nextOpen) => {
-          if (confirmOpen || publishing || (nextOpen && publishDisabled)) return;
-          if (nextOpen) {
-            restoreMenuFocus.current = true;
-            setCopyResult(null);
-            // Keep the popover inside a preview dialog's focus boundary.
-            setPortalContainer((menuAnchorRef?.current ?? buttonRef.current)?.closest<HTMLElement>('[role="dialog"]') ?? null);
-          }
-          setOpen(nextOpen);
-        }}
+        onOpenChange={changeOpen}
       >
         {menuAnchorRef && <PopoverAnchor virtualRef={menuAnchor} />}
-        <TooltipProvider delayDuration={300}>
+        {menuAnchorRef ? (
+          // A Radix trigger registers its own anchor before the custom anchor
+          // effect runs. This hidden imperative opener must not compete with
+          // the visible overflow button for popover positioning.
+          <button
+            ref={setTriggerRef}
+            hidden
+            type="button"
+            data-publication-trigger
+            onClick={() => changeOpen(!open)}
+          />
+        ) : <TooltipProvider delayDuration={300}>
           <Tooltip>
             <TooltipTrigger asChild>
               <PopoverTrigger asChild>
                 <Button
                   ref={setTriggerRef}
-                  hidden={Boolean(menuAnchorRef)}
                   type="button"
                   variant="outline"
                   size="sm"
@@ -166,7 +177,7 @@ export function DocumentPublicationControl({
             </TooltipTrigger>
             {publishDisabled && <TooltipContent>{disabledReason}</TooltipContent>}
           </Tooltip>
-        </TooltipProvider>
+        </TooltipProvider>}
         {disabledReason && <span id={reasonId} className="sr-only">{disabledReason}</span>}
 
         <PopoverContent

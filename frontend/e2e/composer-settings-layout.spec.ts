@@ -152,14 +152,14 @@ for (const width of [375, 1440, 2560]) for (const dark of [false, true]) {
       const currentBorder = await current.evaluate((node, horizontal) => parseFloat(getComputedStyle(node)[horizontal ? "borderLeftWidth" : "borderTopWidth"]), horizontal);
       expect(previousBorder + currentBorder).toBeGreaterThanOrEqual(1);
     }
-    await expect(policy).toHaveAccessibleDescription("Only people you add as members can open this vault.");
+    await expect(policy).toHaveAccessibleDescription("Only people invited to this vault.");
     await expect(lastChoice).toBeVisible();
     await firstChoice.focus();
     await page.keyboard.press("ArrowDown");
     const readingChoice = policy.getByRole("radio", { name: "Everyone can view", exact: true });
     await expect(readingChoice).toBeFocused();
     await expect(readingChoice).toBeChecked();
-    await expect(policy).toHaveAccessibleDescription("Anyone signed in to this AKB can view content without an invitation. Editing still requires permission.");
+    await expect(policy).toHaveAccessibleDescription("Signed-in AKB users can read without an invitation.");
     await expect(general.getByRole("button", { name: "Save changes", exact: true })).toBeEnabled();
     await expect(access.getByRole("button", { name: "Save changes", exact: true })).toBeEnabled();
     await page.screenshot({ path: testInfo.outputPath("settings-access.png"), animations: "disabled" });

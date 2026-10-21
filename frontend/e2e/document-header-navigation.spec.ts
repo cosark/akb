@@ -53,7 +53,7 @@ async function revealVaultNavigation(page: Page) {
 
 function vaultBreadcrumb(page: Page) {
   return page.getByRole("navigation", { name: /^(Current page|Resource location)$/ })
-    .getByRole("link", { name: "fixture", exact: true });
+    .getByRole("link", { name: /^(Back to )?fixture$/ });
 }
 
 async function expectOverviewDestinations(page: Page) {
@@ -75,7 +75,7 @@ for (const width of [375, 1440]) for (const [suffix, label] of [
   await fixture(page);
   await page.goto(`/vault/fixture${suffix}`);
   const location = page.getByRole("navigation", { name: "Current page", exact: true });
-  await expect(location.locator('[aria-current="page"]')).toHaveText(label);
+  await expect(location.locator('[aria-current="page"]')).toHaveText(label === "Overview" ? "fixture" : label);
   await expect(location.getByRole("button")).toHaveCount(0);
   await expect(vaultBreadcrumb(page)).toHaveAttribute("href", "/vault/fixture");
   await expect(vaultBreadcrumb(page)).toBeInViewport({ ratio: 1 });
@@ -88,7 +88,7 @@ for (const width of [375, 1440]) for (const [suffix, label] of [
   if (drawer) await page.keyboard.press("Escape");
   await vaultBreadcrumb(page).click();
   await expect(page).toHaveURL(url => url.pathname === "/vault/fixture");
-  await expect(location.locator('[aria-current="page"]')).toHaveText("Overview");
+  await expect(location.locator('[aria-current="page"]')).toHaveText("fixture");
   await expectOverviewDestinations(page);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
@@ -133,7 +133,7 @@ for (const width of [375, 1440]) for (const dark of [false, true]) {
       }
       await expect(page).toHaveURL(url => url.pathname === href);
       const currentPage = page.getByRole("navigation", { name: "Current page", exact: true });
-      await expect(currentPage.locator('[aria-current="page"]')).toHaveText(name);
+      await expect(currentPage.locator('[aria-current="page"]')).toHaveText(name === "Overview" ? "fixture" : name);
       await expect(currentPage.getByRole("button")).toHaveCount(0);
       await page.goBack();
       if (name !== "Overview") await page.goBack();
@@ -233,7 +233,7 @@ for (const width of [375, 1440]) test(`header navigation waits for an active ima
     await expect(page.getByRole("button", { name: "Remove image: diagram", exact: true })).toBeVisible();
     await vaultBreadcrumb(page).click();
     await confirmation.getByRole("button", { name: "Leave document", exact: true }).click();
-    await expect(page.getByRole("navigation", { name: "Current page", exact: true }).locator('[aria-current="page"]')).toHaveText("Overview");
+    await expect(page.getByRole("navigation", { name: "Current page", exact: true }).locator('[aria-current="page"]')).toHaveText("fixture");
   } finally {
     finishUpload();
   }

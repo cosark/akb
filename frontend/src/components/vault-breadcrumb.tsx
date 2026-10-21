@@ -44,7 +44,7 @@ export function VaultBreadcrumb({
             className={cn("inline-flex min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] text-foreground-muted transition-token hover:text-link focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
               kind && "@max-xs/resource-location:h-11 @max-xs/resource-location:w-9 @max-xs/resource-location:justify-center",
               isVaultRoot && "font-semibold text-foreground",
-              backToVault && "-ml-2 min-h-11 min-w-11 gap-2 px-2 text-link hover:bg-surface-hover hover:text-link-hover",
+              backToVault && "min-h-11 min-w-11 gap-2 px-2 text-link hover:bg-surface-hover hover:text-link-hover",
             )}
           >
             {backToVault ? <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden /> : <Box className="h-4 w-4 shrink-0" aria-hidden />}
