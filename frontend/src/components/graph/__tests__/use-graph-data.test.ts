@@ -601,5 +601,24 @@ describe("walking dependents", () => {
     expect(strongNeighborhood(payload, "inc", 3).reach.get("checkout")).toBe(3);
     expect(two.reach.has("other-inc")).toBe(false);
   });
+
+  it("keeps its direction along depends_on: affected resources lead on to affected ones, dependencies to dependencies", () => {
+    const s = (source: string, target: string, relation: GraphEdge["relation"] = "related_to"): GraphEdge => ({ source, target, relation, kind: "explicit" });
+    const payload = {
+      nodes: ["inc", "reco", "frontend", "loadgen", "cart", "catalog", "db", "checkout", "owner"].map(uri => ({ uri, name: uri, kind: "document" as const })),
+      edges: [
+        s("inc", "reco"), s("frontend", "reco", "depends_on"), s("loadgen", "frontend", "depends_on"), s("frontend", "cart", "depends_on"),
+        s("reco", "catalog", "depends_on"), s("catalog", "db", "depends_on"), s("checkout", "catalog", "depends_on"), s("frontend", "owner"),
+      ],
+    };
+    const three = strongNeighborhood(payload, "inc", 3);
+    // frontend is affected: its own other dependency (cart) is not; what depends on it (loadgen) and its owner are.
+    expect(three.reach.get("loadgen")).toBe(3);
+    expect(three.reach.get("owner")).toBe(3);
+    expect(three.reach.has("cart")).toBe(false);
+    // catalog is a dependency: its own dependency (db) is; the other services depending on it (checkout) are not.
+    expect(three.reach.get("db")).toBe(3);
+    expect(three.reach.has("checkout")).toBe(false);
+  });
 });
 
