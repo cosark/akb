@@ -1,4 +1,4 @@
-import { Fragment, useRef, useState } from "react";
+import { Fragment, useContext, useRef, useState } from "react";
 import { Link, matchRoutes, useLocation } from "react-router-dom";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown } from "lucide-react";
@@ -8,6 +8,17 @@ import { vaultMenuPageForComponent } from "@/lib/vault-workspace";
 import { appRouteContract } from "@/app-route-contract";
 import { cn } from "@/lib/utils";
 import { useResourceNavigation } from "@/contexts/resource-navigation-context";
+import { QueryClientContext, type QueryClient } from "@tanstack/react-query";
+
+/** The vault-relative path of the document a document page shows: from its loaded data when cached (the route may
+ *  name it by id), else the route parameter itself. */
+function documentPathFor(queryClient: QueryClient | undefined, vault: string, id: string | undefined): string | undefined {
+  if (!id) return undefined;
+  for (const [, data] of queryClient?.getQueriesData<{ path?: unknown }>({ queryKey: ["document", vault, id] }) ?? []) {
+    if (data && typeof data.path === "string" && data.path) return data.path;
+  }
+  return id;
+}
 
 /** One stable entry point, separate from location, on every named Vault route. */
 export function VaultPageSwitcher({ vault, onNavigateIntent }: { vault: string; onNavigateIntent?: () => void }) {
@@ -15,10 +26,15 @@ export function VaultPageSwitcher({ vault, onNavigateIntent }: { vault: string; 
   const { requestNavigation } = useResourceNavigation();
   const [open, setOpen] = useState(false);
   const followedLink = useRef(false);
+  // Optional: the menu also renders outside a query provider (tests, stories), where no document data is cached.
+  const queryClient = useContext(QueryClientContext);
   const match = matchRoutes([...appRouteContract], pathname)?.at(-1);
   if (match?.route.boundary !== "vault-shell" || match.params.name !== vault) return null;
   const page = vaultMenuPageForComponent(match.route.component);
-  const actions = getVaultPageActions(vault).filter(action => action.key !== "search");
+  // From an open document, Graph opens focused on it (the same entry the document's own graph link uses).
+  const documentPath = match.route.component === "DocumentPage" ? documentPathFor(queryClient, vault, match.params.id) : undefined;
+  const actions = getVaultPageActions(vault).filter(action => action.key !== "search")
+    .map(action => action.key === "graph" && documentPath ? { ...action, href: `${action.href}?entry=${encodeURIComponent(documentPath)}` } : action);
   const labelFor = (action: (typeof actions)[number]) => action.key === "publish" ? "Public links" : action.label;
   return <DropdownMenu.Root modal={false} open={open} onOpenChange={value => {
     if (value) followedLink.current = false;

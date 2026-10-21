@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { ResourceNavigationProvider, useResourceNavigationGuard } from "@/contexts/resource-navigation-context";
 import { VaultPageSwitcher } from "../vault-page-switcher";
@@ -80,5 +81,30 @@ describe("Vault page menu", () => {
     await user.click(screen.getByRole("menuitem", { name: "Members" }));
     expect(guard).toHaveBeenCalledExactlyOnceWith("/vault/team/members");
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("opens Graph focused on the document being read, by its path", async () => {
+    const user = userEvent.setup();
+    renderMenu("/vault/team/doc/guides%2Fremote.md");
+    await user.click(screen.getByRole("button", { name: "Navigate in team" }));
+    expect(within(screen.getByRole("menu", { name: "Vault pages" })).getByRole("menuitem", { name: "Graph" }))
+      .toHaveAttribute("href", "/vault/team/graph?entry=guides%2Fremote.md");
+  });
+
+  it("uses the loaded document's path when the route names it by id", async () => {
+    const user = userEvent.setup();
+    const client = new QueryClient();
+    client.setQueryData(["document", "team", "d-42", undefined, "u", 0], { path: "guides/remote.md" });
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={["/vault/team/doc/d-42"]}><ResourceNavigationProvider><VaultPageSwitcher vault="team" /></ResourceNavigationProvider></MemoryRouter></QueryClientProvider>);
+    await user.click(screen.getByRole("button", { name: "Navigate in team" }));
+    expect(within(screen.getByRole("menu", { name: "Vault pages" })).getByRole("menuitem", { name: "Graph" }))
+      .toHaveAttribute("href", "/vault/team/graph?entry=guides%2Fremote.md");
+  });
+
+  it("keeps the plain Graph link elsewhere", async () => {
+    const user = userEvent.setup();
+    renderMenu("/vault/team/members");
+    await user.click(screen.getByRole("button", { name: "Navigate in team" }));
+    expect(within(screen.getByRole("menu", { name: "Vault pages" })).getByRole("menuitem", { name: "Graph" })).toHaveAttribute("href", "/vault/team/graph");
   });
 });
