@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, within, cleanup, waitFor, fireEvent } from "@testing-library/react";
 import { render } from "@/test-query-client";
 import userEvent from "@testing-library/user-event";
-import { Link, MemoryRouter } from "react-router-dom";
+import { Link, MemoryRouter, useLocation } from "react-router-dom";
+import { ResourceLocationProvider, usePublishResourceLocation, type ResourceLocation } from "@/contexts/resource-location-context";
 import { VaultExplorer } from "@/components/vault-explorer";
 import { CurrentUserProvider } from "@/contexts/current-user-context";
 
@@ -38,6 +39,8 @@ const uploadMock = uploadVaultFile as unknown as ReturnType<typeof vi.fn>;
 const tableCreateMock = createVaultTable as unknown as ReturnType<typeof vi.fn>;
 
 const sample = {
+  complete: true,
+  next_cursor: null,
   vault: "v",
   path: "",
   items: [
@@ -70,6 +73,12 @@ function renderAt(pathname: string) {
       <VaultExplorer vault="v" />
     </MemoryRouter>,
   );
+}
+
+function PublishCurrent({ value, onlyOnResource = false }: { value: ResourceLocation; onlyOnResource?: boolean }) {
+  const { pathname } = useLocation();
+  usePublishResourceLocation(onlyOnResource && !pathname.includes("/doc/") ? null : value);
+  return null;
 }
 
 beforeEach(() => {
@@ -153,7 +162,8 @@ describe("collection shortcut navigation", () => {
     await user.click(screen.getByRole("link", { name: "Open guides shortcut" }));
     const guides = await screen.findByRole("button", { name: "guides" });
     await waitFor(() => expect(guides).toHaveFocus());
-    expect(screen.getByRole("button", { name: "Collection search scope" })).toHaveTextContent("All collections");
+    expect(screen.getByRole("button", { name: "Collection search scope" })).toHaveTextContent("guides");
+    expect(browseMock).toHaveBeenCalledWith("v", "guides", -1, expect.objectContaining({ page_size: 100 }));
   });
 
   it("chooses a nested Collection with the keyboard and keeps only its resource subtree", async () => {
@@ -265,7 +275,7 @@ describe("archive document navigation", () => {
   });
 
   it("keeps the scope selector available in an empty Vault and gives compatibility recovery", async () => {
-    browseMock.mockResolvedValue({ vault: "v", path: "", items: [] });
+    browseMock.mockResolvedValue({ vault: "v", path: "", items: [], complete: true });
     renderAt("/vault/v");
     const user = userEvent.setup();
     await screen.findByText(/No collections yet/);
@@ -298,6 +308,85 @@ describe("archive document navigation", () => {
 });
 
 describe("VaultExplorer — rendering", () => {
+  it.each([
+    ["Document", "guides/last.md", "/vault/v/doc/guides%2Flast.md"],
+    ["File", "file-last", "/vault/v/file/file-last"],
+    ["Table", "table_last", "/vault/v/table/table_last"],
+  ] as const)("reveals an authorized current %s beyond the first page without full traversal", async (kind, ref, route) => {
+    browseMock.mockResolvedValue({ ...sample, complete: false, next_cursor: "next", items: [sample.items[0]] });
+    // A table's authorized name is also its routing identity; unlike a
+    // Document title or File display name, it is not an arbitrary alias.
+    const title = kind === "Table" ? ref : "Authorized outlier";
+    render(<MemoryRouter initialEntries={[route]}><ResourceLocationProvider identity="reader">
+      <PublishCurrent value={{ vault: "v", title, kind, collectionPath: "guides", resourceRef: ref, status: "active" }} />
+      <VaultExplorer vault="v" />
+    </ResourceLocationProvider></MemoryRouter>);
+    const row = await screen.findByRole("treeitem", { name: new RegExp(`^${kind}:\\s*${title}$`) });
+    expect(row).toBeVisible();
+    expect(row).toHaveAttribute("aria-current", "page");
+    expect(browseMock.mock.calls.every(call => !call[3]?.cursor)).toBe(true);
+    expect(browseMock).toHaveBeenCalledWith("v", "guides", -1, expect.objectContaining({ page_size: 100, content_type: "all" }));
+  });
+
+  it("resets the old kind scope on resource navigation but preserves a later manual collapse", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={["/vault/v"]}><ResourceLocationProvider identity="reader">
+      <Link to="/vault/v/doc/guides%2Flast.md">Open outlier</Link>
+      <PublishCurrent onlyOnResource value={{ vault: "v", title: "Outlier", kind: "Document", collectionPath: "guides", resourceRef: "guides/last.md", status: "active" }} />
+      <VaultExplorer vault="v" />
+    </ResourceLocationProvider></MemoryRouter>);
+    await screen.findByRole("button", { name: "architecture" });
+    await user.click(screen.getByRole("button", { name: "Filter collections" }));
+    await user.click(screen.getByRole("button", { name: "Resource type" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^Tables/ }));
+    await user.click(screen.getByRole("link", { name: "Open outlier" }));
+    expect(await screen.findByRole("treeitem", { name: /^Document:\s*Outlier$/ })).toHaveAttribute("aria-current", "page");
+    const guides = screen.getByRole("button", { name: "guides" });
+    await user.click(guides);
+    await user.click(screen.getByRole("button", { name: "Refresh collections" }));
+    await waitFor(() => expect(screen.getByRole("tree", { name: "v explorer" })).not.toHaveAttribute("aria-busy", "true"));
+    expect(screen.queryByRole("treeitem", { name: /^Document:\s*Outlier$/ })).not.toBeInTheDocument();
+  });
+
+  it("does not claim unrequested kinds are empty after a single-kind page completes", async () => {
+    const user = userEvent.setup();
+    renderAt("/vault/v");
+    await screen.findByRole("button", { name: "architecture" });
+    await user.click(screen.getByRole("button", { name: "Filter collections" }));
+    await user.click(screen.getByRole("button", { name: "Resource type" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^Documents/ }));
+    await user.click(screen.getByRole("button", { name: "Resource type" }));
+    const tables = screen.getByRole("menuitemradio", { name: /^Tables/ });
+    expect(tables).toHaveTextContent("Not loaded in this view");
+    expect(tables).not.toHaveTextContent("0 tables");
+  });
+
+  it("reveals the same resource again after visiting the Vault and changing filters", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={["/vault/v/doc/guides%2Flast.md"]}><ResourceLocationProvider identity="reader">
+      <Link to="/vault/v">Return to Vault</Link><Link to="/vault/v/doc/guides%2Flast.md">Reopen outlier</Link>
+      <PublishCurrent onlyOnResource value={{ vault: "v", title: "Outlier", kind: "Document", collectionPath: "guides", resourceRef: "guides/last.md" }} />
+      <VaultExplorer vault="v" />
+    </ResourceLocationProvider></MemoryRouter>);
+    await screen.findByRole("treeitem", { name: /^Document:\s*Outlier$/ });
+    await user.click(screen.getByRole("link", { name: "Return to Vault" }));
+    await user.click(screen.getByRole("button", { name: /^Filter collections/ }));
+    await user.click(screen.getByRole("button", { name: "Resource type" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^Tables/ }));
+    await user.click(screen.getByRole("link", { name: "Reopen outlier" }));
+    expect(await screen.findByRole("treeitem", { name: /^Document:\s*Outlier$/ })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("keeps the reserved guide protected when its authorized row is outside the page", async () => {
+    vaultInfoMock.mockResolvedValue({ role: "writer" });
+    browseMock.mockResolvedValue({ ...sample, complete: false, next_cursor: "next", items: [sample.items[0]] });
+    render(<MemoryRouter initialEntries={["/vault/v/doc/overview%2Fvault-skill.md"]}><ResourceLocationProvider identity="writer">
+      <PublishCurrent value={{ vault: "v", title: "Vault guide", kind: "Document", collectionPath: "overview", resourceRef: "overview/vault-skill.md" }} />
+      <VaultExplorer vault="v" />
+    </ResourceLocationProvider></MemoryRouter>);
+    expect(await screen.findByRole("treeitem", { name: /^Skill:\s*Vault guide/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Actions for Vault guide" })).not.toBeInTheDocument();
+  });
   it("renders collections from browse response", async () => {
     renderAt("/vault/v");
     expect(await screen.findByRole("button", { name: /^architecture/i })).toBeInTheDocument();
@@ -369,9 +458,10 @@ describe("VaultExplorer — rendering", () => {
     await user.click(screen.getByRole("menuitem", { name: /view details/i }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText("System boundaries and ownership.")).toBeInTheDocument();
-    expect(within(dialog).getByText("Documents")).toBeInTheDocument();
-    expect(within(dialog).getByText("Tables")).toBeInTheDocument();
-    expect(within(dialog).getByText("Files")).toBeInTheDocument();
+    expect(within(dialog).getByText("Loaded documents")).toBeInTheDocument();
+    expect(within(dialog).getByText(/not the complete Collection/)).toBeInTheDocument();
+    expect(within(dialog).getByText("Loaded tables")).toBeInTheDocument();
+    expect(within(dialog).getByText("Loaded files")).toBeInTheDocument();
   });
 
   it("opens row options without expanding and restores focus before title activation", async () => {
@@ -737,7 +827,7 @@ describe("VaultExplorer — error & empty", () => {
   });
 
   it("explains how the empty tree will fill when the vault has no items", async () => {
-    browseMock.mockResolvedValueOnce({ vault: "v", path: "", items: [] });
+    browseMock.mockResolvedValueOnce({ vault: "v", path: "", items: [], complete: true });
     renderAt("/vault/v");
     expect(await screen.findByText(/No collections yet/i)).toBeInTheDocument();
   });

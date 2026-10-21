@@ -234,7 +234,7 @@ function FilePageContent({ accessChecking }: { accessChecking: boolean }) {
   const creator = readableCreator(info?.created_by);
   const resolved = Boolean(info && vault && !infoLoading && !loadError && !accessChecking);
   usePublishResourceLocation(
-    resolved ? { vault: vault!, title: info!.name, kind: "File", collectionPath: info!.collection } : null,
+    resolved ? { vault: vault!, title: info!.name, kind: "File", collectionPath: info!.collection, resourceRef: fileId } : null,
   );
 
   if (accessChecking || infoLoading) {

@@ -25,7 +25,7 @@ import {
   Tag,
   X,
 } from "lucide-react";
-import { searchDocs, grepDocs, listVaults, type GrepDoc } from "@/lib/api";
+import { searchDocs, grepDocs, listVaults, type ApiError, type GrepDoc } from "@/lib/api";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -192,6 +192,7 @@ function SearchWorkspace() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scopeTooLarge, setScopeTooLarge] = useState(false);
   const [vaults, setVaults] = useState<string[] | null>(null);
   const [vaultsError, setVaultsError] = useState(false);
   const [vaultsRetry, setVaultsRetry] = useState(0);
@@ -215,6 +216,8 @@ function SearchWorkspace() {
   const [appliedOptions, setAppliedOptions] = useState<string | null>(null);
   const [appliedFilterSummary, setAppliedFilterSummary] = useState("");
   const queryInputRef = useRef<HTMLInputElement>(null);
+  const collectionInputRef = useRef<HTMLInputElement>(null);
+  const focusCollectionOnOpen = useRef(false);
   const filtersButtonRef = useRef<HTMLButtonElement>(null);
   const filterContentRef = useRef<HTMLDivElement>(null);
   const activeFiltersRef = useRef<HTMLDivElement>(null);
@@ -243,6 +246,7 @@ function SearchWorkspace() {
       setLoading(true);
       setSearched(true);
       setError(null);
+      setScopeTooLarge(false);
 
       try {
         if (searchMode === "dense") {
@@ -325,6 +329,8 @@ function SearchWorkspace() {
       } catch (caught) {
         if (id !== reqId.current) return;
         setError(caught instanceof Error ? caught.message : "Search failed");
+        const apiError = caught as ApiError<{ code?: string }> | null;
+        setScopeTooLarge(apiError?.status === 422 && apiError?.detail?.code === "grep_scope_too_large");
         if (typeof caught === "object" && caught !== null && "status" in caught && (caught.status === 401 || caught.status === 403)) {
           setDenseResults([]); setLiteralResults([]); setTotal(0); setTotalMatches(0);
           setReturnedDocs(0); setReturnedMatches(0); setTruncated(false); setDegraded(false);
@@ -403,6 +409,7 @@ function SearchWorkspace() {
       setLoading(false);
       setSearched(false);
       setError(null);
+      setScopeTooLarge(false);
     }
 
     return () => {
@@ -562,7 +569,7 @@ function SearchWorkspace() {
   const resultStatus = loading
     ? "Searching…"
     : error
-      ? "Search unavailable"
+      ? scopeTooLarge ? "Search scope too large" : "Search unavailable"
       : archiveUnsupported
         ? "Document state filter unavailable"
         : !searched
@@ -732,7 +739,7 @@ function SearchWorkspace() {
         {loading
           ? "Searching…"
           : error
-            ? "Search failed"
+            ? scopeTooLarge ? "Search scope too large; choose a narrower Collection" : "Search failed"
             : !searched
               ? ""
               : degraded
@@ -899,18 +906,21 @@ function SearchWorkspace() {
 
               {error && !loading && (
                 <Alert
-                  variant="destructive"
-                  title={hasResults ? "Search could not be updated; previous results shown" : "Search unavailable"}
+                  variant={scopeTooLarge ? "warning" : "destructive"}
+                  title={scopeTooLarge ? "Narrow the search scope" : hasResults ? "Search could not be updated; previous results shown" : "Search unavailable"}
                   className="rounded-[var(--radius-md)]"
                 >
-                  {error}.{" "}
-                  <button
+                  {error}{" "}
+                  {scopeTooLarge ? <button type="button" onClick={() => {
+                    focusCollectionOnOpen.current = true;
+                    setFiltersOpen(true);
+                  }} className={inlineActionClass}>Choose a Collection in Filters</button> : <button
                     type="button"
                     onClick={() => void doSearch(q, mode, scopeVaults)}
                     className={inlineActionClass}
                   >
                     Retry
-                  </button>
+                  </button>}
                 </Alert>
               )}
 
@@ -1031,7 +1041,12 @@ function SearchWorkspace() {
           className="search-filter-panel flex max-w-lg flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11"
           onOpenAutoFocus={(event) => {
             event.preventDefault();
-            filterContentRef.current?.querySelector<HTMLElement>("[data-filter-title]")?.focus();
+            if (focusCollectionOnOpen.current) {
+              collectionInputRef.current?.focus();
+              focusCollectionOnOpen.current = false;
+            } else {
+              filterContentRef.current?.querySelector<HTMLElement>("[data-filter-title]")?.focus();
+            }
           }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
@@ -1061,6 +1076,7 @@ function SearchWorkspace() {
                 <Input
                   className="search-compact-control min-h-11 text-ui"
                   id="search-collection"
+                  ref={collectionInputRef}
                   value={collectionDraft}
                   onChange={(event) =>
                     setCollectionDraft(event.target.value)

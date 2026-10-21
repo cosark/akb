@@ -196,3 +196,8 @@ catalog reads propagate dependency failures rather than reporting a false zero;
 schema-only reads still avoid the count altogether. The cancellation probe above
 is historical evidence from before that separate fix, not the current cancellation
 contract. See [database recovery](database-recovery.md) for its scope and limits.
+
+Integration with PR #762 also preserves bounded Vault navigation and ancestry.
+The Table location publishes its resource reference from the authorized
+schema-only catalog; tree paging and count/page query caches remain separate.
+Unknown Table sizes use the shared deletion wording without inventing a zero.

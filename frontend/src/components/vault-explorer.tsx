@@ -28,9 +28,11 @@ import {
 import { Alert } from "@/components/ui/alert";
 import { RailCollapseButton, RailFilterField, RailFilterToggle, RailIdentity, RailManagement } from "@/components/navigation-rail-controls";
 import { LoadingState } from "@/components/ui/loading-state";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SkillBadge } from "@/components/ui/skill-badge";
-import { useVaultTree, useExpandedPaths, type NodeKind, type TreeNode } from "@/hooks/use-vault-tree";
+import { buildTree, useVaultTree, useExpandedPaths, type NodeKind, type TreeNode } from "@/hooks/use-vault-tree";
+import { useResourceLocation } from "@/contexts/resource-location-context";
 import { useVaultRefresh } from "@/contexts/vault-refresh-context";
 import { useOpenDocumentCreateDialog } from "@/contexts/document-create-dialog-context";
 import {
@@ -56,7 +58,7 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { recentTone } from "@/lib/recent";
-import { isReservedCollection } from "@/lib/skill";
+import { isReservedCollection, VAULT_SKILL_PATH } from "@/lib/skill";
 import { CreateCollectionDialog } from "@/components/create-collection-dialog";
 import {
   CollectionDetailsDialog,
@@ -68,7 +70,7 @@ import { TableCreateDialog } from "@/components/table-create-dialog";
 import { SelectMenu } from "@/components/ui/select-menu";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { parseFileUri } from "@/lib/uri";
+import { docUri, fileUri, tableUri, parseFileUri } from "@/lib/uri";
 import { ResourceActionsMenu } from "@/components/resource-actions-menu";
 import {
   ResourceDeleteDialog,
@@ -121,10 +123,10 @@ export function VaultExplorer({
   onCollapse,
 }: VaultExplorerProps) {
   const user = useCurrentUser();
+  const currentResource = useResourceLocation();
   const filterOwner = JSON.stringify([vault, user?.user_id ?? null]);
   const [scopeSelection, setScopeSelection] = useState<{ vault: string; scope: ArchiveScope }>({ vault, scope: "unarchived" });
   const archiveScope = scopeSelection.vault === vault ? scopeSelection.scope : "unarchived";
-  const { tree, loading, refreshing, showingPreviousScope, unsupported, error, refetch } = useVaultTree(vault, archiveScope);
   const openCreateDocument = useOpenDocumentCreateDialog();
   const refreshCtx = useVaultRefresh();
   // Prefer the explicit prop; otherwise fall back to context. This lets
@@ -132,13 +134,6 @@ export function VaultExplorer({
   // refreshes for production.
   const handleMutation = onMutation ?? refreshCtx.refetchTree;
 
-  // Publish our refetch upward exactly once per change so the parent can
-  // forward it to a context provider. `onRefetchReady` should itself be
-  // stable; calling it on every render is fine — React deduplicates the
-  // setState inside the parent if the function identity matches.
-  useEffect(() => {
-    onRefetchReady?.(refetch);
-  }, [onRefetchReady, refetch]);
   const { expanded, toggle, revealAncestorsOf } = useExpandedPaths(vault);
   const { pathname, search, key: locationKey } = useLocation();
   const requestedCollection = pathname === `/vault/${encodeURIComponent(vault)}`
@@ -164,6 +159,52 @@ export function VaultExplorer({
     if (collection) revealAncestorsOf(`${collection}/_`);
   }, [filterOwner, revealAncestorsOf]);
   const [kindFilter, setKindFilter] = useState<ResourceKind | "all">("all");
+  const { tree: pageTree, items: pageItems, loading, refreshing, showingPreviousScope, unsupported, error, refetch,
+    complete, paginationUnsupported, hasMore, loadingMore, loadMore } = useVaultTree(vault, archiveScope, {
+      collection: collectionScope || undefined,
+      content_type: kindFilter === "all" ? "all" : `${kindFilter}s` as "documents" | "tables" | "files",
+    });
+  const tree = useMemo(() => {
+    if (!pageTree || !pageItems || currentResource?.vault !== vault || !currentResource.resourceRef) return pageTree;
+    const kind = { Document: "document", File: "file", Table: "table" }[currentResource.kind] as ResourceKind;
+    if (archiveScope === "archived" && (kind !== "document" || currentResource.status !== "archived")) return pageTree;
+    if (archiveScope === "unarchived" && currentResource.status === "archived") return pageTree;
+    const ref = currentResource.resourceRef;
+    const uri = kind === "document" ? docUri(vault, ref) : kind === "file"
+      ? fileUri(vault, ref, currentResource.collectionPath) : tableUri(vault, ref, currentResource.collectionPath);
+    if (pageItems.some(item => item.uri === uri || (item.type === kind && item.path === ref))) return pageTree;
+    // The current reader already verified this identity and access. Include
+    // that single row without downloading every preceding directory page.
+    const navigation: { type: "collection"; name: string; path: string }[] = [];
+    const collectNavigation = (nodes: TreeNode[]) => nodes.forEach(node => {
+      if (node.kind !== "collection") return;
+      navigation.push({ ...node.raw, type: "collection", name: node.name, path: node.path });
+      collectNavigation(node.children ?? []);
+    });
+    collectNavigation(pageTree);
+    return buildTree([...navigation, ...pageItems, { type: kind, name: currentResource.title, path: ref,
+      uri, collection: currentResource.collectionPath, status: currentResource.status }]);
+  }, [pageTree, pageItems, currentResource, vault, archiveScope]);
+  const resourceRevealKey = currentResource?.vault === vault && currentResource.resourceRef
+    ? `${filterOwner}:${currentResource.kind}:${currentResource.resourceRef}` : null;
+  const revealedResource = useRef<{ key: string; pathname: string } | null>(null);
+  useEffect(() => {
+    if (!resourceRevealKey || !currentResource) {
+      // Leaving this reader permits a later visit to reveal it again. A
+      // same-route access proof must not undo the user's manual collapse.
+      if (revealedResource.current?.pathname !== pathname) revealedResource.current = null;
+      return;
+    }
+    if (revealedResource.current?.key === resourceRevealKey) return;
+    revealedResource.current = { key: resourceRevealKey, pathname };
+    setFilter("");
+    changeCollectionScope(currentResource.collectionPath || "");
+    setKindFilter("all");
+    setScopeSelection({ vault, scope: currentResource.status === "archived" ? "all" : "unarchived" });
+  }, [resourceRevealKey, currentResource, vault, pathname, setFilter, changeCollectionScope]);
+  useEffect(() => {
+    onRefetchReady?.(refetch);
+  }, [onRefetchReady, refetch]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const filtersId = useId();
   const activeFilterCount = Number(Boolean(collectionScope)) + Number(archiveScope !== "unarchived") + Number(archiveScope !== "archived" && kindFilter !== "all");
@@ -231,11 +272,13 @@ export function VaultExplorer({
     tableCount: number;
     fileCount: number;
     subCollectionCount: number;
+    countsComplete: boolean;
   } | null>(null);
   const [detailsTarget, setDetailsTarget] = useState<{
     path: string;
     summary?: string | null;
     counts: CollectionResourceCounts;
+    countsComplete: boolean;
     editable: boolean;
   } | null>(null);
   const [uploadCollection, setUploadCollection] = useState<string | null>(null);
@@ -244,7 +287,7 @@ export function VaultExplorer({
     kind: DeletableResourceKind;
     name: string;
     ref: string;
-    rowCount: number;
+    rowCount?: number;
     active: boolean;
   } | null>(null);
   const mutationTriggerRef = useRef<HTMLElement | null>(null);
@@ -276,7 +319,7 @@ export function VaultExplorer({
   useEffect(() => {
     if (!requestedCollection) return;
     setFilter("");
-    changeCollectionScope("");
+    changeCollectionScope(requestedCollection);
     setKindFilter("all");
     setScopeSelection({ vault, scope: "unarchived" });
     revealAncestorsOf(`${requestedCollection}/_`);
@@ -367,25 +410,25 @@ export function VaultExplorer({
       {
         value: "all",
         label: "All",
-        hint: `${resourceTotal.toLocaleString()} resources`,
+        hint: `${resourceTotal.toLocaleString()} ${complete && kindFilter === "all" ? "resources in this scope" : "loaded resources"}`,
       },
       {
         value: "document",
         label: "Documents",
-        hint: `${resourceCounts.document.toLocaleString()} documents`,
+        hint: kindFilter !== "all" && kindFilter !== "document" ? "Not loaded in this view" : `${resourceCounts.document.toLocaleString()} ${complete ? "documents in this scope" : "loaded documents"}`,
       },
       {
         value: "table",
         label: "Tables",
-        hint: `${resourceCounts.table.toLocaleString()} tables`,
+        hint: kindFilter !== "all" && kindFilter !== "table" ? "Not loaded in this view" : `${resourceCounts.table.toLocaleString()} ${complete ? "tables in this scope" : "loaded tables"}`,
       },
       {
         value: "file",
         label: "Files",
-        hint: `${resourceCounts.file.toLocaleString()} files`,
+        hint: kindFilter !== "all" && kindFilter !== "file" ? "Not loaded in this view" : `${resourceCounts.file.toLocaleString()} ${complete ? "files in this scope" : "loaded files"}`,
       },
     ],
-    [resourceCounts, resourceTotal],
+    [resourceCounts, resourceTotal, complete, kindFilter],
   );
 
   /** Full flattened row list (without cap). */
@@ -605,36 +648,40 @@ export function VaultExplorer({
             />
         </label>
         </div>
-        {activeFilterCount > 0 && <div className="flex items-center justify-between gap-2 pb-1 text-xs text-foreground-muted"><span>{activeFilterCount} active {activeFilterCount === 1 ? "filter" : "filters"}</span><button type="button" onClick={() => { changeArchiveScope("unarchived"); setKindFilter("all"); changeCollectionScope(""); focusResourceFilter(); }} className="rounded-[var(--radius-sm)] text-link focus-visible:ring-2 focus-visible:ring-ring">Reset filters</button></div>}
       </div>
 
+      {activeFilterCount > 0 && <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2 text-xs text-foreground-muted"><span>{activeFilterCount} active {activeFilterCount === 1 ? "filter" : "filters"}</span><button type="button" onClick={() => { changeArchiveScope("unarchived"); setKindFilter("all"); changeCollectionScope(""); focusResourceFilter(); }} className="rounded-[var(--radius-sm)] text-link focus-visible:ring-2 focus-visible:ring-ring">Reset filters</button></div>}
       <div
         ref={listRef}
         role="tree"
         aria-label={`${vault} explorer`}
-        aria-busy={loading || refreshing || undefined}
+        aria-busy={loading || refreshing || loadingMore || undefined}
         onKeyDown={onKeyDown}
         className="min-h-0 flex-1 overflow-y-auto rail-scroll"
       >
         {loading && <VaultExplorerLoading />}
         {showingPreviousScope && (
-          <p role="status" className="px-3 py-2 text-xs text-foreground-muted">Previous document state view shown{refreshing ? " while updating…" : ". Refresh to try again."}</p>
+            <p role="status" className="px-3 py-2 text-xs text-foreground-muted">Previous view shown{refreshing ? " while updating…" : ". Refresh to try again."}</p>
         )}
         {error && <Alert variant="destructive" className="m-2">{error}</Alert>}
+        {paginationUnsupported && <Alert variant="warning" className="m-2">This server did not confirm bounded paging. Update the backend to browse large Vaults in bounded requests.</Alert>}
+        {!loading && hasMore && <p role="status" className="px-3 py-2 text-xs text-foreground-muted">
+          Only part of this scope is loaded. Name filters and counts apply to loaded items; choose a Collection or resource type to narrow the server request.
+        </p>}
         {unsupported && (
           <Alert variant="warning" className="m-2">
             This server does not support this document state view yet. Update the server or{" "}
             <button type="button" onClick={() => changeArchiveScope("unarchived")} className="underline focus-visible:ring-2 focus-visible:ring-ring">show current documents</button>.
           </Alert>
         )}
-        {!loading && !refreshing && !error && !unsupported && (total === 0 || (archiveScope === "archived" && resourceCounts.document === 0)) && (
+        {!loading && !refreshing && !error && !unsupported && complete && (total === 0 || (archiveScope === "archived" && resourceCounts.document === 0)) && (
           <div className="px-3 py-4 text-xs leading-relaxed text-foreground-muted" role="status">
             {archiveScope === "archived" ? `No archived documents in this ${collectionScope ? "Collection" : "Vault"}.` : "No collections yet — the tree fills in with your first document."}
           </div>
         )}
         {!loading && !refreshing && !unsupported && total > 0 && visibleRows.length === 0 && !(archiveScope === "archived" && resourceCounts.document === 0) && (
           <div className="coord px-3 py-2" role="status">
-            No resources match these filters.
+            {complete ? "No resources match these filters." : "No loaded resources match these filters. More items may be available."}
             {collectionScope && <button type="button" onClick={() => { changeCollectionScope(""); focusResourceFilter(); }} className="mt-2 block text-link underline focus-visible:ring-2 focus-visible:ring-ring">Search all collections</button>}
           </div>
         )}
@@ -685,6 +732,7 @@ export function VaultExplorer({
                     path: node.path,
                     summary: node.raw?.summary,
                     counts,
+                    countsComplete: complete && kindFilter === "all" && archiveScope === "all",
                     editable: canWrite && !isReservedCollection(node.path),
                   });
                 }}
@@ -696,6 +744,7 @@ export function VaultExplorer({
                     tableCount: counts.tables,
                     fileCount: counts.files,
                     subCollectionCount: countSubCollections(node),
+                    countsComplete: complete && kindFilter === "all" && archiveScope === "all",
                   });
                 }}
                 onDeleteResource={(node) => {
@@ -703,7 +752,7 @@ export function VaultExplorer({
                     kind: node.kind as DeletableResourceKind,
                     name: node.name,
                     ref: node.path,
-                    rowCount: Number(node.raw?.row_count || 0),
+                    rowCount: typeof node.raw?.row_count === "number" ? node.raw.row_count : undefined,
                     active: `${node.kind}:${node.path}` === activeSig,
                   });
                 }}
@@ -724,6 +773,12 @@ export function VaultExplorer({
               {(fullRows.length - visibleRows.length).toLocaleString()}
             </button>
           )}
+        {!loading && !unsupported && hasMore && <div className="space-y-1 px-3 py-2">
+          <Button type="button" variant="outline" size="sm" loading={loadingMore} disabled={refreshing} onClick={loadMore}>
+            {error ? "Retry loading more items" : "Load next page"}
+          </Button>
+          <p className="text-xs text-foreground-muted">Up to 100 more identities; previous items stay visible.</p>
+        </div>}
 
       </div>
 
@@ -752,6 +807,7 @@ export function VaultExplorer({
         tableCount={deleteTarget?.tableCount ?? 0}
         fileCount={deleteTarget?.fileCount ?? 0}
         subCollectionCount={deleteTarget?.subCollectionCount ?? 0}
+        countsComplete={deleteTarget?.countsComplete ?? false}
         open={deleteTarget !== null}
         onOpenChange={(o) => {
           if (!o) setDeleteTarget(null);
@@ -787,6 +843,7 @@ export function VaultExplorer({
         path={detailsTarget?.path ?? ""}
         summary={detailsTarget?.summary}
         counts={detailsTarget?.counts ?? { documents: 0, tables: 0, files: 0 }}
+        countsComplete={detailsTarget?.countsComplete ?? false}
         editable={detailsTarget?.editable ?? false}
         open={detailsTarget !== null}
         onOpenChange={(next) => {
@@ -1035,7 +1092,7 @@ const TreeRow = memo(function TreeRow({
   }
 
   const href = leafHref(vault, node);
-  const isSkill = node.kind === "document" && node.raw?.doc_type === "skill";
+  const isSkill = node.kind === "document" && (node.raw?.doc_type === "skill" || node.path === VAULT_SKILL_PATH);
   const LeafIcon = isSkill ? Sparkles : node.kind === "document" ? FileText : node.kind === "table" ? Table : Paperclip;
   // Tint the leaf icon by resource kind from the categorical ramp (the same
   // doc=cat-1 / table=cat-3 / file=cat-4 mapping the Home + overview rows use),

@@ -403,6 +403,9 @@ jobs:
             # publisher drain — a fake proves nothing, and off this list
             # the file skips in the unit job too and the fix ships ungated.
             tests/test_dynamic_table_rows_changed_postgres.py
+            # Identity pages and byte guards must exercise real snapshot and
+            # pool behavior, not silently skip in the DB-free unit lane.
+            tests/test_browse_pages_postgres.py
           )
           # A truncated list is the failure this step has already had
           # once, and it reads as a pass. Both halves of that are worth

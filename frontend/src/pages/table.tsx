@@ -277,7 +277,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
   const queryError = tableRowsError(rowsQuery.error, Boolean(info));
   const resolvedLocation = vault && info && !accessRefreshing && catalogQuery.data?.queryAccessRevision === accessRevision
       && !vaultInfoQuery.isError && !catalogQuery.isError && !rowsQuery.isError && !rowsQuery.isPending
-      ? { vault, title: info.name, kind: "Table" as const, collectionPath: info.collection || undefined }
+      ? { vault, title: info.name, kind: "Table" as const, collectionPath: info.collection || undefined, resourceRef: info.name }
       : null;
   usePublishResourceLocation(resolvedLocation);
 

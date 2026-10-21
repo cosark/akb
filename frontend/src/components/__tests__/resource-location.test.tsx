@@ -81,7 +81,7 @@ describe("Resource location", () => {
     const trails = screen.getAllByRole("navigation", { name: "Resource location" });
     await waitFor(() => expect(within(trails[0]).getByRole("link", { name: "Team guides" })).toBeInTheDocument());
     expect(browseVault).toHaveBeenCalledTimes(1);
-    expect(browseVault).toHaveBeenCalledWith("팀 Vault", undefined, -1);
+    expect(browseVault).toHaveBeenCalledWith("팀 Vault", "engineering/platform/guides", 0, { content_type: "collections", page_size: 1 });
     for (const trail of trails) {
       expect(trail.querySelector("ol")).toBeInTheDocument();
       expect(within(trail).getByRole("link", { name: "팀 Vault" })).toHaveAttribute("href", "/vault/%ED%8C%80%20Vault");

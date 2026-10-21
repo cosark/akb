@@ -74,6 +74,22 @@ function renderAuthenticatedAt(url: string) {
   );
 }
 
+it("explains protective grep scope rejection without retrying the unchanged scope", async () => {
+  const user = userEvent.setup();
+  mockedGrep.mockRejectedValueOnce(Object.assign(new Error("Candidate resources exceed 10000. Narrow the collection scope."), {
+    status: 422, detail: { code: "grep_scope_too_large" },
+  }));
+  renderAt("/search?q=needle&mode=literal&v=eng");
+  expect(await screen.findByText("Narrow the search scope")).toBeVisible();
+  expect(screen.getByText("Search scope too large", { exact: true })).toBeVisible();
+  expect(screen.queryByText("Search unavailable", { exact: true })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Choose a Collection in Filters" }));
+  expect(screen.getByRole("dialog", { name: "Search filters" })).toBeVisible();
+  expect(screen.getByLabelText("Collection path (including children)")).toHaveFocus();
+  expect(mockedGrep).toHaveBeenCalledTimes(1);
+});
+
 async function selectMethod(user: ReturnType<typeof userEvent.setup>, method: "By meaning" | "Exact text") {
   await user.click(screen.getByRole("button", { name: "Search method" }));
   await user.click(screen.getByRole("menuitemradio", { name: new RegExp(`^${method}`) }));

@@ -708,6 +708,7 @@ class NativeRevisionRepository:
         surface: str,
         path_like: str | None = None,
         max_slashes: int | None = None,
+        resource_ids: list[uuid.UUID] | None = None,
         paths: list[str] | None = None,
         excluded_paths: list[str] | None = None,
         before: tuple[datetime, uuid.UUID] | None = None,
@@ -724,6 +725,9 @@ class NativeRevisionRepository:
         """
         params: list[object] = [namespace_id, surface]
         clauses = ["rs.namespace_id = $1", "rs.surface = $2", "rs.lifecycle = 'live'"]
+        if resource_ids is not None:
+            params.append(resource_ids)
+            clauses.append(f"rs.resource_id = ANY(${len(params)}::uuid[])")
         if path_like is not None:
             params.append(path_like)
             clauses.append(f"rs.current_path LIKE ${len(params)} ESCAPE '\\'")

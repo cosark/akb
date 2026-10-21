@@ -579,6 +579,8 @@ function DocumentPageContent({
     title: docQuery.data.title || "Untitled document",
     kind: "Document" as const,
     collectionPath: documentCollection(docQuery.data.path || ""),
+    resourceRef: docQuery.data.path,
+    status: docQuery.data.status,
   } : null;
   usePublishResourceLocation(resolvedLocation, presentation === "page");
   const historyQuery = useQuery({

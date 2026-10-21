@@ -469,6 +469,22 @@ class ValidationError(AKBError, ValueError):
         super().__init__(message, status_code=422)
 
 
+class GrepScopeTooLargeError(ValidationError):
+    """A protective scan rejection, not zero matches or a service outage."""
+
+    def __init__(self, unit: str, limit: int):
+        from app.util.errors import GREP_SCOPE_TOO_LARGE
+
+        AKBError.__init__(
+            self,
+            f"native grep candidate {unit} exceed {limit}. Narrow the Vault or collection scope; "
+            "lowering the result limit does not reduce candidate scanning.",
+            status_code=422, code=GREP_SCOPE_TOO_LARGE,
+            hint="Use collection=<path> (includes descendants). path is not a supported grep parameter. Do not retry the unchanged broad scope.",
+            details={"limit_kind": unit, "candidate_limit": limit},
+        )
+
+
 class InvalidColumnTypeError(AKBError, ValueError):
     """Unsupported dynamic-table column type → HTTP 400 invalid_column_type."""
 

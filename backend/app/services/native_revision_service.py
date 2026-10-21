@@ -1659,6 +1659,7 @@ class NativeRevisionService:
         surface: str,
         path_like: str | None = None,
         max_slashes: int | None = None,
+        resource_ids: list[uuid.UUID] | None = None,
         paths: list[str] | None = None,
         excluded_paths: list[str] | None = None,
         before: tuple[datetime, uuid.UUID] | None = None,
@@ -1674,7 +1675,7 @@ class NativeRevisionService:
         Resource.
         """
         bounded: dict[str, Any] = {}
-        for key, value in (("paths", paths), ("excluded_paths", excluded_paths),
+        for key, value in (("resource_ids", resource_ids), ("paths", paths), ("excluded_paths", excluded_paths),
                            ("before", before), ("limit", limit), ("conn", conn)):
             if value is not None:
                 bounded[key] = value

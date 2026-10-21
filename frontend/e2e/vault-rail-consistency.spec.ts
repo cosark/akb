@@ -18,7 +18,7 @@ for (const dark of [false, true]) test(`Vault navigation rails ${dark ? "dark" :
     if (path.endsWith("/auth/me")) return route.fulfill({ json: { user_id: "rail-user", username: "reader", display_name: "Workspace User", is_admin: false, auth_method: "local" } });
     if (path.endsWith("/vaults")) return route.fulfill({ json: { vaults: [{ id: "team-id", name: "team", role: "owner" }, { id: "research-id", name: "research", role: "reader" }] } });
     if (path.endsWith("/info")) return route.fulfill({ json: { name: "team", role: "owner", document_count: 1 } });
-    if (path.includes("/browse/")) return route.fulfill({ json: { vault: "team", path: "", archive_scope: url.searchParams.get("archive_scope") || "unarchived", items: [
+    if (path.includes("/browse/")) return route.fulfill({ json: { vault: "team", path: "", complete: true, next_cursor: null, archive_scope: url.searchParams.get("archive_scope") || "unarchived", items: [
       { type: "collection", name: "guides", path: "guides", doc_count: 1 },
       { type: "document", name: "Getting started", path: "guides/start.md" },
     ] } });
@@ -40,11 +40,11 @@ for (const dark of [false, true]) test(`Vault navigation rails ${dark ? "dark" :
   await expect(collections.getByRole("button", { name: "Collection document state" })).toBeHidden();
   await page.screenshot({ path: testInfo.outputPath("rails.png"), fullPage: true });
   await collections.getByRole("searchbox").fill("not found");
-  await collections.getByRole("button", { name: "Filter collections", exact: true }).click();
+  await collections.getByRole("button", { name: "Filter collections, 1 active", exact: true }).click();
   await collections.getByRole("button", { name: "Collection document state" }).click();
   await page.getByRole("menuitemradio", { name: /^All documents/ }).click();
   await expect(collections.getByRole("searchbox")).toHaveValue("not found");
-  await collections.getByRole("button", { name: "Filter collections, 1 active" }).click();
+  await collections.getByRole("button", { name: "Filter collections, 2 active", exact: true }).click();
   await collections.getByRole("button", { name: "Reset filters" }).click();
   await collections.getByRole("button", { name: "Clear filter resources" }).click();
   await expect(collections.getByRole("searchbox")).toBeFocused();
