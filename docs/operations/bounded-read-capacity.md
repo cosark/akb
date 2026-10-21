@@ -34,10 +34,10 @@ Vault**, even when the consumer needed schema only.
 
 ## Changes
 
-1. Migration 116 adds a partial B-tree on live document resources ordered by
+1. Migration 117 adds a partial B-tree on live document resources ordered by
    `(updated_at DESC, resource_id DESC)`. ACL and subscription checks remain
    before `LIMIT`; payload integrity/placement verification is unchanged.
-2. New Tables receive a B-tree on `(created_at DESC, id DESC)`. Migration 117
+2. New Tables receive a B-tree on `(created_at DESC, id DESC)`. Migration 118
    adds the same index to existing registered Tables. PostgreSQL maintains it
    across REST, MCP, raw SQL and application writes. Names use the existing
    length-bounded, schema-global identifier generator.
@@ -152,7 +152,7 @@ empty-page receipt. Loaded rows always take precedence over a historical count.
 
 Deploy the backend for the catalog option/migrations and the frontend for the
 new consumer flow. No PostgreSQL image change is required for these indexes.
-Migrations 116–117 run in the existing atomic migration runner; index creation
+Migrations 117–118 run in the existing atomic migration runner; index creation
 can block writes until commit. The measured fixture build was about 0.1 seconds
 for recent and 4.6 seconds for all registered Table page indexes, including a
 roughly 221 MiB index on the large Table. Larger installations should schedule

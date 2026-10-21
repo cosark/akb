@@ -68,7 +68,7 @@ async def test_existing_and_new_tables_share_default_page_index(monkeypatch):
             return await conn.fetchval("SELECT pg_get_indexdef(to_regclass($1))", index)
         assert "(created_at DESC, id DESC)" in await definition()
         await conn.execute(f"DROP INDEX {index}")
-        migration = _load_migration("117_table_page_order.py")
+        migration = _load_migration("118_table_page_order.py")
         await migration.migrate(conn)
         await migration.migrate(conn)
         assert "(created_at DESC, id DESC)" in await definition()

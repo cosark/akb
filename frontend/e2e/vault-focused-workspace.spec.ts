@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 test.skip(process.env.AKB_FE_E2E_MODE === "mock", "Uses isolated HTTP fixtures, never a user's data.");
-test.use({ reducedMotion: "reduce", launchOptions: { args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] } });
+test.use({ contextOptions: { reducedMotion: "reduce" }, launchOptions: { args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] } });
 
 async function fixture(page: Page, dark = false, treeVisible = "1") {
   await page.addInitScript(({ dark, treeVisible }) => {
@@ -41,24 +41,24 @@ for (const width of [375, 1920]) for (const dark of [false, true]) for (const [r
     await page.setViewportSize({ width, height: 1000 });
     await fixture(page, dark);
     await page.goto(`/vault/fixture/${route}`);
-    const switcher = page.getByRole("button", { name: "Navigate in fixture", exact: true });
-    await expect(switcher).toBeVisible();
-    await expect(switcher).toHaveText("Navigate");
+    await expect(page.getByRole("button", { name: "Navigate in fixture", exact: true })).toHaveCount(0);
     const trail = page.getByRole("navigation", { name: "Current page", exact: true });
     await expect(trail.locator('[aria-current="page"]')).toHaveText(label);
     await expect(trail.getByRole("button")).toHaveCount(0);
-    await expect(trail.getByRole("link", { name: "fixture", exact: true })).toHaveAttribute("href", "/vault/fixture");
-    const triggerBox = (await switcher.boundingBox())!;
-    const trailBox = (await trail.boundingBox())!;
-    expect(triggerBox.x + triggerBox.width).toBeLessThanOrEqual(trailBox.x);
+    const backToVault = trail.getByRole("link", { name: "Back to fixture", exact: true });
+    await expect(backToVault).toHaveAttribute("href", "/vault/fixture");
+    const backBox = (await backToVault.boundingBox())!;
+    expect(backBox.height).toBeGreaterThanOrEqual(44);
+    expect(backBox.width).toBeGreaterThanOrEqual(44);
+    await expect(page.getByRole("navigation", { name: "Vault pages", exact: true })).toHaveCount(0);
     await expect(page.locator('[data-workspace-mode="focused"]')).toBeVisible();
     await expect(page.locator('[data-slot="vault-collections-sidebar"]')).toHaveCount(0);
     await expect(page.getByRole("navigation", { name: "Collections (collapsed)" })).toHaveCount(0);
     await expect(page.getByRole("separator", { name: "Resize tree panel" })).toHaveCount(0);
     await expect(page.getByRole("navigation", { name: "Vault sections" })).toHaveCount(0);
     if (route === "settings") {
-      await expect(page.getByRole("region", { name: "General", exact: true })).toBeVisible();
-      await expect(page.getByRole("region", { name: "Access", exact: true })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Vault details", exact: true })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Access permissions", exact: true })).toBeVisible();
       await expect(page.getByRole("region", { name: "Vault guide", exact: true })).toBeVisible();
       await expect(page.getByRole("region", { name: "Danger zone", exact: true })).toBeVisible();
       await expect(page.getByRole("tablist")).toHaveCount(0);
@@ -77,45 +77,56 @@ for (const width of [375, 1920]) for (const dark of [false, true]) for (const [r
       const header = (await page.locator(".app-header").boundingBox())!;
       expect(header.x).toBeCloseTo(navigation.x + navigation.width, 0);
     }
-    await switcher.click();
-    const menu = page.getByRole("menu", { name: "Vault pages", exact: true });
-    await expect(menu).toBeVisible();
-    await expect(menu.getByRole("menuitem")).toHaveCount(5);
-    await expect(menu.getByRole("menuitem", { name: label, exact: true })).toHaveAttribute("aria-current", "page");
+    await backToVault.focus();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\/vault\/fixture$/);
+    await expect(trail.locator('[aria-current="page"]')).toHaveText("fixture");
+    const pages = page.getByRole("navigation", { name: "Vault pages", exact: true });
+    await expect(pages.getByRole("link")).toHaveCount(4);
+    const destination = pages.getByRole("link", { name: label, exact: true });
+    await expect(destination).toHaveAttribute("href", `/vault/fixture/${route}`);
+    await destination.focus();
+    await page.keyboard.press("Enter");
+    await expect(trail.locator('[aria-current="page"]')).toHaveText(label);
+    await expect(page.locator("#main")).toBeFocused();
+    await expect(pages).toHaveCount(0);
     expect(await page.evaluate(() => document.body.style.overflow)).not.toBe("hidden");
-    await page.keyboard.press("Escape");
-    await expect(switcher).toBeFocused();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(await page.evaluate(() => localStorage.getItem("akb.treeVisible"))).toBe("1");
     await page.screenshot({ path: testInfo.outputPath(`${route}.png`), animations: "disabled" });
   });
 }
 
-for (const treeVisible of ["0", "1"]) test(`page switching and history preserve tree preference ${treeVisible}`, async ({ page }) => {
+for (const treeVisible of ["0", "1"]) test(`Overview navigation and history preserve tree preference ${treeVisible}`, async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1000 });
   await fixture(page, false, treeVisible);
   await page.goto("/vault/fixture/settings");
-  const switcher = page.getByRole("button", { name: "Navigate in fixture", exact: true });
   const trail = page.getByRole("navigation", { name: "Current page", exact: true });
-  await switcher.focus();
+  const backToVault = trail.getByRole("link", { name: "Back to fixture", exact: true });
+  await backToVault.focus();
   await page.keyboard.press("Enter");
-  await page.getByRole("menuitem", { name: "Members", exact: true }).focus();
+  await expect(trail.locator('[aria-current="page"]')).toHaveText("fixture");
+  await page.getByRole("navigation", { name: "Vault pages", exact: true }).getByRole("link", { name: "Members", exact: true }).focus();
   await page.keyboard.press("Enter");
   await expect(trail.locator('[aria-current="page"]')).toHaveText("Members");
-  await expect(switcher).toBeFocused();
-  await switcher.click();
-  await page.getByRole("menuitem", { name: "Overview", exact: true }).click();
-  await expect(switcher).toBeFocused();
+  await expect(page.locator("#main")).toBeFocused();
+  await backToVault.click();
   const collections = page.locator('[data-slot="vault-collections-sidebar"]');
   await expect(page.getByRole("navigation", { name: "Vault sections" })).toHaveCount(0);
-  await expect(trail.locator('[aria-current="page"]')).toHaveText("Overview");
+  await expect(trail.locator('[aria-current="page"]')).toHaveText("fixture");
   if (treeVisible === "1") await expect(collections).toBeVisible();
   else await expect(page.getByRole("button", { name: "Expand collections" })).toBeVisible();
   await page.goBack();
   await expect(trail.locator('[aria-current="page"]')).toHaveText("Members");
   await expect(collections).toHaveCount(0);
   await page.goBack();
+  await expect(trail.locator('[aria-current="page"]')).toHaveText("fixture");
+  if (treeVisible === "1") await expect(collections).toBeVisible();
+  else await expect(page.getByRole("button", { name: "Expand collections" })).toBeVisible();
+  await page.goBack();
   await expect(trail.locator('[aria-current="page"]')).toHaveText("Settings");
+  await page.goForward();
+  await expect(trail.locator('[aria-current="page"]')).toHaveText("fixture");
   await page.goForward();
   await expect(trail.locator('[aria-current="page"]')).toHaveText("Members");
   await page.reload();

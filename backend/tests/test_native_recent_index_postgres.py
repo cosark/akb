@@ -10,7 +10,7 @@ pytestmark = pytest.mark.asyncio
 
 async def test_recent_index_matches_live_document_keyset_and_is_idempotent():
     async with _fresh_database() as pool, pool.acquire() as conn:
-        migration = _load_migration("116_native_recent_order.py")
+        migration = _load_migration("117_native_recent_order.py")
         assert migration is not None, "Recent feed order migration must be installed"
         await migration.migrate(conn)
         await migration.migrate(conn)
@@ -22,5 +22,5 @@ async def test_recent_index_matches_live_document_keyset_and_is_idempotent():
         assert "surface = 'document'::text" in definition
         assert "lifecycle = 'live'::text" in definition
         assert await conn.fetchval("""
-            SELECT count(*) FROM schema_migrations WHERE filename='116_native_recent_order.py'
+            SELECT count(*) FROM schema_migrations WHERE filename='117_native_recent_order.py'
         """) == 1

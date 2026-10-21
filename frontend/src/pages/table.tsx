@@ -1,3 +1,4 @@
+import { readWithAccessBoundary } from "@/lib/query-access-boundary";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -34,7 +35,7 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { LoadingState } from "@/components/ui/loading-state";
+import { InlineLoadingState, LoadingState } from "@/components/ui/loading-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipText } from "@/components/ui/tooltip-text";
 import { ResourceActionsMenu } from "@/components/resource-actions-menu";
@@ -147,7 +148,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
   });
   const catalogQuery = useQuery({
     queryKey: ["vault-tables", vault, accountScope, "schema-only"],
-    queryFn: async () => ({ ...await listVaultTables(vault!, { includeRowCounts: false }), queryAccessRevision: accessRevision }),
+    queryFn: ({ queryKey, signal }) => readWithAccessBoundary(queryClient, queryKey, async () => ({ ...await listVaultTables(vault!, { includeRowCounts: false }), queryAccessRevision: accessRevision }), signal),
     enabled: Boolean(vault) && !accessChecking,
     staleTime: 0,
   });
@@ -198,7 +199,8 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
     retry: false,
   });
 
-  const info: VaultTableInfo | null =
+  const catalogDenied = catalogQuery.error instanceof ApiError && [401, 403, 404].includes(catalogQuery.error.status);
+  const info: VaultTableInfo | null = catalogDenied ? null :
     catalogQuery.data?.items.find((item) => item.name === table) || null;
   const displayPageSize = rowsQuery.data?.queryPageSize ?? queryState.pageSize;
   const rows = rowsQuery.data?.items.slice(0, displayPageSize) || [];
@@ -217,7 +219,8 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
     : accessRefreshing
       ? "Permissions are being refreshed. Row changes will be available once access is verified."
       : rowWriteRestriction(vaultInfoQuery.data, roleRank);
-  const canManageRows = writeRestriction === null;
+  const schemaReady = Boolean(info?.columns?.length) && !catalogQuery.isError;
+  const canManageRows = writeRestriction === null && schemaReady;
   const canPublish = roleRank >= ROLE_RANK.writer && !writeRestriction;
   const canDelete = roleRank >= ROLE_RANK.admin && !writeRestriction;
 
@@ -278,7 +281,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
       : null;
   usePublishResourceLocation(resolvedLocation);
 
-  if (vaultInfoQuery.isPending || catalogQuery.isPending || rowsQuery.isPending) {
+  if (vaultInfoQuery.isPending || rowsQuery.isPending) {
     return <TablePageLoading />;
   }
 
@@ -325,7 +328,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
               </span>
               <span className="inline-flex items-center gap-1.5 whitespace-nowrap tabular-nums">
                 <Columns3 className="h-3.5 w-3.5" aria-hidden />
-                {visibleColumnCount} columns
+                {visibleColumnCount || catalogQuery.isSuccess ? `${visibleColumnCount} columns` : "Columns unavailable"}
               </span>
             </div>
             {info?.description && (
@@ -424,7 +427,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                 }
                 onClear={() => setQueryState({ ...queryState, pageIndex: 0, filters: [] })}
                 onRefresh={() => void refreshTableData()}
-                refreshing={rowsQuery.isFetching}
+                refreshing={rowsQuery.isFetching || catalogQuery.isFetching}
               />
               {queryError && rowsQuery.data && (
                 <div className="shrink-0 border-b border-border p-3">
@@ -658,6 +661,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
         <aside
           id="table-schema-panel"
           aria-label="Table schema"
+          aria-busy={catalogQuery.isFetching}
           className="flex min-h-0 flex-1 flex-col overflow-hidden bg-surface"
         >
           <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
@@ -677,8 +681,14 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
             </Button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-4 rail-scroll">
+            {catalogQuery.isFetching && catalogQuery.data && <InlineLoadingState label="Updating table schema" />}
+            {catalogQuery.isError && <Alert variant="destructive" title="Schema could not be loaded">
+              <Button size="sm" variant="outline" loading={catalogQuery.isFetching} onClick={() => void catalogQuery.refetch()}>Retry schema</Button>
+            </Alert>}
             {info?.description && <p className="mb-4 text-sm text-foreground-muted">{info.description}</p>}
-            {info?.columns?.length ? (
+            {catalogQuery.isPending ? <LoadingState label="Loading table schema" className="space-y-3">
+              <Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" />
+            </LoadingState> : info?.columns?.length ? (
               <>
                 <section aria-labelledby="schema-overview-title">
                   <div className="mb-2 flex items-center justify-between gap-3">
@@ -742,7 +752,7 @@ function TablePageContent({ accountScope, accessChecking, accessRevision }: {
                   </div>
                 </section>
               </>
-            ) : (
+            ) : catalogQuery.isError ? null : (
               <Alert variant="info" title="Schema unavailable">
                 Column metadata was not included in the table catalog response.
               </Alert>

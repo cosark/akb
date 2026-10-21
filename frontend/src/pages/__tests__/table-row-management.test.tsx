@@ -37,6 +37,7 @@ vi.mock("@/lib/api", () => {
 });
 
 import {
+  ApiError,
   createPublication,
   deleteVaultTableRow,
   getVaultTableRow,
@@ -90,6 +91,7 @@ function renderTable(
   const view = render(content());
   return {
     refetchTree,
+    queryClient,
     ...view,
     beginAccessCheck: () => view.rerender(content(0, true)),
     reverifyAccess: () => view.rerender(content(1)),
@@ -578,4 +580,40 @@ describe("table row management", () => {
       { expectedUpdatedAt: "2026-09-02T04:45:00Z" },
     ));
   });
+});
+
+it("shows records while optional schema discovery is pending", async () => {
+  vaultInfoMock.mockResolvedValue({ role: "writer" });
+  listTablesMock.mockReturnValue(new Promise(() => {}));
+  renderTable();
+  await screen.findByText("API outage");
+  expect(screen.getByRole("button", { name: "Add row" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Schema" }));
+  expect(await screen.findByRole("status", { name: "Loading table schema" })).toBeInTheDocument();
+});
+it("keeps records available and offers local schema retry after a catalog error", async () => {
+  vaultInfoMock.mockResolvedValue({ role: "writer" });
+  listTablesMock.mockRejectedValue(new Error("Catalog unavailable"));
+  renderTable();
+  await screen.findByText("API outage");
+  fireEvent.click(screen.getByRole("button", { name: "Schema" }));
+  expect(await screen.findByRole("button", { name: "Retry schema" })).toBeEnabled();
+  expect(screen.queryByText("Column metadata was not included in the table catalog response.")).not.toBeInTheDocument();
+});
+
+it("does not resurrect denied schema after a transient retry", async () => {
+  vaultInfoMock.mockResolvedValue({ role: "writer" });
+  const { queryClient } = renderTable();
+  await screen.findByText("API outage");
+  fireEvent.click(screen.getByRole("button", { name: "Schema" }));
+  await screen.findAllByText("Operational incidents");
+  listTablesMock.mockRejectedValue(new ApiError("Denied", 403, {}));
+  await queryClient.refetchQueries({ queryKey: ["vault-tables"] });
+  await waitFor(() => expect(screen.queryByText("Operational incidents")).not.toBeInTheDocument());
+  listTablesMock.mockRejectedValue(new ApiError("Unavailable", 503, {}));
+  await queryClient.refetchQueries({ queryKey: ["vault-tables"] });
+  expect(screen.queryByText("Operational incidents")).not.toBeInTheDocument();
+  listTablesMock.mockResolvedValue({ items: [{ name: "incidents", description: "Fresh schema", columns: [{ name: "title", type: "text" }] }] });
+  await queryClient.refetchQueries({ queryKey: ["vault-tables"] });
+  expect((await screen.findAllByText("Fresh schema")).length).toBeGreaterThan(0);
 });

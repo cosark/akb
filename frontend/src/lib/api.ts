@@ -25,12 +25,20 @@ type AssetFlight = {
   settled: boolean;
 };
 const privateAssetFlights = new Map<string, AssetFlight>();
+const privateAssetResetListeners = new Set<() => void>();
+
+/** In-memory private media follows the same session/proof boundary as assets. */
+export function subscribePrivateAssetReset(listener: () => void): () => void {
+  privateAssetResetListeners.add(listener);
+  return () => { privateAssetResetListeners.delete(listener); };
+}
 
 export function clearPrivateAssetCache() {
   privateAssetCache.clear();
   privateAssetCacheBytes = 0;
   for (const flight of privateAssetFlights.values()) flight.controller.abort();
   privateAssetFlights.clear();
+  for (const listener of privateAssetResetListeners) listener();
 }
 
 type StoredTokenRead =
@@ -335,7 +343,7 @@ export async function authenticatedFetch(
   return res;
 }
 
-async function throwJsonApiError(res: Response): Promise<never> {
+export async function throwJsonApiError(res: Response): Promise<never> {
   const body = await res.json().catch(() => ({}));
   if (body && typeof body.detail === "object" && body.detail !== null) {
     const detail = body.detail as { message?: string };
@@ -1041,6 +1049,22 @@ export function setAdminSsoProviderEnabled(
 }
 
 // ── Auth (ordinary browser session) ──
+export interface AvatarState {
+  revision: string | null;
+  url: string | null;
+  width?: number;
+  height?: number;
+}
+
+export interface ProfileAvatarCapabilities {
+  supported: boolean;
+  can_upload: boolean;
+  can_remove: boolean;
+  reason: string | null;
+  max_upload_bytes: number;
+  allowed_content_types: string[];
+}
+
 export interface CurrentUser {
   user_id: string;
   username: string;
@@ -1050,7 +1074,11 @@ export interface CurrentUser {
   auth_method: string;
   account_kind?: "human" | "service";
   key_class: string | null;
+  avatar?: AvatarState;
+  profile_capabilities?: { avatar?: ProfileAvatarCapabilities };
 }
+
+export { getProfilePhotoBlob, uploadProfilePhoto, removeProfilePhoto } from "./api-profile-photo";
 
 export const getMe = (
   { redirectOnUnauthorized = true }: { redirectOnUnauthorized?: boolean } = {},

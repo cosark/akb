@@ -72,6 +72,8 @@
   --akb-font-sans: "Pretendard Variable", "Pretendard", system-ui, -apple-system, sans-serif;
   --akb-font-mono: "JetBrains Mono Variable", "JetBrains Mono", "Fira Code", ui-monospace, "SF Mono", Menlo, monospace;
   --akb-font-display: "Pretendard Variable", "Pretendard", system-ui, sans-serif;
+  --akb-text-ui: .8125rem;
+  --akb-text-ui--line-height: 1.25rem;
   --akb-spacing-document-preview-edge: clamp(1rem, 2vw, 3rem);
   --akb-spacing-document-reading-gutter: clamp(1rem, 2cqi, 2rem);
   --akb-radius: 0.875rem;
