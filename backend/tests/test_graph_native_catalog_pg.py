@@ -124,12 +124,15 @@ async def test_legacy_catalog_remains_the_authority_in_legacy_mode(monkeypatch):
         assert result["title"] == "Legacy A"
 
 
-async def test_native_rest_and_mcp_reads_enforce_real_vault_acl_without_a_legacy_mirror(monkeypatch):
+async def test_native_rest_and_mcp_reads_enforce_real_vault_acl_without_a_legacy_mirror(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     import httpx
     from fastapi import FastAPI
 
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "git_storage_path", str(tmp_path / "vaults"))
     from app.api.deps import get_current_user
     from app.api.routes import documents, knowledge
     from app.db import postgres
