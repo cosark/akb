@@ -1,12 +1,13 @@
 // Query-attached scopes work on both global and Vault search routes. An absent
 // v uses the route default, while an explicit empty v means all accessible Vaults.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, waitFor } from "@testing-library/react";
+import { act, render, screen, cleanup, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 import SearchPage from "../search";
 import { searchDocs, grepDocs, listVaults } from "@/lib/api";
+import { CurrentUserProvider } from "@/contexts/current-user-context";
 
 vi.mock("@/lib/api", () => ({
   searchDocs: vi.fn(),
@@ -54,7 +55,27 @@ function Navigation() {
   );
 }
 
+async function removeVault(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole("button", { name: /^Search scope:/ }));
+  await user.click(screen.getByRole("menuitemcheckbox", { name: new RegExp(`^${name}(?:\\s*Current vault)?$`), checked: true }));
+  await user.keyboard("{Escape}");
+}
+
 describe("SearchPage · multi-vault scope", () => {
+  it("drops old-account completions while retaining the URL query and scope", async () => {
+    let resolve!: (value: typeof EMPTY) => void;
+    mockedSearch.mockReturnValueOnce(new Promise(r => { resolve = r; }));
+    const view = (id: string, checking = false, revision = 0) => <MemoryRouter initialEntries={["/search?q=postgres&v=alpha"]}><CurrentUserProvider user={{ user_id: id, username: id, email: `${id}@example.com`, display_name: null, is_admin: false, auth_method: "local", key_class: null }} checking={checking} revision={revision}><SearchPage /></CurrentUserProvider></MemoryRouter>;
+    const { rerender } = render(view("a"));
+    await waitFor(() => expect(mockedSearch).toHaveBeenCalledOnce());
+    rerender(view("b", true));
+    await act(async () => resolve({ ...EMPTY, results: [{ title: "Private A result", vault: "alpha", path: "private.md", uri: "akb://alpha/doc/private.md", score: 1 }] } as unknown as typeof EMPTY));
+    expect(screen.queryByText("Private A result")).not.toBeInTheDocument();
+    rerender(view("b", false, 1));
+    await waitFor(() => expect(mockedSearch).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("searchbox", { name: "Search query" })).toHaveValue("postgres");
+    expect(mockedSearch).toHaveBeenLastCalledWith("postgres", ["alpha"], 25, expect.any(Object));
+  });
   it("uses an explicit multi-Vault scope on a named Vault route", async () => {
     renderAt("/vault/alpha/search?q=postgres&v=alpha,beta&source=file&collection=guides");
     await waitFor(() => expect(mockedSearch).toHaveBeenCalledWith(
@@ -101,15 +122,14 @@ describe("SearchPage · multi-vault scope", () => {
     expect(screen.getByRole("search")).toContainElement(picker);
   });
 
-  it("keeps each selected Vault removable inside the query form", async () => {
+  it("summarizes selected Vaults in one trigger and keeps their names in the checklist", async () => {
+    const user = userEvent.setup();
     renderAt("/search?q=x&v=alpha,beta");
-    expect(await screen.findByRole("button", { name: "Search scope: alpha, beta" })).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Remove alpha from search scope" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Remove beta from search scope" }),
-    ).toBeTruthy();
+    const scope = screen.getByRole("group", { name: "Vault search scope" });
+    expect(within(scope).getAllByRole("button")).toHaveLength(1);
+    await user.click(await screen.findByRole("button", { name: "Search scope: 2 vaults" }));
+    expect(screen.getByRole("menuitemcheckbox", { name: "alpha", checked: true })).toBeInTheDocument();
+    expect(screen.getByRole("menuitemcheckbox", { name: "beta", checked: true })).toBeInTheDocument();
   });
 });
 
@@ -127,15 +147,13 @@ describe("SearchPage · multi-vault scope · interactions (write path)", () => {
     );
   });
 
-  it("removing a chip drops that vault from the scope and re-searches", async () => {
+  it("unchecking a selected Vault drops it from the scope and re-searches", async () => {
     const user = userEvent.setup();
     renderAt("/search?q=x&v=alpha,beta");
     await waitFor(() =>
       expect(mockedSearch).toHaveBeenCalledWith("x", ["alpha", "beta"], 25, expect.any(Object)),
     );
-    await user.click(
-      await screen.findByRole("button", { name: "Remove alpha from search scope" }),
-    );
+    await removeVault(user, "alpha");
     await waitFor(() =>
       expect(mockedSearch).toHaveBeenLastCalledWith("x", ["beta"], 25, expect.any(Object)),
     );
@@ -169,10 +187,11 @@ describe("SearchPage · multi-vault scope · interactions (write path)", () => {
   it("keeps explicit All through mode changes and browser Back/Forward on a scoped route", async () => {
     const user = userEvent.setup();
     renderAt("/vault/alpha/search?q=x");
-    await user.click(screen.getByRole("button", { name: "Remove alpha from search scope" }));
+    await removeVault(user, "alpha");
     await waitFor(() => expect(mockedSearch).toHaveBeenLastCalledWith("x", [], 25, expect.any(Object)));
     expect(screen.getByTestId("search-url")).toHaveTextContent("v=");
-    await user.click(screen.getByRole("button", { name: "Literal" }));
+    await user.click(screen.getByRole("button", { name: "Search method" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^Exact text/ }));
     await waitFor(() => expect(grepDocs).toHaveBeenLastCalledWith("x", [], 20, expect.any(Object)));
     await user.click(screen.getByRole("button", { name: "Back" }));
     await waitFor(() => expect(mockedSearch).toHaveBeenLastCalledWith("x", [], 25, expect.any(Object)));
@@ -182,7 +201,7 @@ describe("SearchPage · multi-vault scope · interactions (write path)", () => {
     await waitFor(() => expect(mockedSearch).toHaveBeenLastCalledWith("x", [], 25, expect.any(Object)));
   });
 
-  it("turns a selected name suggestion into a Vault chip and clears only the consumed query", async () => {
+  it("turns a selected name suggestion into a saved Vault scope and clears only the consumed query", async () => {
     const user = userEvent.setup();
     renderAt("/vault/alpha/search?q=old&source=table");
     const query = screen.getByRole("searchbox", { name: "Search query" });

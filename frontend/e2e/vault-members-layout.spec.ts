@@ -10,6 +10,9 @@ async function fixture(page: Page, dark = false, count = 4) {
     localStorage.setItem("akb_token", "members-layout-fixture");
     localStorage.setItem("akb_theme", dark ? "dark" : "light");
   }, dark);
+  // This fixture owns status reads as well as the API: a real backend denial
+  // for the synthetic Vault would otherwise keep invalidating access proof.
+  await page.route("**/health**", (route) => route.fulfill({ json: {} }));
   await page.route("**/api/v1/**", (route) => {
     const path = new URL(route.request().url()).pathname;
     let json: object = {
@@ -65,6 +68,13 @@ async function fixture(page: Page, dark = false, count = 4) {
           role: ["owner", "admin", "writer", "reader"][i % 4],
           since: "2026-09-15T00:00:00Z",
         })),
+      };
+    else if (path.endsWith("/users/search"))
+      json = {
+        users: [
+          { id: "invite-mina", username: "mina", display_name: "Mina Park", email: "mina@example.invalid", account_kind: "human", account_status: "active" },
+          { id: "invite-long", username: "long-handle", display_name: "A long account name that must remain readable in this compact ledger", email: "long.account.address@example.invalid", account_kind: "human", account_status: "active" },
+        ],
       };
     else if (path.includes("/browse/")) json = { items: [] };
     else if (path.includes("/publications/")) json = { publications: [] };
@@ -153,8 +163,28 @@ for (const dark of [false, true])
       await page
         .getByRole("button", { name: "Invite member", exact: true })
         .click();
-      await expect(page.getByRole("dialog")).toBeVisible();
+      const invite = page.getByRole("dialog", { name: "Invite member" });
+      await expect(invite).toBeVisible();
+      const accountTable = invite.getByRole("table", { name: "Accounts to invite" });
+      await expect(accountTable).toBeVisible();
+      await expect(invite.getByRole("heading", { name: "Access level" })).toHaveCount(0);
+      await expect(invite.getByRole("button", { name: "Invite", exact: true })).toBeDisabled();
+      for (const row of await accountTable.getByRole("row").all()) {
+        expect(await row.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+      }
+      const role = invite.getByRole("button", { name: "Select role for mina" });
+      await role.click();
       await page.keyboard.press("Escape");
+      await expect(invite).toBeVisible();
+      await expect(role).toBeFocused();
+      await role.click();
+      await page.getByRole("menuitemradio", { name: "Writer", exact: true }).click();
+      await expect(role).toHaveText("Writer");
+      await expect(invite.getByTestId("invite-summary")).toHaveText("Mina Park will join as Writer.");
+      await expect(invite.getByTestId("invite-footer")).toBeInViewport();
+      await page.screenshot({ path: testInfo.outputPath("invite-rows.png"), animations: "disabled" });
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("button", { name: "Invite member", exact: true })).toBeFocused();
       // The two registry pages use identical route gutters, not separate inset frames.
       const headerBox = (await page
         .getByTestId("member-roster-header")

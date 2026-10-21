@@ -63,7 +63,7 @@ export function VaultRail({
    *  it. The right divider is drawn by the shell's resize handle, not this nav. */
   width?: number;
 }) {
-  const { vaults, loading, refetch } = useVaults();
+  const { vaults, loading, error, refetch } = useVaults();
   const { isFavorite, toggleFavorite, favOrder } = useVaultFavorites();
   const { pathname } = useLocation();
   const navigate = useNavigate();
@@ -342,7 +342,7 @@ export function VaultRail({
 
       <div className="flex-1 overflow-y-auto rail-scroll py-1">
         {vaults.length === 0 ? (
-          loading ? <VaultRailLoading /> : <p className="px-3 py-2 coord">No vaults yet</p>
+          loading ? <VaultRailLoading /> : <p className="px-3 py-2 text-xs text-foreground-muted">{error ? "Vaults unavailable. Use Refresh vaults to try again." : "No vaults yet"}</p>
         ) : filtered.length === 0 ? (
           <div className="px-3 py-2">
             <p className="coord">

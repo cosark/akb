@@ -30,7 +30,6 @@ import {
   getVaultInfo,
   type DocumentUpdateInput,
   type DocumentHistoryEntry,
-  type RelationRow,
   unpublishDoc,
   updateDocument,
 } from "@/lib/api";
@@ -45,7 +44,6 @@ import { DocumentView } from "@/components/document-view";
 import { DocumentCopyButton, DocumentIconButton, DocumentReadModes, DocumentStatistics, DocumentSummary, DocumentTimestamp } from "@/components/document-reading-controls";
 import { DocumentContextPanel } from "@/components/document-context-panel";
 import { DocumentPublicationControl } from "@/components/document-publication-control";
-import { VaultHeaderAction } from "@/components/vault-header-actions";
 import { ResourceCommandRow } from "@/components/resource-command-row";
 import { ResourceBreadcrumb } from "@/components/resource-breadcrumb";
 import { usePublishResourceLocation } from "@/contexts/resource-location-context";
@@ -191,8 +189,6 @@ function DocumentPageContent({
   // still render the comparison frame instead of replacing the whole page with
   // the generic document error state.
   const documentVersion = isDiffMode ? undefined : commitHash;
-  const [relations, setRelations] = useState<RelationRow[]>([]);
-  const [relationsError, setRelationsError] = useState(false);
   const [pendingView, setPendingView] = useState<DocView | null>(null);
   const [pendingNavigation, setPendingNavigation] = useState<{ href: string; options?: NavigateOptions } | { proceed: () => void; history?: boolean } | null>(null);
   const [leavingEditor, setLeavingEditor] = useState(false);
@@ -277,6 +273,7 @@ function DocumentPageContent({
   const hydratedKey = useRef<number | null>(null);
   const editorHydrationModeRef = useRef<"server" | "draft">("server");
   const documentIdentityRef = useRef<string | null>(null);
+  const hydratedDocumentSnapshotRef = useRef<unknown>(null);
   const editBaseCommitRef = useRef<string | null>(null);
   const draftHydratedForRef = useRef<string | null>(null);
   const draftSessionRef = useRef<StoredDocumentEditDraft | null>(null);
@@ -323,7 +320,7 @@ function DocumentPageContent({
     setPendingNavigation({ href, options });
     return false;
   }, []);
-  useResourceNavigationGuard(
+  const continueNavigation = useResourceNavigationGuard(
     view === "edit" && (hasUnsavedWork || savingBody)
       ? confirmResourceNavigation
       : null,
@@ -546,11 +543,11 @@ function DocumentPageContent({
     // the in-memory draft, not the original server body. This does not carry
     // authorized resource data across scopes; a new resource resets the seed
     // in the identity hydration effect below.
-    if (!doc && view === "edit" && documentIdentityRef.current) {
+    if ((accessChecking || !doc) && view === "edit" && documentIdentityRef.current) {
       setEditorInitialContent(editingSnapshotRef.current.content);
       editorHydrationModeRef.current = "draft";
     }
-  }, [doc, view]);
+  }, [accessChecking, doc, view]);
   // Publish only the current query's resolved identity, never an optimistic
   // override left over from the preceding resource or a denied background read.
   const resolvedLocation = name && docQuery.data && !docQuery.isError && !accessChecking ? {
@@ -561,9 +558,9 @@ function DocumentPageContent({
   } : null;
   usePublishResourceLocation(resolvedLocation, presentation === "page");
   const historyQuery = useQuery({
-    queryKey: ["document-history", name, doc?.path],
+    queryKey: ["document-history", name, doc?.path, currentUser?.user_id, accessRevision],
     queryFn: () => getDocumentHistoryWithFallback(name!, doc!.path, 20),
-    enabled: Boolean(name && doc?.path),
+    enabled: Boolean(name && doc?.path) && !accessChecking,
     staleTime: 30_000,
     retry: false,
   });
@@ -697,19 +694,26 @@ function DocumentPageContent({
     return () => window.cancelAnimationFrame(firstFrame);
   }, [isDiffMode]);
 
-  // Re-pull relations after an add/remove from the Relations panel. Keyed off
-  // the doc *path* (the GET response has no internal id — see the load effect).
+  // Each response belongs to this resource/account/access revision. Old
+  // requests may populate their own cache, but cannot update the next reader.
+  const relationsQuery = useQuery({
+    queryKey: ["document-relations", name, doc?.path, currentUser?.user_id, accessRevision, doc?.current_commit],
+    queryFn: () => getRelations(name!, doc.path),
+    enabled: !!name && !!doc?.path && !accessChecking,
+    retry: false,
+  });
+  const relations = accessChecking ? [] : relationsQuery.data?.relations || [];
+  const relationsError = !accessChecking && relationsQuery.isError;
   const reloadRelations = () => {
-    const p = doc?.path;
-    if (!p) return;
-    getRelations(name!, p)
-      .then((r) => setRelations(r.relations || []))
-      .catch(() => setRelationsError(true));
+    if (name && doc?.path && !accessChecking) void relationsQuery.refetch();
   };
 
   useEffect(() => {
     const d = docQuery.data;
-    if (!d?.path || !name) return;
+    if (!d?.path || !name || hydratedDocumentSnapshotRef.current === d) return;
+    // Effect replay must not replace a recovered draft with the same cached
+    // server snapshot before the restored state has committed.
+    hydratedDocumentSnapshotRef.current = d;
 
     const identity = documentIdentity(name, d);
     const identityChanged = documentIdentityRef.current !== identity;
@@ -727,10 +731,9 @@ function DocumentPageContent({
       documentIdentityRef.current = identity;
       draftHydratedForRef.current = null;
       draftSessionRef.current = null;
+      skipNextDraftSaveRef.current = false;
       draftTabIdRef.current = currentUserId ? documentEditDraftTabId() : null;
       setDocOverride(null);
-      setRelations([]);
-      setRelationsError(false);
       setBodyError("");
       setTitleTouched(false);
       setServerTitleConflict(null);
@@ -782,17 +785,15 @@ function DocumentPageContent({
     }
 
     if (d.path && d.path !== docId) {
-      navigate(`/vault/${name}/doc/${encodeURIComponent(d.path)}`, {
+      navigate({
+        pathname: `/vault/${name}/doc/${encodeURIComponent(d.path)}`,
+        search: routeLocation.search,
+        hash: routeLocation.hash,
+      }, {
         replace: true,
         state: routeLocation.state,
       });
     }
-    // getRelations builds the canonical akb:// URI from the vault-relative
-    // path. The GET response exposes no internal `id`; `uri`/`path` is the
-    // sole document identifier.
-    getRelations(name, d.path)
-      .then((r) => setRelations(r.relations || []))
-      .catch(() => setRelationsError(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docQuery.data]);
 
@@ -883,7 +884,9 @@ function DocumentPageContent({
       (draftStatus === "restored" &&
         draftRevisionRef.current === restoredDraftRevisionRef.current)
     ) {
-      skipNextDraftSaveRef.current = false;
+      // A replay still has the initial clean render's state. Consume this
+      // marker only once the recovered draft has reached a committed render.
+      if (draftStatus === "restored") skipNextDraftSaveRef.current = false;
       return;
     }
     if (!isDirty) {
@@ -1231,7 +1234,7 @@ function DocumentPageContent({
       // the now-historical revision while showing the new body.
       p.delete("commit");
       restoreEditFocusRef.current = true;
-      updateRouteParams(p, { replace: true });
+      continueNavigation(() => updateRouteParams(p, { replace: true }));
       void queryClient.invalidateQueries({ queryKey: ["document", name, docId] });
       void queryClient.invalidateQueries({ queryKey: ["document-history", name] });
     } catch (e: unknown) {
@@ -1338,6 +1341,7 @@ function DocumentPageContent({
     const draft = draftSessionRef.current;
     const protectedAssets = protectedDraftAssetIds(draft?.draftId);
     latestDraftInputRef.current = null;
+    skipNextDraftSaveRef.current = false;
     const assets = new Set<string>([
       ...(draft?.assetIds || []),
       ...editingAssetIds,
@@ -1397,12 +1401,18 @@ function DocumentPageContent({
           // Direct close also uses Back. Once explicitly confirmed, let that
           // traversal pass; a guarded POP already owns its single-use replay.
           if (!("history" in destination && destination.history)) flushSync(() => setLeavingEditor(true));
-          if ("proceed" in destination) destination.proceed();
-          else navigate(destination.href, destination.options);
+          if ("proceed" in destination) {
+            // Indexed history owns its replay. Router callbacks (such as
+            // preview promotion) must bypass this editor's confirmed guard.
+            if (destination.history) destination.proceed();
+            else continueNavigation(destination.proceed);
+          } else continueNavigation(() => navigate(destination.href, destination.options));
         }
       }}
     />
   );
+
+  if (accessChecking) return <><DocumentPageLoading presentation={presentation} />{navigationDialog}</>;
 
   // The vault guide is system-managed: its only editing surface is the guide
   // section in vault settings, so the plain full-page viewer bounces there.
@@ -1528,7 +1538,6 @@ function DocumentPageContent({
             </Button>
           </div>
         )}
-        {presentation === "page" && publication && <VaultHeaderAction>{publication}</VaultHeaderAction>}
         <div data-slot="document-viewer-frame" className="flex min-h-0 flex-1 flex-col overflow-hidden bg-surface">
         <div role="group" aria-label={inEditMode ? "Document editing tools" : "Document reading tools"}
           data-slot="document-reading-toolbar" className="shrink-0 bg-surface">
@@ -1564,6 +1573,7 @@ function DocumentPageContent({
                 <Pencil className="h-4 w-4" aria-hidden />
               </DocumentIconButton>}
             </div>
+            {presentation === "page" && publication}
             <div role="group" aria-label="More document options" className="document-command-group">
             <ResourceActionsMenu
               triggerRef={actionsTriggerRef}
@@ -2141,7 +2151,7 @@ function DocumentPageContent({
           setUnclaimedAssetIds([]);
           setTitleTouched(false);
           setServerTitleConflict(null);
-          if (existingPath) openExistingDocument(existingPath);
+          if (existingPath) continueNavigation(() => openExistingDocument(existingPath));
         }}
       />
 
@@ -2173,7 +2183,7 @@ function DocumentPageContent({
           setPendingView(null);
           if (next) {
             restoreEditFocusRef.current = true;
-            applyView(next);
+            continueNavigation(() => applyView(next));
           }
         }}
       />

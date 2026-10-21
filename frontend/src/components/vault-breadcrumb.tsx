@@ -31,14 +31,16 @@ export function VaultBreadcrumb({
         }
       }}>
       <ol className="flex min-w-0 items-center gap-1.5">
-        <li className="flex min-w-0 max-w-[30%] items-center">
+        <li className={cn("flex min-w-0 max-w-[30%] items-center", kind && "@max-xs/resource-location:max-w-none @max-xs/resource-location:shrink-0")}>
           <Link
             to={`/vault/${encodeURIComponent(vault)}`}
             title={vault}
-            className="inline-flex min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] text-foreground-muted transition-token hover:text-link focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            className={cn("inline-flex min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] text-foreground-muted transition-token hover:text-link focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+              kind && "@max-xs/resource-location:h-11 @max-xs/resource-location:w-9 @max-xs/resource-location:justify-center",
+            )}
           >
             <Box className="h-4 w-4 shrink-0" aria-hidden />
-            <span className="truncate">{vault}</span>
+            <span className={cn("truncate", kind && "@max-xs/resource-location:sr-only")}>{vault}</span>
           </Link>
         </li>
         {children}

@@ -10,9 +10,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SelectMenu } from "@/components/ui/select-menu";
 
-export function PatIssuanceForm({ initial, replacement = false, onCreated, onMetadataChanged, onDirtyChange, onBusyChange }: {
+export function PatIssuanceForm({ initial, replacement = false, onCreated, onMetadataChanged, onDirtyChange, onBusyChange, ownsOperation }: {
   initial?: PatDraft; replacement?: boolean; onCreated: (receipt: PatReceipt, snapshot: AuthSessionSnapshot) => void;
   onMetadataChanged?: () => void; onDirtyChange?: (dirty: boolean) => void; onBusyChange?: (busy: boolean) => void;
+  ownsOperation?: () => boolean;
 }) {
   const id = useId();
   const [draft, setDraft] = useState<PatDraft>(() => initial ?? defaultPatDraft());
@@ -38,18 +39,19 @@ export function PatIssuanceForm({ initial, replacement = false, onCreated, onMet
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const dirty = JSON.stringify(draft) !== JSON.stringify(defaultPatDraft()) || !!exact || !!prefix || uncertain;
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
-  useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
-  async function discover() {
+  useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
+  useEffect(() => () => { if (ownsOperation?.() !== true) onDirtyChange?.(false); }, [onDirtyChange, ownsOperation]);
+  async function discover(clearError = true) {
     const sequence = ++discovery.current;
     const snapshot = authSessionSnapshot();
-    setLoading(true); setError(""); setCapability(null);
+    setLoading(true); if (clearError) setError(""); setCapability(null);
     try {
       const data = await getPatCapabilities(snapshot);
       if (mounted.current && sequence === discovery.current && isCurrentAuthSession(snapshot)) setCapability({ data, snapshot });
     } catch (e) { if (mounted.current && sequence === discovery.current) setError(e instanceof Error ? e.message : "Could not verify token issuance support."); }
     finally { if (mounted.current && sequence === discovery.current) setLoading(false); }
   }
-  useEffect(() => { mounted.current = true; void discover(); return () => { mounted.current = false; discovery.current++; }; }, []);
+  useEffect(() => { mounted.current = true; void discover(false); return () => { mounted.current = false; discovery.current++; }; }, []);
   async function loadVaults() {
     setVaultLoading(true); setVaultError(false);
     const snapshot = authSessionSnapshot();
@@ -75,11 +77,14 @@ export function PatIssuanceForm({ initial, replacement = false, onCreated, onMet
     if (!validation.intent || Object.keys(validation.errors).length) { setFields(validation.errors); setAdvanced(true); return; }
     pending.current = true; setBusy(true); onBusyChange?.(true); setError(""); setFields({});
     const snapshot = capability.snapshot;
+    // Settings suspends visual effects during proof, not the already-started
+    // issuance. Its outer owner distinguishes that from a true account exit.
+    const currentOperation = () => ownsOperation ? ownsOperation() : mounted.current;
     try {
       const receipt = capability.data === "legacy" ? await issueLegacyPat(snapshot, validation.intent.name) : await issuePat(snapshot, capability.data, validation.intent);
-      if (mounted.current && isCurrentAuthSession(snapshot)) { onCreated(receipt, snapshot); onMetadataChanged?.(); }
+      if (currentOperation() && isCurrentAuthSession(snapshot)) { onCreated(receipt, snapshot); onMetadataChanged?.(); }
     } catch (e) {
-      if (!mounted.current) return;
+      if (!currentOperation()) return;
       if (!isCurrentAuthSession(snapshot)) { setCapability(null); setError("Your sign-in session changed. Review token creation again."); return; }
       if (e instanceof ApiError && e.status === 422) {
         const detail = e.detail as { details?: { fields?: { field?: unknown; message?: unknown }[] } } | null;
@@ -96,7 +101,7 @@ export function PatIssuanceForm({ initial, replacement = false, onCreated, onMet
         if (e instanceof UnverifiedPatReceipt && e.tokenId) setCreatedCandidate({ id: e.tokenId, snapshot });
         onMetadataChanged?.();
       }
-    } finally { pending.current = false; if (mounted.current) { setBusy(false); onBusyChange?.(false); } }
+    } finally { pending.current = false; if (currentOperation()) { setBusy(false); onBusyChange?.(false); } }
   }
   const errorId = (field: string) => fields[field] ? `${id}-${field}-error` : undefined;
   const fieldError = (field: string) => fields[field] && <p id={errorId(field)} className="text-xs text-destructive">{fields[field]}</p>;

@@ -1,7 +1,7 @@
 """The tracked seed evalset must match the schema the harness reads.
 
 `evalset/` itself is private (hand-authored Korean-law ground truth), so
-these three project-akb questions are the only worked examples of the
+these three synthetic questions are the only worked examples of the
 schema in the repository. If they drift from what `judge.py` reads, the
 schema documentation in the README drifts with them.
 """
@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-EVALSET = Path(__file__).resolve().parents[1] / "evalset-project-akb"
+EVALSET = Path(__file__).resolve().parents[1] / "evalset-synthetic"
 QUESTIONS = sorted(EVALSET.glob("q*.yaml"))
 
 
@@ -39,7 +39,7 @@ def test_question_matches_the_readme_schema(path):
     assert truth["must_mention"], "a question with nothing to assert scores nothing"
     assert truth["source_docs"], "every question must name where its answer lives"
     for uri in truth["source_docs"]:
-        assert uri.startswith("akb://project-akb/"), uri
+        assert uri.startswith("akb://bench-synthetic/"), uri
 
 
 def test_the_judge_can_load_the_seed_set_through_evalset_dir(monkeypatch):
@@ -57,3 +57,17 @@ def test_the_judge_can_load_the_seed_set_through_evalset_dir(monkeypatch):
     finally:
         monkeypatch.delenv("EVALSET_DIR", raising=False)
         importlib.reload(judge)
+
+
+@pytest.mark.parametrize("path", QUESTIONS, ids=lambda p: p.stem)
+def test_seed_answers_are_in_the_public_corpus(path):
+    spec = yaml.safe_load(path.read_text(encoding="utf-8"))
+    truth = spec["ground_truth"]
+    corpus = EVALSET.parent / "corpus-synthetic"
+    sources = []
+    for uri in truth["source_docs"]:
+        filename = uri.rsplit("/doc/", 1)[1]
+        sources.append((corpus / filename).read_text(encoding="utf-8"))
+    source_text = "\n".join(sources).casefold()
+    for fact in truth["must_mention"]:
+        assert fact.casefold() in source_text, fact

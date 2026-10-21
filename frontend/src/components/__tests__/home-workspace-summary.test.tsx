@@ -34,6 +34,14 @@ describe("Home cardless workspace summary", () => {
     expect(within(region).queryByRole("button")).not.toBeInTheDocument();
     expect(getWorkspaceSummary).toHaveBeenCalledTimes(1);
   });
+  it("F30: a failed initial total has explicit Retry and can recover", async () => {
+    vi.mocked(getWorkspaceSummary).mockRejectedValueOnce(new Error("Offline")).mockResolvedValueOnce(sample);
+    const { tree } = setup(); render(tree());
+    const retry = await screen.findByRole("button", { name: "Retry totals" });
+    act(() => retry.click());
+    expect(await screen.findByText("8,001")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Retry totals" })).not.toBeInTheDocument();
+  });
   it("keeps old-server exact Vault totals and makes absent resource counts explicit", async () => {
     vi.mocked(getWorkspaceSummary).mockRejectedValue(new WorkspaceSummaryUnavailable());
     const { tree } = setup();

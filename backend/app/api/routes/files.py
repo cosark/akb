@@ -190,7 +190,7 @@ async def confirm_upload(
     hash_algorithm: str = Query("sha256", description="Hash algorithm for content_hash"),
     user: AuthenticatedUser = Depends(get_current_user),
 ):
-    """Called once the bytes are uploaded. Certifies size and hash from storage."""
+    """Certify uploaded bytes; repeating confirmation preserves the stored result."""
     access, actor_id, delegated_actor = await _resolve_file_write_context(
         request, vault, user,
     )
@@ -199,6 +199,17 @@ async def confirm_upload(
         delegated_actor=delegated_actor,
         content_hash=content_hash, hash_algorithm=hash_algorithm,
     )
+
+
+@router.post("/files/{vault}/{file_id}/cancel-upload", summary="Cancel only a pending upload")
+async def cancel_upload(
+    request: Request,
+    vault: str,
+    file_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    access, actor_id, _delegated_actor = await _resolve_file_write_context(request, vault, user)
+    return await file_service.cancel_upload(access["vault_id"], file_id, actor_id=actor_id)
 
 
 @router.post("/files/{vault}/{file_id}/replace", summary="Prepare an in-place file replacement")

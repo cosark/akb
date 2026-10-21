@@ -46,7 +46,12 @@ const adminShellHandlers = [
 async function expectVaultShell(canvasElement: HTMLElement) {
   const canvas = within(canvasElement);
   await expect(await canvas.findByRole("navigation", { name: "Vaults" })).toBeInTheDocument();
-  await expect(await canvas.findByRole("tree", { name: "akb explorer" })).toBeInTheDocument();
+  if (canvasElement.querySelector('[data-workspace-mode="focused"]')) {
+    await expect(canvas.queryByRole("tree", { name: "akb explorer" })).not.toBeInTheDocument();
+    await expect(canvas.queryByRole("navigation", { name: "Vault sections" })).not.toBeInTheDocument();
+  } else {
+    await expect(await canvas.findByRole("tree", { name: "akb explorer" })).toBeInTheDocument();
+  }
 }
 
 export const PublicationsList: Story = {
@@ -65,7 +70,7 @@ export const PublicationsList: Story = {
   render: () => <AkbRouteTree />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("heading", { name: "Published links" })).toBeInTheDocument();
+    await expect(await canvas.findByRole("heading", { level: 2, name: "Public links" })).toBeInTheDocument();
     await expect(await canvas.findByText("Storybook rollout")).toBeInTheDocument();
     await expectVaultShell(canvasElement);
   },
@@ -85,7 +90,7 @@ export const PublicationsEmpty: Story = {
   render: () => <AkbRouteTree />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("Nothing is public")).toBeInTheDocument();
+    await expect(await canvas.findByText("No public links yet")).toBeInTheDocument();
     await expectVaultShell(canvasElement);
   },
 };
@@ -108,7 +113,7 @@ export const PublicationsLoading: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      await canvas.findByRole("status", { name: "Loading published links" }),
+      await canvas.findByRole("status", { name: "Loading public links" }),
     ).toBeInTheDocument();
     await expectVaultShell(canvasElement);
   },
@@ -130,7 +135,7 @@ export const PublicationsError: Story = {
   render: () => <AkbRouteTree />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("Couldn't load published links")).toBeInTheDocument();
+    await expect(await canvas.findByText("Couldn't load public links")).toBeInTheDocument();
     await expect(await canvas.findByText("Publications unavailable")).toBeInTheDocument();
     await expectVaultShell(canvasElement);
   },
@@ -151,7 +156,7 @@ export const MembersOwner: Story = {
   render: () => <AkbRouteTree />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("heading", { name: "Members" })).toBeInTheDocument();
+    await expect(await canvas.findByRole("heading", { name: "Members", level: 2 })).toBeInTheDocument();
     await expect(await canvas.findByRole("button", { name: "Invite member" })).toBeInTheDocument();
     await expect(await canvas.findByText("Story Writer")).toBeInTheDocument();
     await expectVaultShell(canvasElement);
@@ -173,7 +178,7 @@ export const MembersReadOnly: Story = {
   render: () => <AkbRouteTree />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/Your current role comes from this vault's public access policy/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/The roster is read-only for your reader role/i)).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: "Invite member" })).not.toBeInTheDocument();
     await expectVaultShell(canvasElement);
   },
@@ -287,10 +292,10 @@ export const VaultSettingsArchived: Story = {
   render: () => <AkbRouteTree />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("complementary", { name: "Vault details" })).toBeVisible();
-    await expect(await canvas.findByText("archived", { exact: true })).toBeVisible();
-    await userEvent.click(canvas.getByRole("tab", { name: "Advanced" }));
+    await userEvent.click(await canvas.findByRole("tab", { name: "Advanced" }));
     await expect(await canvas.findByRole("button", { name: "Unarchive" })).toBeInTheDocument();
+    await expect(await canvas.findByText("The vault is read-only. Members and agents can still retrieve its knowledge.")).toBeVisible();
+    await expect(canvas.queryByRole("complementary", { name: "Vault details" })).not.toBeInTheDocument();
     // Owner, but the vault is server-side read-only: the guide section renders
     // its read surfaces (await one so the negatives below aren't just "not
     // loaded yet") without the Edit tab or Reset button.

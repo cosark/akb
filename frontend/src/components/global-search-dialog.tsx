@@ -30,7 +30,7 @@ import { appRouteContract } from "@/app-route-contract";
 import { cn } from "@/lib/utils";
 import { DOCUMENT_PREVIEW_CLOSED_EVENT, documentPreviewBackground, documentPreviewState } from "@/lib/document-preview-navigation";
 import { isModalOpen } from "@/lib/modal-visibility";
-import { useCurrentUser } from "@/contexts/current-user-context";
+import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
 import { useResourceNavigation } from "@/contexts/resource-navigation-context";
 import {
   clearRecentSearches,
@@ -108,11 +108,13 @@ function resultHref(result: GlobalSearchResult): string {
 /** One stable entry point; named Vault routes supply the initial search scope. */
 export function GlobalSearchDialog() {
   const currentUser = useCurrentUser();
+  const { checking, revision } = useAccessVerification();
   const location = useLocation();
   const { pathname } = documentPreviewBackground(location) ?? location;
   const match = matchRoutes([...appRouteContract], pathname)?.at(-1);
   const vault = match?.route.boundary === "vault-shell" ? match.params.name : undefined;
-  return <KnowledgeSearchDialog key={JSON.stringify([currentUser?.user_id, vault])} contextVault={vault} />;
+  if (checking) return null;
+  return <KnowledgeSearchDialog key={JSON.stringify([currentUser?.user_id, vault, revision])} contextVault={vault} />;
 }
 
 function KnowledgeSearchDialog({ contextVault }: { contextVault?: string }) {

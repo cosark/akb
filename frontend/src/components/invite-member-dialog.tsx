@@ -1,15 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import {
-  Box,
-  Check,
-  Eye,
-  PenLine,
-  Search,
-  ShieldCheck,
-  UserPlus,
-  UserRound,
-  type LucideIcon,
-} from "lucide-react";
+import { useEffect, useMemo, useState, type RefObject } from "react";
+import { Box, Check, Search, UserPlus, UserRound, X } from "lucide-react";
 import { searchUsers, grantAccess } from "@/lib/api";
 import { useDebounce } from "@/hooks/use-debounce";
 import { Alert } from "@/components/ui/alert";
@@ -24,9 +14,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { MemberRolePicker, type AssignableMemberRole } from "@/components/member-role-picker";
 import { cn } from "@/lib/utils";
-
-type Role = "reader" | "writer" | "admin";
 
 interface UserHit {
   id: string;
@@ -44,38 +33,14 @@ interface InviteMemberDialogProps {
   /** Durable IDs already in the vault — hidden from search results. */
   existingUserIds: Set<string>;
   onInvited: () => void;
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }
 
-const ROLE_LABELS: Record<Role, string> = {
+const ROLE_LABELS: Record<AssignableMemberRole, string> = {
   reader: "Reader",
   writer: "Writer",
   admin: "Admin",
 };
-const ROLE_OPTIONS: Array<{
-  value: Role;
-  label: string;
-  description: string;
-  Icon: LucideIcon;
-}> = [
-  {
-    value: "reader",
-    label: "Reader",
-    description: "Browse and search vault knowledge.",
-    Icon: Eye,
-  },
-  {
-    value: "writer",
-    label: "Writer",
-    description: "Create, edit, and remove content.",
-    Icon: PenLine,
-  },
-  {
-    value: "admin",
-    label: "Admin",
-    description: "Manage content, members, and roles.",
-    Icon: ShieldCheck,
-  },
-];
 
 export function InviteMemberDialog({
   open,
@@ -83,330 +48,212 @@ export function InviteMemberDialog({
   vault,
   existingUserIds,
   onInvited,
+  returnFocusRef,
 }: InviteMemberDialogProps) {
   const [query, setQuery] = useState("");
   const debouncedQuery = useDebounce(query.trim(), 250);
   const [hits, setHits] = useState<UserHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<UserHit | null>(null);
-  const [role, setRole] = useState<Role>("reader");
-  const [error, setError] = useState("");
+  const [role, setRole] = useState<AssignableMemberRole>("reader");
+  const [searchError, setSearchError] = useState("");
+  const [grantError, setGrantError] = useState("");
+  const [retry, setRetry] = useState(0);
   const [granting, setGranting] = useState(false);
 
-  // Stabilize the Set so its identity matches the underlying string set —
-  // otherwise every parent render produces a fresh Set ref and the search
-  // effect refires unnecessarily.
   const exclusionKey = useMemo(
     () => Array.from(existingUserIds).sort().join(","),
     [existingUserIds],
   );
 
-  // Reset on open/close so a stale picked user from a previous invite doesn't
-  // leak into the next session.
   useEffect(() => {
     if (!open) {
       setQuery("");
       setHits([]);
       setSelected(null);
       setRole("reader");
-      setError("");
+      setSearchError("");
+      setGrantError("");
     }
   }, [open]);
 
-  // Empty query shows the first 20 users (server default) so the picker is
-  // browsable. Debouncing happens upstream via useDebounce on `query`.
+  useEffect(() => {
+    if (selected && existingUserIds.has(selected.id)) {
+      setSelected(null);
+      setGrantError("");
+    }
+  }, [selected, existingUserIds]);
+
+  // Keep old rows while the next directory request is pending, but disable
+  // them so a stale search result cannot be invited accidentally.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setSearching(true);
+    setSearchError("");
     searchUsers(debouncedQuery || undefined)
       .then((result) => {
         if (cancelled) return;
-        setHits(
-          (result.users || []).filter((user) => !existingUserIds.has(user.id)),
-        );
+        setHits((result.users || []).filter((user) => !existingUserIds.has(user.id)));
       })
       .catch((caught: unknown) => {
         if (cancelled) return;
         setHits([]);
-        setError(errorMessage(caught, "Search failed"));
+        setSearchError(errorMessage(caught, "Could not load accounts"));
       })
       .finally(() => {
         if (!cancelled) setSearching(false);
       });
-    return () => {
-      cancelled = true;
-    };
-    // existingUserIds identity may change across parent renders even when
-    // contents are stable — gate on the canonical key instead.
+    return () => { cancelled = true; };
+    // The canonical exclusion key avoids restarting on equivalent Set instances.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedQuery, open, exclusionKey]);
+  }, [debouncedQuery, open, exclusionKey, retry]);
+
+  function chooseRole(user: UserHit, nextRole: AssignableMemberRole) {
+    if (granting) return;
+    setSelected(user);
+    setRole(nextRole);
+    setGrantError("");
+  }
 
   async function handleGrant() {
-    if (!selected) return;
+    if (!selected || granting || existingUserIds.has(selected.id)) return;
     setGranting(true);
-    setError("");
+    setGrantError("");
     try {
       await grantAccess(vault, { id: selected.id, username: selected.username }, role);
       onInvited();
       onOpenChange(false);
     } catch (caught: unknown) {
-      setError(errorMessage(caught, "Failed to grant access"));
+      setGrantError(errorMessage(caught, "Failed to grant access"));
     } finally {
       setGranting(false);
     }
   }
 
+  const pendingSearch = searching || query.trim() !== debouncedQuery;
+
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => !granting && onOpenChange(nextOpen)}>
-      <DialogContent className="max-w-3xl gap-0 overflow-hidden p-0">
-        <DialogHeader className="border-b border-border-strong bg-workspace-section px-5 py-4 pr-14">
-          <div className="flex items-start gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-border-strong bg-surface text-primary shadow-xs">
-              <UserPlus className="h-4 w-4" aria-hidden />
+      <DialogContent
+        className="flex max-w-2xl flex-col gap-0 overflow-hidden p-0"
+        onCloseAutoFocus={(event) => {
+          if (returnFocusRef?.current?.isConnected) {
+            event.preventDefault();
+            returnFocusRef.current.focus({ preventScroll: true });
+          }
+        }}
+      >
+        <DialogHeader className="shrink-0 gap-1 border-b border-border bg-surface px-4 py-4 pr-12 sm:px-5 sm:pr-14">
+          <div className="flex items-center gap-2">
+            <UserPlus className="h-4 w-4 shrink-0 text-foreground-muted" aria-hidden />
+            <DialogTitle className="text-base">Invite member</DialogTitle>
+            <span className="ml-1 inline-flex min-w-0 items-center gap-1 text-xs text-foreground-muted">
+              <Box className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span className="truncate" title={vault}>{vault}</span>
             </span>
-            <div className="min-w-0">
-              <DialogTitle>Invite member</DialogTitle>
-              <DialogDescription className="mt-1">
-                Choose an AKB account and grant access to this vault.
-              </DialogDescription>
-              <div className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] border border-border bg-surface px-2 py-1 text-xs text-foreground-muted">
-                <Box className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
-                <span className="truncate font-medium text-foreground">{vault}</span>
-              </div>
-            </div>
           </div>
+          <DialogDescription className="text-xs">
+            Choose one account and a role. Access applies to this vault.
+          </DialogDescription>
         </DialogHeader>
 
-        <div className="grid min-h-0 lg:grid-cols-[minmax(0,1.25fr)_minmax(17rem,0.75fr)]">
-          <section aria-labelledby="invite-person-heading" className="min-w-0 border-b border-border lg:border-b-0 lg:border-r">
-            <div className="border-b border-border bg-surface px-5 py-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h3 id="invite-person-heading" className="text-sm font-semibold text-foreground">
-                    Find an account
-                  </h3>
-                  <p className="mt-0.5 text-xs text-foreground-muted">
-                    Existing vault members are hidden.
-                  </p>
-                </div>
-                {!searching && hits.length > 0 && (
-                  <span className="shrink-0 text-xs tabular-nums text-foreground-muted">
-                    {hits.length} available
-                  </span>
-                )}
-              </div>
-
-              <Label htmlFor="invite-search" className="sr-only">
-                Search AKB accounts
-              </Label>
-              <div className="relative mt-3">
-                <Search
-                  className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground-muted"
-                  aria-hidden
-                />
-                <Input
-                  id="invite-search"
-                  type="search"
-                  placeholder="Search name, username, or email"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  className="bg-background pl-9"
-                  autoFocus
-                />
-              </div>
-            </div>
-
-            <div className="rail-scroll min-h-48 max-h-[min(22rem,42vh)] overflow-y-auto bg-surface">
-              {searching && hits.length === 0 ? (
-                <div className="flex min-h-48 items-center justify-center px-5 text-sm text-foreground-muted" role="status" aria-live="polite">
-                  Searching accounts…
-                </div>
-              ) : hits.length === 0 ? (
-                <div className="flex min-h-48 flex-col items-center justify-center px-8 text-center" role="status">
-                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-surface-2 text-foreground-muted">
-                    <UserRound className="h-4 w-4" aria-hidden />
-                  </span>
-                  <p className="mt-3 text-sm font-medium text-foreground">
-                    {debouncedQuery ? "No matching accounts" : "No accounts available"}
-                  </p>
-                  <p className="mt-1 text-xs leading-relaxed text-foreground-muted">
-                    Only active AKB accounts can be invited.
-                  </p>
-                </div>
-              ) : (
-                <ul role="listbox" aria-label="AKB accounts" className="divide-y divide-border">
-                  {hits.map((user) => {
-                    const active = selected?.id === user.id;
-                    return (
-                      <li key={user.id} role="none">
-                        <button
-                          type="button"
-                          role="option"
-                          aria-selected={active}
-                          onClick={() => setSelected(user)}
-                          className={cn(
-                            "flex w-full cursor-pointer items-center gap-3 px-5 py-3 text-left transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                            active
-                              ? "bg-surface-selected text-surface-selected-foreground"
-                              : "bg-surface text-foreground hover:bg-surface-hover",
-                          )}
-                        >
-                          <UserAvatar user={user} />
-                          <span className="min-w-0 flex-1">
-                            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-                              <span className="break-words text-sm font-semibold text-foreground [overflow-wrap:anywhere]">
-                                {user.display_name?.trim() || user.username}
-                              </span>
-                              <span className="break-all text-xs text-foreground-muted">
-                                @{user.username}
-                              </span>
-                              {user.account_kind === "service" && (
-                                <Badge variant="default">Service account</Badge>
-                              )}
-                            </span>
-                            <span className="mt-0.5 block break-all text-xs text-foreground-muted">
-                              {user.email}
-                            </span>
-                          </span>
-                          <span
-                            className={cn(
-                              "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border",
-                              active
-                                ? "border-primary bg-primary text-primary-foreground"
-                                : "border-border bg-surface text-transparent",
-                            )}
-                            aria-hidden
-                          >
-                            <Check className="h-3.5 w-3.5" />
-                          </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          </section>
-
-          <section aria-labelledby="invite-role-heading" className="min-w-0 bg-background px-5 py-4">
-            <h3 id="invite-role-heading" className="text-sm font-semibold text-foreground">
-              Access level
-            </h3>
-            <p className="mt-0.5 text-xs text-foreground-muted">
-              Choose the lowest role that fits their work.
-            </p>
-
-            <div className="mt-3 rounded-[var(--radius-md)] border border-border-strong bg-surface p-3" aria-live="polite">
-              {selected ? (
-                <div className="flex min-w-0 items-center gap-3">
-                  <UserAvatar user={selected} />
-                  <div className="min-w-0">
-                    <p className="break-words text-sm font-semibold text-foreground [overflow-wrap:anywhere]">
-                      {selected.display_name?.trim() || selected.username}
-                    </p>
-                    <p className="break-all text-xs text-foreground-muted">@{selected.username}</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center gap-3 text-foreground-muted">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-2">
-                    <UserRound className="h-4 w-4" aria-hidden />
-                  </span>
-                  <p className="text-xs leading-relaxed">Select an account from the list.</p>
-                </div>
-              )}
-            </div>
-
-            <fieldset className="mt-4">
-              <legend className="sr-only">Role</legend>
-              <div className="space-y-2">
-                {ROLE_OPTIONS.map((option) => {
-                  const active = role === option.value;
-                  const Icon = option.Icon;
-                  return (
-                    <label
-                      key={option.value}
-                      className={cn(
-                        "flex min-h-16 cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border px-3 py-2.5 transition-token has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
-                        active
-                          ? "border-primary bg-surface-selected"
-                          : "border-border bg-surface hover:border-border-strong hover:bg-surface-hover",
-                      )}
-                    >
-                      <input
-                        type="radio"
-                        name="invite-role"
-                        value={option.value}
-                        checked={active}
-                        onChange={() => setRole(option.value)}
-                        className="sr-only"
-                      />
-                      <span
-                        className={cn(
-                          "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)]",
-                          active
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-surface-2 text-foreground-muted",
-                        )}
-                      >
-                        <Icon className="h-3.5 w-3.5" aria-hidden />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-center justify-between gap-2">
-                          <span className="text-sm font-semibold text-foreground">{option.label}</span>
-                          {active && <Check className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />}
-                        </span>
-                        <span className="mt-0.5 block text-xs leading-relaxed text-foreground-muted">
-                          {option.description}
-                        </span>
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            </fieldset>
-
-            {error && <Alert variant="destructive" className="mt-4">{error}</Alert>}
-          </section>
+        <div className="shrink-0 border-b border-border px-4 py-3 sm:px-5">
+          <Label htmlFor="invite-search" className="sr-only">Search AKB accounts</Label>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground-muted" aria-hidden />
+            <Input
+              id="invite-search"
+              type="search"
+              placeholder="Search name, username, or email"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              disabled={granting}
+              className="bg-surface pl-9"
+              autoFocus
+            />
+          </div>
+          <p className="mt-2 text-xs text-foreground-muted">Existing vault members are hidden.</p>
         </div>
 
-        <div className="flex flex-col-reverse gap-3 border-t border-border-strong bg-surface px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <p
-            data-testid="invite-summary"
-            className="min-w-0 text-xs text-foreground-muted"
-            role="status"
-            aria-live="polite"
-          >
-            {selected ? (
-              <>
-                <span className="font-semibold text-foreground">
-                  {selected.display_name?.trim() || selected.username}
-                </span>{" "}
-                will join as {ROLE_LABELS[role]}.
-              </>
-            ) : (
-              "Select an account to continue."
-            )}
-          </p>
-          <div className="flex shrink-0 items-center justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              disabled={granting}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="accent"
-              onClick={handleGrant}
-              loading={granting}
-              disabled={!selected}
-            >
-              {granting ? "Inviting…" : `Invite as ${ROLE_LABELS[role]}`}
-            </Button>
+        <div data-testid="invite-body" className="rail-scroll min-h-0 max-h-80 flex-1 overflow-y-auto overscroll-contain" aria-busy={pendingSearch}>
+          {searchError ? (
+            <div className="p-4 sm:p-5">
+              <Alert variant="destructive" title="Could not load accounts">
+                {searchError}
+                <div className="mt-3">
+                  <Button variant="outline" size="sm" onClick={() => setRetry((current) => current + 1)}>Try again</Button>
+                </div>
+              </Alert>
+            </div>
+          ) : pendingSearch && hits.length === 0 ? (
+            <div className="flex min-h-28 items-center justify-center p-4 text-sm text-foreground-muted" role="status">
+              Searching accounts…
+            </div>
+          ) : hits.length === 0 ? (
+            <div className="flex min-h-28 flex-col items-center justify-center px-6 py-5 text-center" role="status">
+              <UserRound className="h-5 w-5 text-foreground-muted" aria-hidden />
+              <p className="mt-2 text-sm font-medium">{debouncedQuery ? "No matching accounts" : "No accounts available"}</p>
+              <p className="mt-1 text-xs text-foreground-muted">Only active AKB accounts can be invited.</p>
+            </div>
+          ) : (
+            <table aria-label="Accounts to invite" className="w-full table-fixed border-collapse">
+              <thead className="border-b border-border bg-surface text-left text-xs text-foreground-muted">
+                <tr>
+                  <th scope="col" className="px-4 py-2 font-medium sm:px-5">Account</th>
+                  <th scope="col" className="w-32 px-4 py-2 text-right font-medium sm:w-36 sm:px-5">Role</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {hits.map((user) => {
+                  const active = selected?.id === user.id;
+                  return (
+                    <tr key={user.id} data-selected={active || undefined} className={cn("transition-token", active ? "bg-surface-selected" : "hover:bg-surface-hover")}>
+                      <td className="min-w-0 px-4 py-3 align-middle sm:px-5">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <UserAvatar user={user} />
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                              <span className="break-words text-sm font-semibold [overflow-wrap:anywhere]">{user.display_name?.trim() || user.username}</span>
+                              {active && <><Check className="h-3.5 w-3.5 shrink-0 text-link" aria-hidden /><span className="sr-only">Selected account</span></>}
+                              {user.account_kind === "service" && <Badge variant="default">Service account</Badge>}
+                            </div>
+                            <p className="mt-0.5 break-words text-xs text-foreground-muted [overflow-wrap:anywhere]">
+                              @{user.username}{user.email && <> · {user.email}</>}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right align-middle sm:px-5">
+                        <MemberRolePicker
+                          value={active ? role : undefined}
+                          onChange={(nextRole) => chooseRole(user, nextRole)}
+                          label={`Select role for ${user.username}`}
+                          disabled={granting || pendingSearch}
+                          className="w-full"
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div data-testid="invite-footer" className="shrink-0 border-t border-border bg-surface px-4 py-3 sm:px-5">
+          {grantError && <Alert variant="destructive" className="mb-3">{grantError}</Alert>}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+              <p data-testid="invite-summary" className="min-w-0 break-words text-xs text-foreground-muted [overflow-wrap:anywhere]" role="status" aria-live="polite" aria-atomic="true">
+                {selected ? <><span className="font-semibold text-foreground">{selected.display_name?.trim() || selected.username}</span> will join as {ROLE_LABELS[role]}.</> : "Select a role beside an account to continue."}
+              </p>
+              {selected && <Button type="button" variant="ghost" size="icon" aria-label="Clear selected account" disabled={granting} onClick={() => { setSelected(null); setGrantError(""); }} className="shrink-0"><X className="h-3.5 w-3.5" aria-hidden /></Button>}
+            </div>
+            <div className="flex shrink-0 items-center justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={granting}>Cancel</Button>
+              <Button type="button" variant="accent" onClick={() => void handleGrant()} loading={granting} disabled={!selected}>Invite</Button>
+            </div>
           </div>
         </div>
       </DialogContent>
@@ -416,20 +263,9 @@ export function InviteMemberDialog({
 
 function UserAvatar({ user }: { user: UserHit }) {
   const label = user.display_name?.trim() || user.username;
-  return (
-    <span
-      aria-hidden
-      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border bg-surface-2 text-xs font-semibold text-foreground"
-    >
-      {initialsFor(label)}
-    </span>
-  );
-}
-
-function initialsFor(value: string): string {
-  const parts = value.trim().split(/\s+/).filter(Boolean);
-  if (parts.length > 1) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-  return value.slice(0, 2).toUpperCase();
+  const parts = label.trim().split(/\s+/).filter(Boolean);
+  const initials = parts.length > 1 ? `${parts[0][0]}${parts[1][0]}`.toUpperCase() : label.slice(0, 2).toUpperCase();
+  return <span aria-hidden className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-surface-2 text-xs font-semibold text-foreground sm:flex">{initials}</span>;
 }
 
 function errorMessage(error: unknown, fallback: string): string {

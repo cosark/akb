@@ -1,6 +1,6 @@
 import * as React from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, ChevronsUpDown } from "lucide-react";
 import {
   MarkdownEditingSurface,
   MarkdownLocaleProvider,
@@ -108,7 +108,23 @@ function EditorToolbar({
   vault,
   appearance,
 }: EditorToolbarProps) {
+  const host = React.useRef<HTMLDivElement>(null);
+  const toolbarId = React.useId();
+  const [narrow, setNarrow] = React.useState(false);
+  const [expanded, setExpanded] = React.useState(false);
+  React.useEffect(() => {
+    const element = host.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(entries => {
+      const width = entries[0]?.contentRect.width;
+      if (width) setNarrow(width < 520);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   return (
+    <div ref={host} className="flex min-w-0 flex-1 items-start">
+    <div id={toolbarId} className="min-w-0 flex-1">
     <MarkdownToolbar
       editor={editor}
       link={{
@@ -119,6 +135,7 @@ function EditorToolbar({
       }}
       className={cn(
         "static! min-w-0 flex-1 border-b-0!",
+        narrow && !expanded && "flex-nowrap! overflow-x-auto [&>[role=group]]:shrink-0",
         appearance === "canvas"
           ? "bg-surface/95 px-5 py-2 backdrop-blur-sm sm:px-8 lg:px-10"
           : appearance === "workspace"
@@ -126,6 +143,11 @@ function EditorToolbar({
             : "rounded-t-[var(--radius-sm)] bg-surface px-2 py-1.5",
       )}
     />
+    </div>
+    {narrow && <Button type="button" variant="ghost" size="icon" className="mt-1.5 shrink-0"
+      aria-label={expanded ? "Collapse formatting tools" : "Expand formatting tools"} aria-expanded={expanded} aria-controls={toolbarId}
+      onClick={() => setExpanded(value => !value)}><ChevronsUpDown className="h-4 w-4" aria-hidden /></Button>}
+    </div>
   );
 }
 

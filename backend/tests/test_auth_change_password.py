@@ -68,11 +68,13 @@ async def test_change_password_success(pool, user):
 
 
 async def test_change_password_wrong_current_raises(user):
-    from app.exceptions import AuthenticationError
+    from app.exceptions import AKBError
     from app.services.auth_service import change_password
     uid, _ = user
-    with pytest.raises(AuthenticationError):
+    with pytest.raises(AKBError) as caught:
         await change_password(str(uid), "WRONG-current", "new-secret-67")
+    assert caught.value.status_code == 400
+    assert caught.value.code == "current_password_incorrect"
 
 
 async def test_change_password_too_short_raises(user):

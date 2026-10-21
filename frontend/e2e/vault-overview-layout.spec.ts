@@ -47,20 +47,32 @@ for (const dark of [false, true]) for (const width of [375, 1440, 1920, 2560]) {
     const summary = page.getByRole("region", { name: "Vault summary", exact: true });
     const contents = summary.getByRole("region", { name: "Contents", exact: true });
     await expect(contents).toBeVisible();
+    await expect(page.getByRole("button", { name: "Navigate in fixture", exact: true })).toHaveText("Navigate");
+    await expect(page.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
     await expect(summary.getByRole("button", { name: "Copy akb://fixture" })).toBeVisible();
     await expect(summary.getByText("owner", { exact: true })).toBeVisible();
     await expect(aside.getByRole("region", { name: "Contents", exact: true })).toHaveCount(0);
     await expect(aside.getByRole("region")).toHaveCount(2);
     await expect(aside.getByRole("region", { name: "Tables", exact: true })).toHaveCount(0);
+    const availableRems = await page.getByRole("region", { name: "fixture Vault overview", exact: true }).evaluate(element => {
+      const style = getComputedStyle(element);
+      const width = element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      return width / parseFloat(getComputedStyle(document.documentElement).fontSize);
+    });
+    const contextBesideActivity = availableRems >= 60;
+    const contextHasTwoColumns = availableRems >= 40 && !contextBesideActivity;
     const sections = await aside.getByRole("region").all();
     for (let index = 1; index < sections.length; index++) {
       const previous = (await sections[index - 1].boundingBox())!;
       const current = (await sections[index].boundingBox())!;
-      const gap = current.y - previous.y - previous.height;
+      const gap = contextHasTwoColumns
+        ? current.x - previous.x - previous.width
+        : current.y - previous.y - previous.height;
       expect(gap).toBeGreaterThanOrEqual(12);
       expect(gap).toBeLessThanOrEqual(16);
-      expect(current.x).toBe(previous.x);
-      expect(current.width).toBe(previous.width);
+      if (contextHasTwoColumns) expect(current.y).toBe(previous.y);
+      else expect(current.x).toBe(previous.x);
+      expect(current.width).toBeCloseTo(previous.width, 0);
     }
     const link = recent.getByRole("link", { name: /Operations Runbook/ });
     await expect(link).toHaveAttribute("href", "/vault/fixture/doc/guides%2Fteam%2Fresource-0.md");
@@ -68,7 +80,7 @@ for (const dark of [false, true]) for (const width of [375, 1440, 1920, 2560]) {
     await expect(recent).not.toContainText("abc1234");
     const mainBox = (await recent.boundingBox())!;
     const asideBox = (await aside.boundingBox())!;
-    if (width >= 1920) {
+    if (contextBesideActivity) {
       expect(Math.abs(mainBox.y - asideBox.y)).toBeLessThanOrEqual(1);
       expect(asideBox.width).toBeGreaterThanOrEqual(304);
       expect(asideBox.width).toBeLessThanOrEqual(336);

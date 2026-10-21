@@ -82,6 +82,7 @@ interface Props {
   /** Counts before display filters, limited to resources loaded in this graph. */
   resourceCounts?: Record<NodeKind, number>;
   onSelect?: (uri: string) => void;
+  onReveal?: (uri: string) => void;
   onRearrange?: () => void;
 }
 
@@ -106,7 +107,7 @@ export function GraphToolbar(props: Props) {
 }
 
 function GraphControls({
-  vault, view, onChange, onNavigate, hubs, nodes, resourceCounts, onSelect, onRearrange,
+  vault, view, onChange, onNavigate, hubs, nodes, resourceCounts, onSelect, onReveal, onRearrange,
   focusTitle, displayMode, onDisplayModeChange, orphanCount, hideOrphans,
   onToggleOrphans, hiddenCount, onUnhideAll, onFit, history,
 }: Props & { history: ReturnType<typeof useGraphHistory> }) {
@@ -213,11 +214,14 @@ function GraphControls({
   }, [activeId, searchOpen]);
 
   function choose(item: SearchHit) {
+    onReveal?.(item.uri);
     history.pushRecent({ doc_id: item.docId, title: item.title, kind: item.kind, uri: item.uri });
     if (loaded.some(node => node.uri === item.uri) && onSelect) {
       onSelect(item.uri);
     } else {
-      updateView(current => ({ ...current, entry: item.uri, selected: undefined, hops: 1 }));
+      // Explicit resource discovery reveals its kind instead of leaving an
+      // invisible focus inside the previous display filter.
+      updateView(current => ({ ...current, entry: item.uri, selected: item.uri, hops: 1, types: new Set(current.types).add(item.kind) }));
     }
     setQuery("");
     inputRef.current?.focus();

@@ -6,7 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppSidebar } from "@/components/app-sidebar";
 import { listVaults } from "@/lib/api";
 
-vi.mock("@/contexts/current-user-context", () => ({ useCurrentUser: () => ({ user_id: "sidebar-test" }) }));
+vi.mock("@/contexts/current-user-context", () => ({
+  useCurrentUser: () => ({ user_id: "sidebar-test" }),
+  useAccessVerification: () => ({ checking: false, revision: 0 }),
+}));
 vi.mock("@/lib/api", () => ({ listVaults: vi.fn() }));
 const key = "akb-vault-favorites:v2:sidebar-test";
 const vaults = Array.from({ length: 7 }, (_, index) => ({ id: `id-${index}`, name: `vault-${index}`, role: "writer" }));

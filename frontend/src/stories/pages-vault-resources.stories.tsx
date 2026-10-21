@@ -137,7 +137,7 @@ export const TablePreview: Story = {
     await expect(await canvas.findByRole("heading", { name: "releases" })).toBeInTheDocument();
     await expect(await canvas.findByText("0.6.0")).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: "Schema" }));
-    const schema = canvas.getByRole("complementary", { name: "Table schema" });
+    const schema = within(document.body).getByRole("complementary", { name: "Table schema" });
     const schemaCanvas = within(schema);
     await expect(schema).toBeVisible();
     await expect(schemaCanvas.getByRole("table")).toBeVisible();
@@ -308,7 +308,8 @@ export const FileLoadError: Story = {
   render: () => <AkbRouteTree />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("Couldn't load the file (500).")).toBeInTheDocument();
+    await expect(await canvas.findByText("Couldn't load the file (500). Try again.")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /^Try again$/ })).toBeEnabled();
     await expectVaultShell(canvasElement);
   },
 };
@@ -328,8 +329,8 @@ export const GraphOverview: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("heading", { name: "Knowledge graph" })).toBeInTheDocument();
-    await expect(await canvas.findByRole("main", { name: "Graph exploration workspace" })).toBeInTheDocument();
-    await expect(await canvas.findByText(/Showing 3 of 6 resources/i)).toBeInTheDocument();
+    await expect(await canvas.findByRole("region", { name: "Graph exploration workspace" })).toBeInTheDocument();
+    await expect(await canvas.findByRole("group", { name: "Resource types" })).toBeInTheDocument();
     await expectGraphVaultShell(canvasElement);
   },
 };

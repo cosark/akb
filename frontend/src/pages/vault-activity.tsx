@@ -23,10 +23,18 @@ import { TooltipText } from "@/components/ui/tooltip-text";
 import { TonalIcon, type TonalIconTone } from "@/components/ui/tonal-icon";
 import { useDebounce } from "@/hooks/use-debounce";
 import { getVaultActivity, type ActivityEntry } from "@/lib/api";
+import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
 
 const PAGE_SIZE = 50;
 
 export default function VaultActivityPage() {
+  const user = useCurrentUser();
+  const { checking, revision } = useAccessVerification();
+  const { name } = useParams<{ name: string }>();
+  return <VaultActivityWorkspace key={JSON.stringify([user?.user_id, name, revision, checking])} checking={checking} />;
+}
+
+function VaultActivityWorkspace({ checking }: { checking: boolean }) {
   const { name } = useParams<{ name: string }>();
   const [author, setAuthor] = useState("");
   const debouncedAuthor = useDebounce(author.trim(), 250);
@@ -41,7 +49,7 @@ export default function VaultActivityPage() {
   const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
-    if (!name) return;
+    if (!name || checking) return;
     let active = true;
     const canPreserve = loadedVaultRef.current === name && hasEntriesRef.current;
     if (!canPreserve) setEntries(null);
@@ -74,7 +82,7 @@ export default function VaultActivityPage() {
     return () => {
       active = false;
     };
-  }, [debouncedAuthor, name, retryKey]);
+  }, [debouncedAuthor, name, retryKey, checking]);
 
   useEffect(() => {
     if (!name) return;
@@ -110,7 +118,7 @@ export default function VaultActivityPage() {
                 </span>
                 {entries !== null && (
                   <Badge variant="default">
-                    {total} change{total === 1 ? "" : "s"}
+                    {count} loaded change{count === 1 ? "" : "s"}
                   </Badge>
                 )}
                 <span className="text-xs text-foreground-muted">
@@ -122,7 +130,7 @@ export default function VaultActivityPage() {
                       ? "Updating changes…"
                     : appliedAuthor
                       ? `Changes by ${appliedAuthor}`
-                      : `Latest commits in ${name}`}
+                      : `Recent document changes in ${name}`}
                 </span>
               </div>
             </div>
@@ -187,8 +195,7 @@ export default function VaultActivityPage() {
 
           {entries && entries.length === PAGE_SIZE && (
             <p className="border-t border-border bg-surface-2/40 px-4 py-2 text-right text-xs text-foreground-muted sm:px-5">
-              Showing the latest {PAGE_SIZE} changes · filter by author to
-              narrow the log
+              Showing the latest {PAGE_SIZE} document changes. Older changes are outside this view.
             </p>
           )}
         </section>
@@ -208,7 +215,7 @@ function ActivitySummary() {
           className="h-3.5 w-3.5 text-[var(--color-cat-2)]"
           aria-hidden
         />
-        Git-backed
+        Document history
       </span>
       <span className="text-subtle" aria-hidden>
         ·
@@ -229,8 +236,7 @@ function ActivitySummary() {
       </span>
       <span className="font-medium text-foreground">Newest first</span>
       <span className="basis-full text-foreground-muted lg:ml-2 lg:basis-auto">
-        Every commit in this vault is recorded here. Filter by who made
-        it—people and agents share the same log.
+        Latest {PAGE_SIZE} document changes, newest first. Author filters search this recent window; older matches may not be included. This view supports Git commits and Native revisions.
       </span>
     </div>
   );
@@ -307,7 +313,7 @@ function ActivityControls({
       )}
 
       <span className="shrink-0 text-xs tabular-nums text-foreground-muted sm:pl-1">
-        {visibleCount}/{totalCount}
+        {visibleCount} loaded {visibleCount === 1 ? "change" : "changes"}{totalCount > visibleCount ? ` · ${totalCount} reported in this window` : ""}
       </span>
     </div>
   );
@@ -414,7 +420,7 @@ function ActivityEmptyState({
         </h2>
         <p className="mt-1.5 text-sm leading-relaxed text-foreground-muted">
           {filtered
-            ? "Try another person or agent name, or clear the current filter."
+            ? "No matches in the latest 50 document changes. Older matches may exist. Try another name or clear the filter."
             : "Changes appear here after a person or connected agent writes to this vault."}
         </p>
         {filtered && (

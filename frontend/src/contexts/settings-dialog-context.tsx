@@ -18,6 +18,8 @@ export function SettingsDialogProvider({ children, identity }: { children: React
   const location = useLocation();
   const navigate = useNavigate();
   const [request, setRequest] = useState<{ section: string; path: string; routeKey: string; identity: string } | null>(null);
+  const currentRequest = useRef(request);
+  currentRequest.current = request;
   const returnFocus = useRef<HTMLElement | null>(null);
   const path = location.pathname + location.search;
   const openSettings = useCallback((section = "profile", trigger?: HTMLElement | null) => {
@@ -43,8 +45,12 @@ export function SettingsDialogProvider({ children, identity }: { children: React
   return <SettingsContext.Provider value={controls}>
     {children}
     {request && request.identity === identity && <ErrorBoundary resetKeys={[request.path]}>
-      <Suspense fallback={<Dialog open onOpenChange={open => { if (!open) dismiss(); }}><DialogContent onCloseAutoFocus={event => { event.preventDefault(); restoreFocus(); }}><DialogTitle>Settings</DialogTitle><DialogDescription className="sr-only">Loading your account settings.</DialogDescription><InlineLoadingState label="Loading settings" /></DialogContent></Dialog>}>
-        <SettingsDialog key={request.routeKey} initialTab={request.section} onClose={dismiss} onRestoreFocus={restoreFocus} />
+      <Suspense fallback={<Dialog open onOpenChange={open => { if (!open) dismiss(); }}><DialogContent onCloseAutoFocus={event => {
+        event.preventDefault();
+        // A lazy handoff is not a dismissal: the real dialog owns focus now.
+        if (currentRequest.current === null) restoreFocus();
+      }}><DialogTitle>Settings</DialogTitle><DialogDescription className="sr-only">Loading your account settings.</DialogDescription><InlineLoadingState label="Loading settings" /></DialogContent></Dialog>}>
+        <SettingsDialog key={`${request.identity}:${request.routeKey}`} initialTab={request.section} onClose={dismiss} onNavigate={closeSettings} onRestoreFocus={restoreFocus} />
       </Suspense>
     </ErrorBoundary>}
   </SettingsContext.Provider>;

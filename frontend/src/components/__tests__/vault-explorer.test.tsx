@@ -6,7 +6,8 @@ import { Link, MemoryRouter } from "react-router-dom";
 import { VaultExplorer } from "@/components/vault-explorer";
 import { CurrentUserProvider } from "@/contexts/current-user-context";
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@/lib/api", async (original) => ({
+  ...await original<typeof import("@/lib/api")>(),
   browseVault: vi.fn(),
   getVaultInfo: vi.fn(),
   // Mutations are not exercised by these tests but the explorer imports
@@ -605,7 +606,10 @@ describe("VaultExplorer — role gating", () => {
     await user.click(screen.getByRole("menuitem", { name: /upload file/i }));
     const dialog = screen.getByRole("dialog");
     const file = new File(["image"], "diagram.png", { type: "image/png" });
-    await user.upload(within(dialog).getByLabelText(/^File/i), file);
+    // The native picker remains with the upload owner outside the transient
+    // dialog portal so foreground proof cannot detach its change listener.
+    await user.click(within(dialog).getByRole("button", { name: /Choose a file or drop/ }));
+    fireEvent.change(screen.getByLabelText(/^File/i), { target: { files: [file] } });
     await user.click(within(dialog).getByRole("button", { name: /^Upload file$/i }));
     expect(uploadMock).toHaveBeenCalledWith(
       "v",

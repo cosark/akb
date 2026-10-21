@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
+  act,
   fireEvent,
   render,
   screen,
@@ -10,8 +11,10 @@ import {
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import VaultPage from "@/pages/vault";
+import { CurrentUserProvider } from "@/contexts/current-user-context";
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@/lib/api", async (original) => ({
+  ...await original<typeof import("@/lib/api")>(),
   authenticatedFetch: vi.fn(),
   createVaultTable: vi.fn(),
   getDocument: vi.fn(),
@@ -77,6 +80,39 @@ function renderVault() {
 
 const findChip = () => screen.findByRole("link", { name: "Open vault guide" });
 
+it("scopes Overview local info and late Guide reads to the verified account/revision", async () => {
+  let resolve!: (value: { content: string }) => void;
+  getDocumentMock.mockReturnValueOnce(new Promise(r => { resolve = r; })).mockResolvedValue({ content: "New account guide" });
+  getVaultInfoMock.mockResolvedValueOnce({ name: "my-v", role: "owner", description: "Private account A description" }).mockResolvedValue({ name: "my-v", role: "reader", description: "Account B description" });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = (id: string, checking = false, revision = 0) => <QueryClientProvider client={client}><MemoryRouter initialEntries={["/vault/my-v"]}><CurrentUserProvider user={{ user_id: id, username: id, email: `${id}@x.test`, display_name: null, is_admin: false, auth_method: "local", key_class: null }} checking={checking} revision={revision}><Routes><Route path="/vault/:name" element={<VaultPage />} /></Routes></CurrentUserProvider></MemoryRouter></QueryClientProvider>;
+  const { rerender } = render(view("a"));
+  await screen.findByText("Private account A description");
+  rerender(view("b", true));
+  expect(screen.queryByText("Private account A description")).not.toBeInTheDocument();
+  await act(async () => resolve({ content: "Private account A guide" }));
+  rerender(view("b", false, 1));
+  await screen.findByText("Account B description");
+  await waitFor(() => expect(getDocumentMock).toHaveBeenCalledTimes(2));
+  expect(screen.queryByText("Private account A guide")).not.toBeInTheDocument();
+});
+
+it("preserves an Overview table draft across same-account proof while resetting its private read scope", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = (checking: boolean, revision: number) => <QueryClientProvider client={client}><MemoryRouter initialEntries={["/vault/my-v"]}><CurrentUserProvider user={{ user_id: "a", username: "a", email: "a@x.test", display_name: null, is_admin: false, auth_method: "local", key_class: null }} checking={checking} revision={revision}><Routes><Route path="/vault/:name" element={<VaultPage />} /></Routes></CurrentUserProvider></MemoryRouter></QueryClientProvider>;
+  const { rerender } = render(view(false, 0));
+  fireEvent.click(await screen.findByRole("button", { name: "New table" }));
+  const dialog = screen.getByRole("dialog", { name: "Create a table" });
+  fireEvent.change(within(dialog).getByLabelText(/Table name/), { target: { value: "retained_table" } });
+  rerender(view(true, 0));
+  expect(screen.getByText("Verifying vault access…")).toBeVisible();
+  expect(screen.queryByRole("dialog", { name: "Create a table" })).not.toBeInTheDocument();
+  rerender(view(false, 1));
+  await waitFor(() => expect(getVaultInfoMock).toHaveBeenCalledTimes(2));
+  const restored = await screen.findByRole("dialog", { name: "Create a table" });
+  expect(within(restored).getByLabelText(/Table name/)).toHaveValue("retained_table");
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   authenticatedFetchMock.mockResolvedValue({ ok: false });
@@ -121,6 +157,34 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("vault page guide chip", () => {
+  it("shows Guide load failure and retries without suggesting a new Guide", async () => {
+    getDocumentMock.mockRejectedValueOnce(Object.assign(new Error("Service unavailable"), { status: 503 }));
+    renderVault();
+    expect(await screen.findByText("Couldn't load the vault guide")).toBeVisible();
+    const guide = screen.getByRole("region", { name: "Vault guide" });
+    expect(within(guide).getByText("Guide unavailable")).toBeVisible();
+    expect(within(guide).queryByRole("link", { name: "Set up vault guide" })).not.toBeInTheDocument();
+    expect(within(guide).queryByText(/Set up a vault guide/)).not.toBeInTheDocument();
+    fireEvent.click(within(guide).getByRole("button", { name: "Retry" }));
+    expect(await findChip()).toBeVisible();
+    expect(screen.queryByText("Couldn't load the vault guide")).not.toBeInTheDocument();
+  });
+
+  it("identifies a confirmed missing Guide only after a 404", async () => {
+    getDocumentMock.mockRejectedValueOnce(Object.assign(new Error("Not found"), { status: 404 }));
+    renderVault();
+    expect(await screen.findByText("Guide not configured")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Set up vault guide" })).toBeVisible();
+    expect(screen.queryByText("Couldn't load the vault guide")).not.toBeInTheDocument();
+  });
+
+  it("does not offer Guide setup while its presence is still loading", async () => {
+    getDocumentMock.mockReturnValueOnce(new Promise(() => {}));
+    renderVault();
+    expect(await screen.findByText("Checking…")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Set up vault guide" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Set up a vault guide/)).not.toBeInTheDocument();
+  });
   it("reads as 'template' when the body still matches the substituted seed", async () => {
     renderVault();
     const link = await findChip();
