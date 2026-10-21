@@ -1,4 +1,4 @@
-import { Activity, useEffect, useRef, useState, type ReactNode } from "react";
+import { Activity, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { SettingsLink } from "@/contexts/settings-dialog-context";
 import {
@@ -6,6 +6,8 @@ import {
   BookText,
   Box,
   ChevronRight,
+  ChevronDown,
+  X,
   FileClock,
   Files,
   FilePlus,
@@ -17,13 +19,13 @@ import {
   HelpCircle,
   LockKeyhole,
   Plug,
-  Shield,
   Table as TableIcon,
   Upload,
   type LucideIcon,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
+import { useResourceNavigation } from "@/contexts/resource-navigation-context";
 import {
   getDocument,
   getRecent,
@@ -37,15 +39,15 @@ import { LoadingState, InlineLoadingState } from "@/components/ui/loading-state"
 import { Skeleton } from "@/components/ui/skeleton";
 import { RelativeTime } from "@/components/ui/relative-time";
 import { recentIcon, recentTone } from "@/lib/recent";
-import { stripFrontmatter } from "@/lib/markdown";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
+import { Popover, PopoverTrigger, PopoverContent, PopoverClose } from "@/components/ui/popover";
 import { EmptyState } from "@/components/empty-state";
 import { RoleBadge, VaultStateBadge } from "@/components/status-badge";
 import { VaultProcessingDetails } from "@/components/vault-processing-details";
-import { VAULT_SKILL_PATH } from "@/lib/skill";
+import { VAULT_SKILL_PATH, isReservedCollection } from "@/lib/skill";
 import { TooltipText } from "@/components/ui/tooltip-text";
 import { cn } from "@/lib/utils";
 import { useVaultRefresh } from "@/contexts/vault-refresh-context";
@@ -54,10 +56,12 @@ import { WorkspacePageHeader } from "@/components/ui/workspace-page-header";
 import { VaultAddressAction } from "@/components/vault-address-action";
 import { VaultCreateMenu } from "@/components/vault-create-menu";
 import { VaultOverviewNavigation } from "@/components/vault-overview-navigation";
+import { VaultCollectionsWorkspace } from "@/components/vault-collections-workspace";
 import { documentPreviewState } from "@/lib/document-preview-navigation";
 import { TonalIcon, type TonalIconTone } from "@/components/ui/tonal-icon";
 import { FileUploadDialog } from "@/components/file-upload-dialog";
 import { TableCreateDialog } from "@/components/table-create-dialog";
+import { CreateCollectionDialog } from "@/components/create-collection-dialog";
 import { parseFileUri } from "@/lib/uri";
 
 interface VaultInfo {
@@ -158,23 +162,6 @@ function VaultContentSummary({ info }: { info: VaultInfo | null }) {
   );
 }
 
-/** First prose paragraph of the vault-skill doc, frontmatter + headings
- *  stripped, for the "About this vault" excerpt. */
-function aboutExcerpt(md?: string): string {
-  if (!md) return "";
-  const body = stripFrontmatter(md);
-  const out: string[] = [];
-  for (const raw of body.split("\n")) {
-    const t = raw.trim();
-    if (!t || t.startsWith("#") || t.startsWith(">")) {
-      if (out.length) break;
-      continue;
-    }
-    out.push(t);
-  }
-  return out.join(" ");
-}
-
 /** A git per-file change → a single-letter mark with a paired color (color is
  *  never the only signal: the letter carries the meaning, the title the word). */
 function changeMark(change?: string) {
@@ -208,6 +195,9 @@ export default function VaultPage() {
 }
 
 function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string }) {
+  const location = useLocation();
+  const requestedCollection = new URLSearchParams(location.search).get("collection") || "";
+  const creationCollection = isReservedCollection(requestedCollection) ? "" : requestedCollection;
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
   const { refetchTree } = useVaultRefresh();
@@ -215,6 +205,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
   const createButtonRef = useRef<HTMLButtonElement>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [tableCreateOpen, setTableCreateOpen] = useState(false);
+  const [collectionCreateOpen, setCollectionCreateOpen] = useState(false);
   const [info, setInfo] = useState<VaultInfo | null>(null);
   const [infoError, setInfoError] = useState(false);
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
@@ -248,7 +239,6 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
     ? skillQuery.error.message || "Couldn't load the vault guide."
     : undefined;
   const skillExists = !skillMissing && !!skillQuery.data;
-  const about = skillExists ? aboutExcerpt(skillQuery.data!.content) : "";
 
   // Every normal vault carries the guide, so "defined?" says nothing — the chip
   // reports whether anyone has written it yet. The seed body IS the template
@@ -391,7 +381,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
     <div
       role="region"
       aria-label={`${name} Vault overview`}
-      className="@container/vault-overview flex min-h-full w-full flex-col gap-5 bg-background p-3 sm:p-4 lg:p-5"
+      className="@container/vault-overview mx-auto flex min-h-full w-full max-w-7xl flex-col gap-5 bg-background"
     >
       {infoError && (
         <Alert variant="destructive">
@@ -420,7 +410,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
           title={name}
           context={
             info?.description ? (
-              <span className="block max-w-prose break-words [overflow-wrap:anywhere]">{info.description}</span>
+              <span className="block break-words [overflow-wrap:anywhere]">{info.description}</span>
             ) : undefined
           }
           meta={
@@ -430,20 +420,23 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
               <VaultStateBadge
                 archived={info?.is_archived}
                 externalGit={info?.is_external_git}
-                publicAccess={info?.public_access}
               />
               <VaultProcessingDetails vaultName={name!} />
             </>
           }
           actions={canCreateContent ? <div role="group" aria-label="Create content">
-            <VaultCreateMenu triggerRef={createButtonRef} onDocument={() => openCreateDocument()}
-              onTable={() => setTableCreateOpen(true)} onUpload={() => setUploadOpen(true)} />
+            <VaultCreateMenu triggerRef={createButtonRef} onDocument={() => openCreateDocument({ collection: creationCollection })}
+              onTable={() => setTableCreateOpen(true)} onUpload={() => setUploadOpen(true)} onCollection={() => setCollectionCreateOpen(true)} />
           </div> : undefined}
-          className="min-h-0 rounded-none border-0 bg-transparent p-0 shadow-none [&>div:first-child]:max-w-full [&>div:first-child]:gap-2.5 [&>div:first-child>span]:h-7 [&>div:first-child>span]:w-7 [&_h1]:text-sm [&_h1]:whitespace-normal [&_h1]:break-words [&_h1]:[overflow-wrap:anywhere]"
+          className="min-h-0 flex-nowrap items-start rounded-none border-0 bg-transparent p-0 shadow-none [&>div:first-child]:flex-1 [&>div:first-child]:max-w-full [&>div:first-child]:gap-2.5 [&>div:first-child>span]:h-7 [&>div:first-child>span]:w-7 [&_h1]:text-sm [&_h1]:whitespace-normal [&_h1]:break-words [&_h1]:[overflow-wrap:anywhere]"
         />
-        <div className="flex min-w-0 flex-col gap-2 @[58rem]/vault-overview:flex-row @[58rem]/vault-overview:items-center @[58rem]/vault-overview:justify-between @[58rem]/vault-overview:gap-x-5">
+        {info && <VaultOverviewMetadata name={name!} info={info} guideDefined={skillExists}
+          guideCustomized={skillCustomized} guideLoading={skillQuery.isLoading}
+          guideError={skillError} guideRetrying={skillQuery.isFetching}
+          onGuideRetry={() => { void skillQuery.refetch(); }} />}
+        <div data-slot="vault-summary-links" className="flex min-w-0 flex-wrap items-center justify-between gap-x-5 gap-y-1">
           {!infoError && <VaultContentSummary info={info} />}
-          {name && <VaultOverviewNavigation vault={name} />}
+          {name && <VaultOverviewNavigation vault={name} memberCount={info?.member_count} />}
         </div>
       </section>
 
@@ -454,8 +447,8 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
         </Alert>
       )}
 
-      <div className="grid min-w-0 items-start gap-5 @[60rem]/vault-overview:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="flex min-w-0 flex-col gap-3">
+      <div className={cn("grid min-w-0 items-start gap-6", !isEmpty && "@[56rem]/vault-overview:grid-cols-[minmax(0,1fr)_16rem]")}>
+        <div className="flex min-w-0 flex-col gap-5">
           {info && isEmpty ? (
             <VaultEmptyOnboarding
               name={name!}
@@ -472,43 +465,19 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
                 void loadActivity(name!);
               }}
             />
-          ) : (
-            <RecentActivityPanel
-              name={name!}
-              rows={recent}
-              loading={recentLoading}
-              loaded={recentLoaded}
-              error={recentError}
-              onRetry={() => name && loadRecent(name)}
-            />
-          )}
-
-          {info && !isEmpty && (
-            <CommitHistoryPanel
-              name={name!}
-              rows={activity}
-              loading={activityLoading}
-              loaded={activityLoaded}
-              error={activityError}
-              onRetry={() => name && loadActivity(name)}
-            />
-          )}
+          ) : null}
+          <VaultCollectionsWorkspace key={scope} vault={name!} enabled={!checking && loadedScope === scope} />
         </div>
 
         {info ? (
-          <VaultOverviewAside
-            name={name!}
-            info={info}
-            about={about}
-            guideDefined={skillExists}
-            guideCustomized={skillCustomized}
-            guideLoading={skillQuery.isLoading}
-            guideError={skillError}
-            guideRetrying={skillQuery.isFetching}
-            onGuideRetry={() => { void skillQuery.refetch(); }}
-          />
+          !isEmpty && <aside className="flex min-w-0 flex-col gap-4" aria-label="Vault overview details">
+            <RecentActivityPanel name={name!} rows={recent} loading={recentLoading} loaded={recentLoaded} error={recentError} onRetry={() => name && loadRecent(name)} />
+            <CommitHistoryPanel name={name!} rows={activity} loading={activityLoading} loaded={activityLoaded} error={activityError} onRetry={() => name && loadActivity(name)} />
+          </aside>
         ) : infoError ? (
-          <aside aria-label="Vault overview details">
+          <aside aria-label="Vault overview details" className="flex min-w-0 flex-col gap-4">
+            <RecentActivityPanel name={name!} rows={recent} loading={recentLoading} loaded={recentLoaded} error={recentError} onRetry={() => name && loadRecent(name)} />
+            <CommitHistoryPanel name={name!} rows={activity} loading={activityLoading} loaded={activityLoaded} error={activityError} onRetry={() => name && loadActivity(name)} />
             <Panel variant="workspace" className="p-4 text-ui text-foreground-muted">
               Vault details are unavailable.
             </Panel>
@@ -523,11 +492,25 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
 
       {name && (
         <>
+          <CreateCollectionDialog
+            vault={name}
+            open={collectionCreateOpen}
+            visible={!checking && loadedScope === scope && canCreateContent}
+            onOpenChange={setCollectionCreateOpen}
+            initialPath={creationCollection || undefined}
+            returnFocusRef={createButtonRef}
+            onCreated={() => {
+              if (!mounted.current || scope !== latestScope.current || latestChecking.current) return;
+              refetchTree();
+              loadInfo(name);
+            }}
+          />
           <FileUploadDialog
             open={uploadOpen}
             visible={!checking && loadedScope === scope && canCreateContent}
             onOpenChange={setUploadOpen}
             vault={name}
+            initialCollection={creationCollection}
             returnFocusRef={createButtonRef}
             onUploaded={(file) => {
               if (!mounted.current || scope !== latestScope.current || latestChecking.current) return;
@@ -546,6 +529,7 @@ function VaultWorkspace({ checking, scope }: { checking: boolean; scope: string 
             visible={!checking && loadedScope === scope && canCreateContent}
             onOpenChange={setTableCreateOpen}
             vault={name}
+            initialCollection={creationCollection}
             returnFocusRef={createButtonRef}
             onCreated={(tableName) => {
               if (!mounted.current || scope !== latestScope.current || latestChecking.current) return;
@@ -576,6 +560,7 @@ function RecentActivityPanel({
   error: boolean;
   onRetry: () => void;
 }) {
+  const [all, setAll] = useState(false);
   return (
     <Panel
       variant="workspace"
@@ -585,7 +570,7 @@ function RecentActivityPanel({
       aria-busy={loading}
       className="@container/recent min-w-0 rounded-[var(--radius-sm)]"
     >
-      <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-border bg-background px-4 py-1.5">
+      <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-1.5">
         <FileClock className="h-4 w-4 shrink-0 text-foreground-muted" aria-hidden />
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           <h2
@@ -611,7 +596,7 @@ function RecentActivityPanel({
       </span>
 
       {loaded && loading && <InlineLoadingState label="Updating recent activity; previous changes shown" className="px-4 py-2" />}
-      {loaded && error && <Alert variant="destructive" className="m-3">Recent activity could not be updated; previous changes shown.<Button variant="outline" size="sm" className="ml-2" loading={loading} onClick={onRetry}>Retry</Button></Alert>}
+      {loaded && error && <Alert variant="destructive" className="m-3">Recent activity could not be updated; previous changes shown.<Button variant="outline" size="sm" className="ml-2 max-sm:min-h-11 pointer-coarse:min-h-11" loading={loading} onClick={onRetry}>Retry</Button></Alert>}
       {loading && !loaded ? (
         <ul className="divide-y divide-border" aria-hidden>
           {Array.from({ length: 4 }).map((_, index) => (
@@ -650,15 +635,15 @@ function RecentActivityPanel({
         </div>
       ) : (
         <ol className="divide-y divide-border bg-surface">
-          {rows.map((row, index) => {
+          {(all ? rows : rows.slice(0, 4)).map((row, index) => {
             const Icon = recentIcon(row.type);
             const tone = recentTone(row.type);
             const collection = row.path?.split("/").slice(0, -1).join(" / ") || "Vault root";
             return (
               <li key={`${row.doc_id}:${row.commit ?? ""}:${index}`}>
                 <Link
-                  to={`/vault/${name}/doc/${encodeURIComponent(row.path || row.doc_id)}`}
-                  className="group grid min-h-12 grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-2.5 px-4 py-2 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  to={`/vault/${encodeURIComponent(name)}/doc/${encodeURIComponent(row.path || row.doc_id)}`}
+                  className="group grid min-h-12 grid-cols-[1rem_minmax(0,1fr)] items-start gap-x-2 px-3 py-2 transition-token hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 >
                   <span
                     className="inline-flex items-center justify-center"
@@ -669,17 +654,18 @@ function RecentActivityPanel({
                   </span>
                   <span className="min-w-0">
                     <span
-                      className="block break-words text-ui font-medium text-foreground transition-colors group-hover:text-link [overflow-wrap:anywhere]"
+                      className="line-clamp-2 break-words text-ui font-medium text-foreground transition-colors group-hover:text-link [overflow-wrap:anywhere]"
+                      title={row.title}
                     >
                       {row.title}
                     </span>
-                    <span className="block break-words text-xs leading-4 text-foreground-muted [overflow-wrap:anywhere]">
+                    <span className="block truncate text-xs leading-4 text-foreground-muted" title={collection}>
                       {collection}
                     </span>
-                  </span>
-                  <span className="text-right">
+                    <span className="mt-0.5 block">
                     <span className="sr-only">Updated </span>
                     <RelativeTime iso={row.changed_at} fallback="—" className="whitespace-nowrap text-xs" />
+                    </span>
                   </span>
                 </Link>
               </li>
@@ -687,6 +673,7 @@ function RecentActivityPanel({
           })}
         </ol>
       )}
+      {rows.length > 4 && <Button variant="ghost" size="sm" className="h-9 w-full rounded-t-none text-xs text-link max-sm:h-11 pointer-coarse:h-11" onClick={() => setAll(value => !value)}>{all ? "Show fewer updates" : `Show ${rows.length - 4} more updates`}</Button>}
     </Panel>
   );
 }
@@ -707,6 +694,8 @@ function CommitHistoryPanel({
   onRetry: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const { requestNavigation } = useResourceNavigation();
+  const activityHref = `/vault/${encodeURIComponent(name)}/activity`;
   const expandable = loading || error || rows.length > 0;
 
   return (
@@ -757,7 +746,12 @@ function CommitHistoryPanel({
             </button>
           )}
           <Link
-            to={`/vault/${name}/activity`}
+            to={activityHref}
+            state={{ vaultPageNavigation: activityHref }}
+            onClick={event => {
+              if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+              if (!requestNavigation(activityHref, { state: { vaultPageNavigation: activityHref } })) event.preventDefault();
+            }}
             className="inline-flex min-h-11 items-center sm:[@media(pointer:fine)]:min-h-8 rounded-[var(--radius-sm)] px-2 text-xs font-medium text-link transition-token hover:bg-surface-hover hover:text-link-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Full commit log
@@ -767,7 +761,7 @@ function CommitHistoryPanel({
       </div>
 
       {loaded && loading && <InlineLoadingState label="Updating commit history; previous commits shown" className="py-2" />}
-      {loaded && error && <Alert variant="destructive" className="my-2">Commit history could not be updated; previous commits shown.<Button variant="outline" size="sm" className="ml-2" loading={loading} onClick={onRetry}>Retry</Button></Alert>}
+      {loaded && error && <Alert variant="destructive" className="my-2">Commit history could not be updated; previous commits shown.<Button variant="outline" size="sm" className="ml-2 max-sm:min-h-11 pointer-coarse:min-h-11" loading={loading} onClick={onRetry}>Retry</Button></Alert>}
       {expanded && (
         <div id="commit-history-list">
           {loading && !loaded ? (
@@ -868,20 +862,10 @@ function CommitHistoryPanel({
   );
 }
 
-function VaultOverviewAside({
-  name,
-  info,
-  about,
-  guideDefined,
-  guideCustomized,
-  guideLoading,
-  guideError,
-  guideRetrying,
-  onGuideRetry,
-}: {
+/** Stable Vault facts belong beside identity; recent changes stay complementary. */
+function VaultOverviewMetadata({ name, info, guideDefined, guideCustomized, guideLoading, guideError, guideRetrying, onGuideRetry }: {
   name: string;
   info: VaultInfo;
-  about: string;
   guideDefined: boolean;
   guideCustomized?: boolean;
   guideLoading: boolean;
@@ -890,184 +874,61 @@ function VaultOverviewAside({
   onGuideRetry: () => void;
 }) {
   const location = useLocation();
-  const guideStatus = guideLoading
-    ? "Checking…"
-    : guideError
-      ? "Guide unavailable"
-      : !guideDefined
-      ? "Guide not configured"
-      : guideCustomized === undefined
-        ? "Guide ready"
-        : guideCustomized
-          ? "Guide customized"
-          : "Starter template";
-  const summary = info.is_external_git
-    ? "This vault mirrors an external Git source, which remains the authoritative guide."
-    : guideLoading
-      ? "Checking the vault guide."
-      : guideCustomized && about
-      ? about
-      : guideDefined
-        ? "Add purpose, scope, and agent instructions when you are ready to customize this guide."
-        : "Set up a vault guide so connected agents understand this knowledge space.";
-  const publicAccess =
-    info.public_access === "writer"
-      ? "Public write"
-      : info.public_access === "reader"
-        ? "Public read"
-        : info.public_access === "none"
-          ? "Private"
-          : "Not available";
-  const visibilityDescription =
-    info.public_access === "writer"
-      ? info.is_archived || info.is_external_git
-        ? "Any signed-in person can read this vault. Content is read-only."
-        : "Signed-in users can read, and write when vault policies allow."
-      : info.public_access === "reader"
-        ? "Any signed-in person can read this vault."
-        : info.public_access === "none"
-          ? "Only people with access can open this vault."
-          : "Visibility information is unavailable.";
-  const VisibilityIcon = info.public_access === "none"
-    ? LockKeyhole
-    : info.public_access === "reader" || info.public_access === "writer"
-      ? Globe
-      : HelpCircle;
-
-  return (
-          <aside className="grid min-w-0 items-start gap-3 @[40rem]/vault-overview:grid-cols-2 @[60rem]/vault-overview:grid-cols-1" aria-label="Vault overview details">
-      <Panel variant="workspace" flush className="min-w-0 rounded-[var(--radius-sm)]" role="region" aria-labelledby="vault-guide-heading">
-        <OverviewContextHeading id="vault-guide-heading" icon={BookText} tone="guide">
-          Vault guide
-        </OverviewContextHeading>
-        <div className="p-4">
-          {guideError ? (
-            <Alert variant="destructive" title="Couldn't load the vault guide">{guideError}</Alert>
-          ) : (
-            <p className="line-clamp-3 max-w-prose break-words text-ui leading-5 text-foreground [overflow-wrap:anywhere]">
-              {summary}
-            </p>
-          )}
-          <div className="mt-3 flex max-w-md flex-wrap items-center justify-between gap-2">
-            <Badge id="vault-guide-status" variant="outline" className="rounded-[var(--radius-sm)] text-xs">
-              {info.is_external_git ? "Git managed" : guideStatus}
-            </Badge>
-            {!info.is_external_git && guideError ? (
-              <Button variant="outline" size="sm" className="h-11 sm:[@media(pointer:fine)]:h-8" onClick={onGuideRetry} loading={guideRetrying}>Retry</Button>
-            ) : !info.is_external_git && !guideLoading && (
-              <Button asChild variant="outline" size="sm" className="h-11 rounded-[var(--radius-sm)] text-link sm:[@media(pointer:fine)]:h-8">
-                <Link
-                  id="vault-overview-guide"
-                  to={guideDefined ? `/vault/${encodeURIComponent(name)}/doc/${encodeURIComponent(VAULT_SKILL_PATH)}` : `/vault/${encodeURIComponent(name)}/settings#skill`}
-                  state={guideDefined ? documentPreviewState(location, "vault-overview-guide") : undefined}
-                  aria-label={guideDefined ? "Open vault guide" : "Set up vault guide"}
-                  aria-describedby="vault-guide-status"
-                >
-                  {guideDefined ? "Open guide" : "Set up guide"}
-                  <ChevronRight className="h-3.5 w-3.5" aria-hidden />
-                </Link>
-              </Button>
-            )}
-          </div>
-        </div>
-      </Panel>
-
-      <Panel variant="workspace" flush className="min-w-0 rounded-[var(--radius-sm)]" role="region" aria-labelledby="access-overview-heading">
-        <OverviewContextHeading id="access-overview-heading" icon={Shield} tone="people">
-          Access and ownership
-        </OverviewContextHeading>
-        <div className="p-4">
-          <dl className="max-w-md divide-y divide-border">
-            <OverviewContextRow label="Owner" value={info.owner_display_name || info.owner || "Not available"} />
-            <OverviewContextRow label="Visibility" value={
-              <Badge variant="outline" className="rounded-[var(--radius-sm)] text-xs text-foreground">
-                <VisibilityIcon className="h-3.5 w-3.5" aria-hidden />
-                {publicAccess}
-              </Badge>
-            } />
-            <OverviewContextRow label="Members" value={<OverviewCount value={info.member_count} />} />
-          </dl>
-          <p className="mt-1 max-w-md text-xs leading-relaxed text-foreground-muted">{visibilityDescription}</p>
-        </div>
-      </Panel>
-
-    </aside>
-  );
-}
-
-function OverviewContextHeading({
-  id,
-  icon: Icon,
-  tone,
-  children,
-}: {
-  id: string;
-  icon: LucideIcon;
-  tone: TonalIconTone;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex min-h-11 items-center gap-2 border-b border-border bg-background px-4 py-2">
-      <TonalIcon tone={tone} size="sm" className="h-6 w-6"><Icon aria-hidden /></TonalIcon>
-      <h2 id={id} className="min-w-0 text-sm font-semibold text-foreground">{children}</h2>
-    </div>
-  );
-}
-
-function OverviewContextRow({
-  label,
-  value,
-}: {
-  label: string;
-  value: ReactNode;
-}) {
-  return (
-    <div className="flex min-h-8 items-start justify-between gap-2.5 py-1.5 text-ui">
-      <dt className="text-foreground-muted">{label}</dt>
-      <dd className="min-w-0 break-words text-right font-medium text-foreground [overflow-wrap:anywhere]">{value}</dd>
-    </div>
-  );
+  const guideStatus = guideCustomized === undefined ? "Guide ready" : guideCustomized ? "Guide customized" : "Starter template";
+  const canSetUp = !info.is_archived && !info.is_external_git && ["owner", "admin", "writer"].includes(info.role || "");
+  const publicAccess = info.public_access === "writer" ? "Public write" : info.public_access === "reader" ? "Public read" : info.public_access === "none" ? "Private" : "Access unavailable";
+  const policy = info.public_access === "writer"
+    ? info.is_archived || info.is_external_git ? "Any signed-in person can read this vault. Content is read-only." : "Signed-in users can read, and write when vault policies allow."
+    : info.public_access === "reader" ? "Any signed-in person can read this vault."
+    : info.public_access === "none" ? "Only people with access can open this vault." : "Visibility information is unavailable.";
+  const VisibilityIcon = info.public_access === "none" ? LockKeyhole : info.public_access === "reader" || info.public_access === "writer" ? Globe : HelpCircle;
+  const metaLink = "inline-flex min-h-9 min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] text-ui text-link hover:text-link-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11 pointer-coarse:min-h-11";
+  return <div data-slot="vault-overview-metadata" className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-0 text-ui text-foreground-muted">
+    <section aria-label="Access and ownership" className="flex min-w-0 flex-wrap items-center gap-x-4">
+      <Popover>
+        <PopoverTrigger asChild>
+          <button type="button" aria-label={`Vault access: ${publicAccess}`} className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] text-ui text-foreground-muted hover:text-link focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:min-h-11 pointer-coarse:min-h-11">
+            <VisibilityIcon className="h-3.5 w-3.5" aria-hidden />{publicAccess}<ChevronDown className="h-3 w-3" aria-hidden />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" aria-label="Vault access" className="p-3 text-ui">
+          <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-semibold">Vault access</h2><PopoverClose asChild><Button variant="ghost" size="icon" className="h-9 w-9 max-sm:h-11 max-sm:w-11 pointer-coarse:h-11 pointer-coarse:w-11" aria-label="Close vault access"><X className="h-4 w-4" aria-hidden /></Button></PopoverClose></div>
+          <p className="mt-1 leading-5">{policy}</p>
+          <p className="mt-2 text-xs leading-5 text-foreground-muted">Public links are managed separately and may allow access without signing in.</p>
+        </PopoverContent>
+      </Popover>
+      <p className="min-w-0 break-words py-1.5 [overflow-wrap:anywhere]"><span>Owner</span><span className="ml-1.5 text-foreground">{info.owner_display_name || info.owner || "Not available"}</span></p>
+    </section>
+    {!info.is_external_git && <section aria-label="Vault guide" className="min-w-0">
+      {guideLoading ? <InlineLoadingState label="Checking vault guide" className="py-1 text-xs" />
+        : guideError ? <button type="button" className={metaLink} onClick={onGuideRetry} disabled={guideRetrying} aria-busy={guideRetrying} aria-label="Retry vault guide"><BookText className="h-3.5 w-3.5" aria-hidden />{guideRetrying ? "Checking guide…" : "Guide unavailable · Retry"}</button>
+        : guideDefined ? <><span id="vault-guide-status" className="sr-only">{guideStatus}</span><Link id="vault-overview-guide" to={`/vault/${encodeURIComponent(name)}/doc/${encodeURIComponent(VAULT_SKILL_PATH)}`} state={documentPreviewState(location, "vault-overview-guide")} aria-label="Open vault guide" aria-describedby="vault-guide-status" className={metaLink}><BookText className="h-3.5 w-3.5" aria-hidden />Vault guide<ChevronRight className="h-3 w-3" aria-hidden /></Link></>
+        : canSetUp ? <Link id="vault-overview-guide" to={`/vault/${encodeURIComponent(name)}/settings#skill`} aria-label="Set up vault guide" className={metaLink}><BookText className="h-3.5 w-3.5" aria-hidden />Set up guide<ChevronRight className="h-3 w-3" aria-hidden /></Link>
+        : <span className="inline-flex min-h-9 items-center text-xs max-sm:min-h-11 pointer-coarse:min-h-11">Guide not configured</span>}
+    </section>}
+  </div>;
 }
 
 function VaultContextSkeleton() {
   return (
-    <aside
-      className="flex min-w-0 flex-col gap-3"
-      aria-label="Loading vault details"
-      aria-busy="true"
-    >
+    <aside className="flex min-w-0 flex-col gap-4" aria-label="Loading vault details" aria-busy="true">
       <Panel variant="workspace" flush className="rounded-[var(--radius-sm)]" aria-hidden>
-        <div className="flex min-h-11 items-center gap-2 border-b border-border bg-background px-4 py-2">
-          <div className="h-6 w-6 animate-pulse rounded bg-surface-muted" />
-          <div className="h-4 w-24 animate-pulse rounded bg-surface-muted" />
+        <div className="flex h-10 items-center gap-2 border-b border-border bg-background px-3">
+          <Skeleton className="h-4 w-4" /><Skeleton className="h-4 w-28" />
         </div>
-        <div className="space-y-3 p-4">
-          <div className="h-16 animate-pulse rounded bg-surface-muted" />
-          <div className="h-9 animate-pulse rounded bg-surface-muted" />
+        <div className="divide-y divide-border">
+          {Array.from({ length: 4 }, (_, index) => <div key={index} className="space-y-2 p-3">
+            <Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-3/4" /><Skeleton className="h-3 w-12" />
+          </div>)}
         </div>
       </Panel>
-      <Panel variant="workspace" flush className="rounded-[var(--radius-sm)]" aria-hidden>
-        <div className="flex min-h-11 items-center gap-2 border-b border-border bg-background px-4 py-2">
-          <div className="h-6 w-6 animate-pulse rounded bg-surface-muted" />
-          <div className="h-4 w-36 animate-pulse rounded bg-surface-muted" />
-        </div>
-        <div className="space-y-3 p-4">
-          {Array.from({ length: 2 }, (_, i) => (
-            <div key={i} className="flex h-6 justify-between">
-              <div className="h-3 w-24 animate-pulse rounded bg-surface-muted" />
-              <div className="h-3 w-6 animate-pulse rounded bg-surface-muted" />
-            </div>
-          ))}
-          <div className="h-4 animate-pulse rounded bg-surface-muted" />
-          <div className="h-10 animate-pulse rounded bg-surface-muted" />
-        </div>
-      </Panel>
+      <Skeleton className="h-16 w-full" />
     </aside>
   );
 }
 
-/** First-run guidance that occupies the same primary-content slot as Recent
- *  activity. Adding the first resource changes state, not the page grammar. */
+/** First-run guidance precedes the primary collection directory. Adding the
+ *  first resource changes state, not the page grammar. */
 function VaultEmptyOnboarding({
   name,
   canWrite,
@@ -1321,12 +1182,17 @@ function OnboardStep({
 }
 
 function OverviewLoadingState({ checking }: { checking: boolean }) {
-  return <LoadingState label={checking ? "Verifying vault access…" : "Loading vault overview…"} className="w-full space-y-5 p-3 sm:p-4 lg:p-5">
-    <p className="text-sm text-foreground-muted">{checking ? "Verifying vault access…" : "Loading vault overview…"}</p>
-    <div className="flex min-h-16 items-center justify-between gap-4"><Skeleton className="h-8 w-48" /><Skeleton className="h-9 w-28" /></div>
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">{[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-20 w-full" />)}</div>
-    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
-      <Panel variant="workspace" className="space-y-4 p-4"><Skeleton className="h-5 w-40" />{[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}</Panel>
+  return <LoadingState label={checking ? "Verifying vault access…" : "Loading vault overview…"} className="@container/vault-overview-loading mx-auto w-full max-w-7xl space-y-5">
+    <section aria-hidden className="space-y-2 border-b border-border pb-3">
+      <div className="flex min-h-14 items-center gap-3"><Skeleton className="h-7 w-7" /><div className="flex-1 space-y-2"><Skeleton className="h-4 w-48" /><Skeleton className="h-3 w-3/5" /></div></div>
+      <div className="flex min-h-9 flex-wrap items-center gap-4"><Skeleton className="h-3 w-16" /><Skeleton className="h-3 w-28" /><Skeleton className="h-3 w-20" /></div>
+      <div className="flex min-h-8 flex-wrap items-center gap-4">{[0, 1, 2, 3].map(index => <Skeleton key={index} className="h-3 w-20" />)}</div>
+    </section>
+    <div className="grid items-start gap-6 @[56rem]/vault-overview-loading:grid-cols-[minmax(0,1fr)_16rem]">
+      <div className="@container/overview-main min-w-0" aria-hidden>
+        <div className="mb-4 flex min-h-12 items-start justify-between gap-3 border-b border-border pb-3"><Skeleton className="h-5 w-28" /><Skeleton className="h-9 w-2/5" /></div>
+        <div className="grid grid-cols-1 gap-3 @[28rem]/overview-main:grid-cols-2 @[44rem]/overview-main:grid-cols-3">{[0, 1, 2, 3].map(index => <Skeleton key={index} className="h-24 w-full" />)}</div>
+      </div>
       <VaultContextSkeleton />
     </div>
   </LoadingState>;

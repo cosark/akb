@@ -8,7 +8,7 @@ import { useResourceNavigation } from "@/contexts/resource-navigation-context";
 
 /** Shared location grammar for Vault pages and their resource readers. */
 export function VaultBreadcrumb({
-  vault, title, kind, icon: KindIcon, children, className, ariaLabel = "Current page", backToVault = false,
+  vault, title, kind, icon: KindIcon, children, className, ariaLabel = "Current page", backToVault = false, parentBackPresent = false,
 }: {
   vault: string;
   title?: string;
@@ -20,6 +20,8 @@ export function VaultBreadcrumb({
   ariaLabel?: string;
   /** Give focused Vault tasks an explicit return affordance on their parent link. */
   backToVault?: boolean;
+  /** An adjacent parent-back already supplies the arrow; keep this Vault identity. */
+  parentBackPresent?: boolean;
 }) {
   const { requestNavigation } = useResourceNavigation();
   const isVaultRoot = title === undefined && !children;
@@ -47,7 +49,7 @@ export function VaultBreadcrumb({
               backToVault && "min-h-11 min-w-11 gap-2 px-2 text-link hover:bg-surface-hover hover:text-link-hover",
             )}
           >
-            {backToVault ? <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden /> : <Box className="h-4 w-4 shrink-0" aria-hidden />}
+            {backToVault && !parentBackPresent ? <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden /> : <Box className="h-4 w-4 shrink-0" aria-hidden />}
             <span className={cn("truncate", kind && "@max-xs/resource-location:sr-only")}>{vault}</span>
           </Link></TooltipTrigger>
             {backToVault && <TooltipContent side="bottom" className="max-w-[min(90vw,28rem)] break-words">Back to {vault}</TooltipContent>}

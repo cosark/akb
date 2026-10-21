@@ -20,8 +20,7 @@ async function fixture(page: Page, dark = false, treeVisible = "1") {
     localStorage.setItem("akb_theme", dark ? "dark" : "light");
     if (!localStorage.getItem("document-header-fixture-ready")) {
       localStorage.setItem("akb.treeVisible", treeVisible);
-      localStorage.setItem("akb.treeWidth.v2", "286");
-      localStorage.setItem("akb.vaultRailCollapsed", "0");
+      localStorage.setItem("akb.focusedNavigationWidth.v1", "286");
       localStorage.setItem("document-header-fixture-ready", "1");
     }
   }, { dark, treeVisible });
@@ -65,6 +64,55 @@ async function expectOverviewDestinations(page: Page) {
   await expect(page.getByRole("button", { name: "Navigate in fixture", exact: true })).toHaveCount(0);
 }
 
+for (const width of [375, 1440]) test(`title back follows the Vault hierarchy on direct visits at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  await fixture(page, false, "0");
+  for (const path of [documentUrl, ...destinations.slice(1).map(([, href]) => href), "/vault/fixture/search", "/vault/fixture/activity"]) {
+    await page.goto(path);
+    const parent = page.getByRole("link", { name: "Back to vault fixture", exact: true });
+    await expect(parent).toHaveAttribute("href", "/vault/fixture");
+    await parent.focus();
+    await parent.press("Enter");
+    await expect(page).toHaveURL(url => url.pathname === "/vault/fixture" && !url.search);
+    await expectOverviewDestinations(page);
+    await expect(page.getByRole("main")).toBeFocused();
+    const directory = page.getByRole("link", { name: "Back to all vaults", exact: true });
+    await expect(directory).toHaveAttribute("href", "/vault");
+    await directory.click();
+    await expect(page).toHaveURL(url => url.pathname === "/vault");
+    await expect(page.locator("[data-vault-parent-back]")).toHaveCount(0);
+    await expect(page.getByRole("main")).toBeFocused();
+  }
+});
+
+for (const width of [375, 1440]) for (const source of ["title", "sidebar"] as const) test(`${source} back confirms a dirty document before leaving at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  await fixture(page, false, "0");
+  await page.goto(`${documentUrl}?view=edit`);
+  const editor = page.getByRole("textbox", { name: "Document body (markdown)", exact: true });
+  const draft = "Retain this draft until I confirm leaving.";
+  await editor.fill(draft);
+  const back = page.getByRole("link", { name: source === "sidebar" ? "Show vault list" : "Back to vault fixture", exact: true });
+  if (source === "sidebar") await revealVaultNavigation(page);
+  await back.click();
+  const confirmation = page.getByRole("dialog", { name: "Leave this document?", exact: true });
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole("button", { name: "Keep editing", exact: true }).click();
+  await expect(editor).toContainText(draft);
+  await expect(page.getByRole("textbox", { name: "Document title", exact: true })).toBeFocused();
+  if (source === "sidebar") await revealVaultNavigation(page);
+  await back.click();
+  await confirmation.getByRole("button", { name: "Leave document", exact: true }).click();
+  await expect(page).toHaveURL(source === "sidebar" ? /\/vault$/ : /\/vault\/fixture$/);
+  if (source === "sidebar") {
+    await expect(page.getByRole("navigation", { name: "Vaults", exact: true })).toBeVisible();
+    await expect(page.getByRole("searchbox", { name: "Find a vault in sidebar", exact: true })).toBeFocused();
+  } else {
+    await expect(page.getByRole("main")).toBeFocused();
+    await expect(page.getByRole("link", { name: "Back to all vaults", exact: true })).toHaveAttribute("href", "/vault");
+  }
+});
+
 for (const width of [375, 1440]) for (const [suffix, label] of [
   ["", "Overview"],
   ["/", "Overview"],
@@ -84,7 +132,7 @@ for (const width of [375, 1440]) for (const [suffix, label] of [
   if (label === "Overview") await expectOverviewDestinations(page);
   else await expect(page.getByRole("navigation", { name: "Vault pages", exact: true })).toHaveCount(0);
   const drawer = await revealVaultNavigation(page);
-  await expect(page.locator('[data-slot="vault-collections-sidebar"]').getByRole("tree", { name: "fixture explorer", exact: true })).toBeVisible();
+  await expect(page.locator('[data-slot="vault-collections-sidebar"]').getByRole("navigation", { name: "fixture explorer", exact: true })).toBeVisible();
   if (drawer) await page.keyboard.press("Escape");
   await vaultBreadcrumb(page).click();
   await expect(page).toHaveURL(url => url.pathname === "/vault/fixture");
@@ -151,7 +199,7 @@ for (const width of [375, 1440]) for (const dark of [false, true]) {
   });
 }
 
-for (const treeVisible of ["0", "1"]) test(`document header navigation preserves Collections preference ${treeVisible}`, async ({ page }) => {
+for (const treeVisible of ["0", "1"]) test(`document header navigation preserves content-panel preference ${treeVisible}`, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await fixture(page, false, treeVisible);
   let finishIdentity = () => {};
@@ -161,28 +209,33 @@ for (const treeVisible of ["0", "1"]) test(`document header navigation preserves
     await route.fallback();
   });
   await page.goto(documentUrl);
-  const collections = page.locator('[data-slot="vault-collections-sidebar"]');
+  const panel = page.locator("#vault-workspace-navigation");
+  const explorer = panel.getByRole("navigation", { name: "fixture explorer", exact: true });
+  const expectSavedPanel = async () => {
+    await expect(panel).toHaveCount(1);
+    if (treeVisible === "1") {
+      await expect(explorer).toBeVisible();
+      await expect(page.getByRole("button", { name: "Close vault navigation", exact: true })).toHaveAttribute("aria-expanded", "true");
+      expect((await panel.boundingBox())!.width).toBe(286);
+    } else {
+      await expect(panel).toBeHidden();
+      await expect(page.getByRole("button", { name: "Open vault navigation", exact: true })).toHaveAttribute("aria-expanded", "false");
+    }
+  };
   await expect(page.getByRole("status", { name: "Verifying session", exact: true })).toBeVisible();
-  // Start the navigation helper while identity is pending, before either
-  // the inline rails or responsive drawer trigger can be rendered.
-  const initialNavigation = revealVaultNavigation(page);
-  await expect(page.getByRole("button", { name: "Navigate in fixture", exact: true })).toHaveCount(0);
+  await expect(panel).toHaveCount(0);
   finishIdentity();
-  const initialDrawer = await initialNavigation;
-  if (treeVisible === "1") await expect(collections.getByRole("tree", { name: "fixture explorer", exact: true })).toBeVisible();
-  else await expect(page.getByRole("button", { name: "Expand collections", exact: true })).toBeVisible();
-  if (initialDrawer) await page.keyboard.press("Escape");
+  await expectSavedPanel();
   await vaultBreadcrumb(page).click();
   await page.getByRole("navigation", { name: "Vault pages", exact: true }).getByRole("link", { name: "Settings", exact: true }).click();
-  await expect(collections).toHaveCount(0);
+  // Focused tasks retain the same context panel and saved visibility.
+  await expect(page).toHaveURL(/\/vault\/fixture\/settings$/);
+  await expectSavedPanel();
   await page.goBack();
   await page.goBack();
   await expect(vaultBreadcrumb(page)).toBeVisible();
-  const restoredDrawer = await revealVaultNavigation(page);
-  if (treeVisible === "1") await expect(collections.getByRole("tree", { name: "fixture explorer", exact: true })).toBeVisible();
-  else await expect(page.getByRole("button", { name: "Expand collections", exact: true })).toBeVisible();
-  if (restoredDrawer) await page.keyboard.press("Escape");
-  expect(await page.evaluate(() => [localStorage.getItem("akb.treeVisible"), localStorage.getItem("akb.treeWidth.v2")])).toEqual([treeVisible, "286"]);
+  await expectSavedPanel();
+  expect(await page.evaluate(() => [localStorage.getItem("akb.treeVisible"), localStorage.getItem("akb.focusedNavigationWidth.v1")])).toEqual([treeVisible, "286"]);
 });
 
 for (const width of [375, 1440]) test(`modified pointer header links preserve the dirty editor at ${width}px`, async ({ page, context }) => {
@@ -194,7 +247,7 @@ for (const width of [375, 1440]) test(`modified pointer header links preserve th
   await editor.fill("Keep this draft in the original tab.");
   await expect(page.getByRole("group", { name: "Document publishing", exact: true })).toHaveCount(0);
   const popupPromise = context.waitForEvent("page");
-  await vaultBreadcrumb(page).click({ modifiers: ["ControlOrMeta"] });
+  await page.getByRole("link", { name: "Back to vault fixture", exact: true }).click({ modifiers: ["ControlOrMeta"] });
   const popup = await popupPromise;
   await expect(popup).toHaveURL(/\/vault\/fixture$/);
   await popup.close();
@@ -222,7 +275,7 @@ for (const width of [375, 1440]) test(`header navigation waits for an active ima
     await page.getByRole("button", { name: "Insert image", exact: true }).click();
     await (await chooserPromise).setFiles({ name: "diagram.png", mimeType: "image/png", buffer: bytes });
     await expect(page.getByText("Uploading image…", { exact: true })).toBeVisible();
-    await vaultBreadcrumb(page).click();
+    await page.getByRole("link", { name: "Back to vault fixture", exact: true }).click();
     const confirmation = page.getByRole("dialog", { name: "Leave this document?", exact: true });
     await expect(confirmation).toContainText("An image is still uploading");
     await expect(confirmation.getByRole("button", { name: "Leave document", exact: true })).toBeDisabled();
@@ -231,7 +284,7 @@ for (const width of [375, 1440]) test(`header navigation waits for an active ima
     await expect(page.getByRole("button", { name: "Save changes", exact: true })).toBeDisabled();
     finishUpload();
     await expect(page.getByRole("button", { name: "Remove image: diagram", exact: true })).toBeVisible();
-    await vaultBreadcrumb(page).click();
+    await page.getByRole("link", { name: "Back to vault fixture", exact: true }).click();
     await confirmation.getByRole("button", { name: "Leave document", exact: true }).click();
     await expect(page.getByRole("navigation", { name: "Current page", exact: true }).locator('[aria-current="page"]')).toHaveText("fixture");
   } finally {
@@ -252,7 +305,7 @@ for (const width of [375, 1440]) for (const aggregate of [false, true]) {
     await page.goto("/vault/fixture/members");
     await vaultBreadcrumb(page).click();
     await page.getByRole("navigation", { name: "Vault pages", exact: true }).getByRole("link", { name: "Settings", exact: true }).click();
-    const trigger = vaultBreadcrumb(page);
+    const trigger = aggregate ? page.getByRole("link", { name: "Back to vault fixture", exact: true }) : vaultBreadcrumb(page);
     const description = page.getByRole("textbox", { name: "Description", exact: true });
     const draft = "An unsaved description stays here until I choose to leave.";
     const guideDraft = "# Unsaved guide\n\nKeep this guide with the other settings drafts.";

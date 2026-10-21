@@ -27,7 +27,7 @@ const PAGE_IDENTITY: Record<string, [string, LucideIcon]> = {
 };
 
 /** Location chrome, not a second page heading or a resource filename. */
-export function AppPageLocation({ isAdmin = false, mobile = false }: { isAdmin?: boolean; mobile?: boolean }) {
+export function AppPageLocation({ isAdmin = false, mobile = false, parentBack = false }: { isAdmin?: boolean; mobile?: boolean; parentBack?: boolean }) {
   const { pathname, search } = useLocation();
   const resource = useResourceLocation();
   const match = matchRoutes([...appRouteContract], pathname)?.at(-1);
@@ -43,7 +43,7 @@ export function AppPageLocation({ isAdmin = false, mobile = false }: { isAdmin?:
     const backToVault = ["GraphPage", "PublicationsPage", "VaultMembersPage", "VaultSettingsPage"].includes(match?.route.component ?? "");
     return <div data-slot="app-page-location" className={className}>
       <VaultBreadcrumb vault={vault} title={match?.route.component === "VaultPage" ? undefined : label} className="flex-1"
-        icon={isResource ? Icon : undefined} kind={isResource ? label : undefined} backToVault={backToVault} />
+        icon={isResource ? Icon : undefined} kind={isResource ? label : undefined} backToVault={backToVault} parentBackPresent={parentBack} />
     </div>;
   }
 

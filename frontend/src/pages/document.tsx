@@ -1479,9 +1479,10 @@ function DocumentPageContent({
     : "Vault root";
   const isUuid = (value: string) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-  const authorName =
-    doc.created_by_name ||
-    (doc.created_by && !isUuid(doc.created_by) ? doc.created_by : null);
+  const authorName = [doc.created_by_name, doc.created_by]
+    .filter((value): value is string => typeof value === "string")
+    .map(value => value.trim())
+    .find(value => value && !isUuid(value) && !/^(unknown(?: author)?|n\/a|null|undefined)$/i.test(value));
   const canWrite =
     vaultRole === "writer" || vaultRole === "admin" || vaultRole === "owner";
   const moveDisabledReason = documentMoveDisabledReason({
@@ -1564,11 +1565,15 @@ function DocumentPageContent({
               {accessChecking || vaultInfoQuery.isPending ? "Checking access…" : !canEdit ? "Read-only · Draft preserved" : uploadingImage ? "Uploading image…" : isDirty ? "Unsaved changes" : draftStatus === "saving" ? "Saving draft locally…" : draftStatus === "saved" ? "Draft saved locally" : "No changes"}
             </span>
           ) : (
-            <div className="document-reader-status">
-              {doc.status === "draft" && !isHistorical && !isDiffMode && <Badge variant="draft">Draft</Badge>}
-              {savedAt && <span role="status" className="inline-flex shrink-0 items-center gap-1 text-xs text-success"><CheckCircle2 className="h-3.5 w-3.5" aria-hidden />Saved</span>}
+            <div role="group" aria-label="Document metadata" data-slot="document-byline" className="document-reader-status flex-wrap">
+              {authorName && <span className="inline-flex min-w-0 max-w-full items-baseline gap-1.5 text-xs">
+                <span className="shrink-0">Author</span>
+                <span className="min-w-0 break-words text-foreground [overflow-wrap:anywhere]">{authorName}</span>
+              </span>}
               <DocumentTimestamp value={isHistorical || isDiffMode ? selectedHistoryEntry?.date : lastEditedAt}
                 label={isHistorical || isDiffMode ? "Version saved" : "Last edited"} compact />
+              {doc.status === "draft" && !isHistorical && !isDiffMode && <Badge variant="draft">Draft</Badge>}
+              {savedAt && <span role="status" className="inline-flex shrink-0 items-center gap-1 text-xs text-success"><CheckCircle2 className="h-3.5 w-3.5" aria-hidden />Saved</span>}
             </div>
           )}
         >
@@ -1981,7 +1986,7 @@ function DocumentPageContent({
                   <PropertyRow label="Size"><DocumentStatistics content={doc.content || ""} labelled={false} /></PropertyRow>
                   {authorName && (
                     <PropertyRow label="Author">
-                      <span className="text-foreground">{authorName}</span>
+                      <span className="min-w-0 break-words text-foreground [overflow-wrap:anywhere]">{authorName}</span>
                     </PropertyRow>
                   )}
                   <PropertyRow label="Collection">

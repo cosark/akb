@@ -298,7 +298,7 @@ function VaultMembersWorkspace({
 
   return (
     <>
-      <div className="workspace-density-compact @container/members w-full max-w-none">
+      <div className="workspace-density-compact @container/members mx-auto w-full max-w-7xl">
         <h1 id="members-heading" className="sr-only">
           Members
         </h1>
@@ -345,7 +345,7 @@ function VaultMembersWorkspace({
               className="h-4 w-4 shrink-0 text-success"
               aria-hidden
             />
-            <span className="text-sm text-foreground">
+            <span className="text-ui text-foreground">
               Changed {undoTarget.username} from {undoTarget.prev} to{" "}
               {undoTarget.next}.
             </span>
@@ -381,7 +381,7 @@ function VaultMembersWorkspace({
           {(total > FILTER_THRESHOLD || filter) && (
             <div
               data-testid="member-roster-controls"
-              className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-surface px-4 py-3 @lg/members:px-5"
+              className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface px-4 py-3 @lg/members:px-5 @lg/members:py-2.5"
             >
               <div className="relative w-full @md/members:w-72">
                 <Search
@@ -463,7 +463,7 @@ function VaultMembersWorkspace({
                   <tr>
                     <th
                       scope="col"
-                      className="px-4 py-3 font-medium @lg/members:px-5"
+                      className="px-4 py-2.5 font-medium @lg/members:px-5"
                     >
                       Member
                     </th>
@@ -501,7 +501,7 @@ function VaultMembersWorkspace({
                         key={member.id}
                         className="transition-token hover:bg-surface-hover"
                       >
-                        <td className="min-w-0 px-4 py-3 align-middle @lg/members:px-5">
+                        <td className="min-w-0 px-4 py-3 align-middle @lg/members:px-5 @lg/members:py-2.5">
                           <div className="flex min-w-0 items-center gap-2.5">
                             <span className="hidden @md/members:block">
                               <MemberAvatar member={member} />
@@ -516,7 +516,7 @@ function VaultMembersWorkspace({
                                   <Badge variant="info-outline">You</Badge>
                                 )}
                               </div>
-                              <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs leading-relaxed text-foreground-muted">
+                              <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs leading-4 text-foreground-muted">
                                 <span className="break-all">@{member.username}</span>
                                 {member.email && (
                                   <>
@@ -531,7 +531,7 @@ function VaultMembersWorkspace({
                             </div>
                           </div>
                         </td>
-                        <td className="hidden px-4 py-3 align-middle text-xs text-foreground-muted @3xl/members:table-cell">
+                        <td className="hidden px-4 py-3 align-middle text-xs text-foreground-muted @lg/members:py-2.5 @3xl/members:table-cell">
                           {member.since ? (
                             <time
                               dateTime={member.since}
@@ -543,7 +543,7 @@ function VaultMembersWorkspace({
                             "—"
                           )}
                         </td>
-                        <td className="px-2 py-3 text-right align-middle">
+                        <td className="px-2 py-3 text-right align-middle @lg/members:py-2.5">
                           {canChangeRole ? (
                             <RoleSelect
                               vault={name}
@@ -570,7 +570,7 @@ function VaultMembersWorkspace({
                             </span>
                           )}
                         </td>
-                        <td className="py-3 pr-3 text-right align-middle">
+                        <td className="py-3 pr-3 text-right align-middle @lg/members:py-2.5">
                           {canManageMember && (
                             <MemberActionsMenu
                               member={member}
@@ -745,7 +745,7 @@ function MemberListSkeleton() {
       {[0, 1, 2, 3].map((index) => (
         <div
           key={index}
-          className="flex items-center gap-2.5 px-4 py-3 lg:px-5"
+          className="flex items-center gap-2.5 px-4 py-3 @lg/members:px-5 @lg/members:py-2.5"
           aria-hidden
         >
           <span className="h-7 w-7 animate-pulse rounded-full bg-surface-2" />

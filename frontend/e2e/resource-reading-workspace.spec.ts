@@ -8,6 +8,50 @@ const path = "guides/team/operations/reading.md";
 const lastEdited = "2026-09-14T09:42:30Z";
 const createdAt = "2026-08-25T01:05:00Z";
 
+for (const width of [1024, 1280, 1600]) for (const dark of [false, true]) {
+  test(`Document byline insets and sidebar hairlines align at ${width}px ${dark ? "dark" : "light"}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await fixture(page, dark, false, body, undefined, { created_by_name: "김민정" });
+    await page.goto(`/vault/fixture/doc/${encodeURIComponent(path)}`);
+    const tools = page.locator('[data-slot="resource-command-row"]');
+    await expect(tools.getByRole("group", { name: "Document metadata", exact: true })).toContainText("김민정");
+    const opener = page.getByRole("button", { name: "Open vault navigation", exact: true });
+    if (await opener.isVisible()) await opener.click();
+    const sidebar = page.locator("#vault-workspace-navigation");
+    const management = sidebar.locator('[data-slot="collection-management-row"]');
+    await expect(management).toBeVisible();
+    const row = (await tools.boundingBox())!;
+    const rail = (await management.boundingBox())!;
+    expect(Math.abs(row.y - rail.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(row.y + row.height - rail.y - rail.height)).toBeLessThanOrEqual(1);
+    expect(row.height).toBe(48);
+    const metadata = (await tools.getByRole("group", { name: "Document metadata", exact: true }).boundingBox())!;
+    expect(metadata.x - row.x).toBe(20);
+    expect(metadata.y - row.y).toBeGreaterThanOrEqual(6);
+    const identity = (await sidebar.locator('[data-slot="vault-identity-header"]').boundingBox())!;
+    const header = (await page.locator(".app-header").boundingBox())!;
+    expect(Math.abs(identity.y + identity.height - header.y - header.height)).toBeLessThanOrEqual(1);
+    await page.screenshot({ path: testInfo.outputPath("document-sidebar-alignment.png") });
+  });
+}
+
+test.describe("Document command alignment on touch", () => {
+  test.use({ hasTouch: true });
+  test("keeps touch targets and adjacent sidebar hairlines aligned", async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await fixture(page, false, false, body, undefined, { created_by_name: "김민정" });
+    await page.goto(`/vault/fixture/doc/${encodeURIComponent(path)}`);
+    const tools = page.locator('[data-slot="resource-command-row"]');
+    await expect(tools.getByRole("group", { name: "Document metadata", exact: true })).toContainText("김민정");
+    const row = (await tools.boundingBox())!;
+    const management = (await page.locator('[data-slot="collection-management-row"]').boundingBox())!;
+    expect(row.height).toBe(64);
+    expect(Math.abs(row.y + row.height - management.y - management.height)).toBeLessThanOrEqual(1);
+    const targets = await tools.locator("[data-reader-control]").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height));
+    expect(targets.every(height => height >= 44)).toBe(true);
+  });
+});
+
 for (const scenario of [
   { width: 375, height: 812, dark: false, preview: false },
   { width: 1440, height: 900, dark: false, preview: false },
@@ -59,13 +103,12 @@ const body = [
   "![Small diagram](/reading-fixture.svg)",
 ].join("\n\n");
 
-async function fixture(page: Page, dark = false, folded = false, content = body, publicSlug?: string, metadata: { summary?: string; status?: string; title?: string } = {}) {
+async function fixture(page: Page, dark = false, folded = false, content = body, publicSlug?: string, metadata: { summary?: string; status?: string; title?: string; created_by_name?: string | null; created_by?: string | null } = {}) {
   await page.addInitScript(({ dark, folded }) => {
     localStorage.setItem("akb_token", "resource-reading-browser-fixture");
     localStorage.setItem("akb_theme", dark ? "dark" : "light");
     if (folded) {
       localStorage.setItem("akb.treeVisible", "0");
-      localStorage.setItem("akb.vaultRailCollapsed", "1");
     }
   }, { dark, folded });
   await page.route("**/reading-fixture.svg", route => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80" height="40" fill="teal"/></svg>' }));
@@ -117,9 +160,9 @@ async function expectQuietResourceTrail(trail: Locator, kind: "document" | "file
 
 async function revealVaultNavigation(page: Page) {
   const trigger = page.getByRole("button", { name: "Open vault navigation", exact: true });
-  const drawer = await trigger.isVisible();
-  if (drawer) await trigger.click();
-  return drawer;
+  if (await trigger.isVisible()) await trigger.click();
+  await expect(page.locator("#vault-workspace-navigation")).toBeVisible();
+  return page.locator('[data-navigation-mode="overlay"]').isVisible();
 }
 
 async function expectQuietVaultTrail(page: Page, label: string) {
@@ -668,7 +711,7 @@ for (const width of [375, 768, 1440, 2560]) for (const dark of [false, true]) {
     await expect(page.locator(".app-header")).toHaveCSS("background-color", surface);
     await expect(readingTools).toHaveCSS("background-color", surface);
     await expect(readingTools.getByRole("button", { name: "Publish", exact: true })).toHaveCount(0);
-    if (toolBounds.width >= 768) {
+    if (toolBounds.width >= 656) {
       expect(toolBounds.height).toBeLessThanOrEqual(49);
       const timeBounds = (await readingTools.locator("time").boundingBox())!;
       const tabBounds = (await readingTools.getByRole("radiogroup", { name: "Document view mode", exact: true }).boundingBox())!;
@@ -684,7 +727,7 @@ for (const width of [375, 768, 1440, 2560]) for (const dark of [false, true]) {
     expect(new Set(commandMetrics.map(item => item.height)).size).toBe(1);
     expect(commandMetrics.every(item => item.font === "14px")).toBe(true);
     const commandWidth = (await page.locator('[data-slot="resource-command-row"]').boundingBox())!.width;
-    expect(commandMetrics.every(item => item.height === (commandWidth >= 768 ? 28 : 44))).toBe(true);
+    expect(commandMetrics.every(item => item.height === (commandWidth >= 656 ? 28 : 44))).toBe(true);
     const editTime = page.locator('[data-slot="resource-command-row"] time');
     await expect(editTime).toHaveAttribute("datetime", new Date(lastEdited).toISOString());
     const exactEditTime = await page.evaluate(value => new Date(value).toLocaleString(undefined, {
@@ -717,15 +760,28 @@ for (const width of [375, 768, 1440, 2560]) for (const dark of [false, true]) {
       expect(searchBox.width).toBe(256);
     }
     const drawer = await revealVaultNavigation(page);
-    if (width === 2560) await page.getByRole("button", { name: "Expand collections", exact: true }).click();
-    await expect(collections.getByRole("tree", { name: "fixture explorer", exact: true })).toBeVisible();
-    await expect(collections.getByRole("button", { name: "Collapse collections", exact: true })).toBeInViewport();
+    const contextPanel = page.locator("#vault-workspace-navigation");
+    await expect(contextPanel).toHaveCount(1);
+    await expect(collections.getByRole("navigation", { name: "fixture explorer", exact: true })).toBeVisible();
+    await expect(collections.getByRole("treeitem")).toHaveCount(0);
+    await expect(contextPanel.locator('[data-slot="vault-identity-header"]').getByRole("button", { name: "Switch vault: fixture", exact: true })).toBeVisible();
+    await expect(contextPanel.getByRole("button", { name: "Add content", exact: true })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Close vault navigation", exact: true })).toBeInViewport();
+    if (width >= 1024) {
+      const resize = page.getByRole("separator", { name: "Resize vault navigation", exact: true });
+      await expect(resize).toHaveAttribute("aria-valuenow", "256");
+      await expect(resize).toHaveAttribute("aria-valuemin", "224");
+      await expect(resize).toHaveAttribute("aria-valuemax", "360");
+    }
     await expect(collections.getByRole("link", { name: /^(Search|Graph|Public links|Members|Settings)$/ })).toHaveCount(0);
     if (drawer) {
+      // Leave the identity tooltip before testing the outer disclosure's
+      // Escape behavior; nested layers consume Escape independently.
+      await collections.getByRole("navigation", { name: "fixture explorer", exact: true }).getByRole("button").first().focus();
       await page.keyboard.press("Escape");
       await expect(page.getByRole("button", { name: "Open vault navigation", exact: true })).toBeFocused();
     }
-    if (width === 2560) await page.getByRole("button", { name: "Collapse collections", exact: true }).click();
+    if (width === 2560) await page.getByRole("button", { name: "Close vault navigation", exact: true }).click();
     for (const name of ["Edit", "Copy markdown", `Actions for ${title}`]) {
       await expect(page.getByRole("region", { name: "Document workspace" }).getByRole("button", { name, exact: true })).toBeInViewport();
     }
@@ -760,7 +816,7 @@ for (const width of [375, 768, 1440, 2560]) for (const dark of [false, true]) {
       // Metadata now belongs to this same toolbar; allow its compact first
       // line above the 44px touch controls and the 1px bottom divider,
       // but no redundant command band.
-      expect(commands!.height).toBeLessThanOrEqual(87);
+      expect(commands!.height).toBeLessThanOrEqual(91);
     }
     if (width >= 1440) expect(measures.heading.top).toBeLessThanOrEqual(220);
     await expect(page.getByRole("region", { name: "Scrollable table" })).toHaveAttribute("tabindex", "0");
@@ -908,21 +964,33 @@ test("a deep document reader reaches every Vault page through Overview and Back 
   await expect(page.getByRole("heading", { name: "Authored heading", exact: true })).toBeVisible();
   await expect(page.locator('[data-slot="resource-command-row"]').getByRole("navigation", { name: "Resource location", exact: true })).toHaveCount(0);
   // Selecting the current Vault still leaves a resource for its Overview.
-  await page.getByRole("navigation", { name: "Vaults", exact: true }).getByRole("link", { name: "fixture, writer", exact: true }).click();
+  const pickerTrigger = page.getByRole("button", { name: "Switch vault: fixture", exact: true });
+  await pickerTrigger.click();
+  const picker = page.getByRole("dialog", { name: "Vaults", exact: true });
+  const vaultSearch = picker.getByRole("searchbox", { name: "Find a vault", exact: true });
+  await expect(vaultSearch).toBeFocused();
+  await vaultSearch.fill("missing");
+  await expect(picker.getByText("No vaults match this name.", { exact: true })).toBeVisible();
+  // Filtering the anchored chooser keeps the surrounding identity visible.
+  await expect(pickerTrigger).toBeVisible();
+  await expect(pickerTrigger).toHaveText("fixture");
+  await vaultSearch.fill("fixture");
+  const selectedVault = picker.getByRole("link", { name: "fixture, current vault", exact: true });
+  await expect(selectedVault).toHaveAttribute("aria-current", "location");
+  await selectedVault.click();
   await expect(page).toHaveURL(/\/vault\/fixture$/);
+  await expect(picker).toHaveCount(0);
   await expectQuietVaultTrail(page, "Overview");
   await page.goBack();
   await vaultBreadcrumb(page).click();
   await expect(page).toHaveURL(/\/vault\/fixture$/);
 });
 
-test("maximum saved rail widths use a temporary drawer without changing preferences", async ({ page }, testInfo) => {
+test("maximum saved navigation width uses a temporary disclosure without changing preferences", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1024, height: 1000 });
   await fixture(page);
   await page.addInitScript(() => {
-    localStorage.setItem("akb.vaultRailWidth.v2", "320");
-    localStorage.setItem("akb.treeWidth.v2", "480");
-    localStorage.setItem("akb.vaultRailCollapsed", "0");
+    localStorage.setItem("akb.focusedNavigationWidth.v1", "360");
     localStorage.setItem("akb.treeVisible", "1");
   });
   await page.goto(`/vault/fixture/doc/${encodeURIComponent(path)}`);
@@ -936,14 +1004,20 @@ test("maximum saved rail widths use a temporary drawer without changing preferen
   await open.click();
   await expect(page.locator("#vault-workspace-navigation")).toBeInViewport();
   const collections = page.locator('[data-slot="vault-collections-sidebar"]');
-  await expect(collections.getByRole("tree", { name: "fixture explorer", exact: true })).toBeVisible();
+  await expect(collections.getByRole("navigation", { name: "fixture explorer", exact: true })).toBeVisible();
+  const resize = page.getByRole("separator", { name: "Resize vault navigation", exact: true });
+  await expect(resize).toHaveCount(1);
+  await expect(resize).toHaveAttribute("aria-valuenow", "360");
+  await expect(resize).toHaveAttribute("aria-valuemin", "224");
+  await expect(resize).toHaveAttribute("aria-valuemax", "360");
   await expect(collections.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
+  await collections.getByRole("navigation", { name: "fixture explorer", exact: true }).getByRole("button").first().focus();
   await page.keyboard.press("Escape");
   await expect(open).toBeFocused();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("maximum-rails-compact.png") });
   // A Collection breadcrumb must reveal its destination even when the saved
-  // desktop rails currently require the temporary drawer.
+  // context panel currently requires the temporary disclosure.
   const parentCollection = location.getByRole("link", { name: "Operations", exact: true });
   if (await parentCollection.isVisible()) await parentCollection.click();
   else {
@@ -952,21 +1026,23 @@ test("maximum saved rail widths use a temporary drawer without changing preferen
   }
   await expect(page).toHaveURL(/\/vault\/fixture\?collection=guides%2Fteam%2Foperations$/);
   await expect(page.locator("#vault-workspace-navigation")).toBeInViewport();
+  await collections.getByRole("navigation", { name: "fixture explorer", exact: true }).getByRole("button").first().focus();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Open vault navigation", exact: true })).toBeFocused();
   await page.setViewportSize({ width: 1920, height: 1000 });
   await expect(page.locator('[data-navigation-mode="inline"]')).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open vault navigation", exact: true })).toBeHidden();
-  expect(await page.evaluate(() => ["akb.vaultRailWidth.v2", "akb.treeWidth.v2", "akb.vaultRailCollapsed", "akb.treeVisible"].map(key => localStorage.getItem(key)))).toEqual(["320", "480", "0", "1"]);
+  await expect(page.getByRole("button", { name: "Close vault navigation", exact: true })).toBeInViewport();
+  await expect(resize).toHaveAttribute("aria-valuenow", "360");
+  expect(await page.evaluate(() => ["akb.focusedNavigationWidth.v1", "akb.treeVisible"].map(key => localStorage.getItem(key)))).toEqual(["360", "1"]);
 });
 
-for (const dark of [false, true]) test(`Overview page links remain independent from collection collapse in ${dark ? "dark" : "light"}`, async ({ page }, testInfo) => {
+for (const dark of [false, true]) test(`Vault destinations preserve one context panel and its visibility in ${dark ? "dark" : "light"}`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1920, height: 1000 });
   await fixture(page, dark);
   await page.goto("/vault/fixture");
   const initialTreePreference = await page.evaluate(() => localStorage.getItem("akb.treeVisible"));
   const collections = page.locator('[data-slot="vault-collections-sidebar"]');
-  const tree = collections.getByRole("tree", { name: "fixture explorer", exact: true });
+  const tree = collections.getByRole("navigation", { name: "fixture explorer", exact: true });
   await expect(tree).toBeVisible();
   const breadcrumb = vaultBreadcrumb(page);
   const position = (await breadcrumb.boundingBox())!;
@@ -980,7 +1056,8 @@ for (const dark of [false, true]) test(`Overview page links remain independent f
     await expectQuietVaultTrail(page, name);
     await expectVaultDestinationsReachable(page, name);
     if (name !== "Overview") {
-      await expect(collections).toHaveCount(0);
+      await expect(tree).toBeVisible();
+      await expect(page.locator("#vault-workspace-navigation")).toHaveCount(1);
       expect(await page.evaluate(() => localStorage.getItem("akb.treeVisible"))).toBe(initialTreePreference);
       await page.goBack();
       await expect(tree).toBeVisible();
@@ -993,14 +1070,14 @@ for (const dark of [false, true]) test(`Overview page links remain independent f
   await viewport.evaluate(element => { element.scrollTop = element.scrollHeight; });
   expect(await breadcrumb.boundingBox()).toEqual(position);
   await page.screenshot({ path: testInfo.outputPath("working-page-navigation.png") });
-  await page.getByRole("button", { name: "Collapse collections", exact: true }).click();
-  const expand = page.getByRole("button", { name: "Expand collections", exact: true });
+  await page.getByRole("button", { name: "Close vault navigation", exact: true }).click();
+  const expand = page.getByRole("button", { name: "Open vault navigation", exact: true });
   await expect(expand).toBeInViewport();
   await expect(collections).toBeHidden();
   await expectVaultDestinationsReachable(page, "Overview");
   expect(await page.evaluate(() => localStorage.getItem("akb.treeVisible"))).toBe("0");
   await openVaultDestination(page, "Members");
-  await expect(collections).toHaveCount(0);
+  await expect(collections).toBeHidden();
   expect(await page.evaluate(() => localStorage.getItem("akb.treeVisible"))).toBe("0");
   await page.goBack();
   await expect(expand).toBeInViewport();
@@ -1041,7 +1118,7 @@ test("Vault breadcrumb remains stable when only working content width changes", 
 });
 
 for (const width of [1440, 768]) {
-  test(`short-height collection sidebar remains reachable without an empty outer gutter at ${width}px`, async ({ page }, testInfo) => {
+  test(`short-height context navigation remains reachable without an empty outer gutter at ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 1000 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     await fixture(page);
@@ -1049,8 +1126,8 @@ for (const width of [1440, 768]) {
     await expect(page.getByRole("heading", { name: "Authored heading", exact: true })).toBeVisible();
     await revealVaultNavigation(page);
     const collections = page.locator('[data-slot="vault-collections-sidebar"]');
-    const collapse = collections.getByRole("button", { name: "Collapse collections", exact: true });
-    const tree = collections.getByRole("tree", { name: "fixture explorer", exact: true });
+    const collapse = page.getByRole("button", { name: "Close vault navigation", exact: true });
+    const tree = collections.getByRole("navigation", { name: "fixture explorer", exact: true });
     await expect(collapse).toBeInViewport();
     await expect(collections.getByRole("navigation", { name: "Vault sections", exact: true })).toHaveCount(0);
     const emptyGutter = () => collections.evaluate(element => ({
@@ -1061,15 +1138,17 @@ for (const width of [1440, 768]) {
     await expect.poll(emptyGutter).toEqual({ style: "auto", overflow: false, reservedWidth: 0 });
 
     await collapse.focus();
-    const shortHeight = width >= 1024 ? 240 : 360;
+    // The compact identity and icon controls leave more reading room; use
+    // a shorter viewport so this fixture still exercises actual overflow.
+    const shortHeight = width >= 1024 ? 180 : 280;
     await page.setViewportSize({ width, height: shortHeight });
     await expect.poll(async () => {
       const box = (await collections.boundingBox())!;
       return box.y + box.height;
     }).toBe(shortHeight);
-    // The restored sidebar has no footer destinations. Its header remains
-    // reachable while focus reveals a document inside the independent tree.
-    const treeDocument = tree.getByRole("treeitem", { name: `Document: ${title}`, exact: true });
+    // The stable header toggle remains reachable while native link focus
+    // reveals a document inside the independently scrolling explorer.
+    const treeDocument = tree.getByRole("link", { name: `Document: ${title}`, exact: true });
     await treeDocument.focus();
     await expect(treeDocument).toBeInViewport();
     await expect.poll(() => tree.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
@@ -1299,7 +1378,7 @@ for (const width of [375, 1440]) test(`read-mode radios select immediately with 
   expect(await rendered.evaluate(element => getComputedStyle(element).color)).not.toBe(await raw.evaluate(element => getComputedStyle(element).color));
 });
 
-for (const width of [375, 1440]) test(`modified keyboard Vault links keep a dirty editor in its original tab at ${width}px`, async ({ page, context }) => {
+for (const width of [375, 1440]) test(`modified keyboard Vault chooser links keep a dirty editor in its original tab at ${width}px`, async ({ page, context }) => {
   // Popups must also remain isolated from the real local backend. Page-owned
   // fixtures take precedence in the original tab; the new tab only tests linking.
   await context.route("**/api/v1/**", route => route.fulfill({ json: {} }));
@@ -1309,7 +1388,11 @@ for (const width of [375, 1440]) test(`modified keyboard Vault links keep a dirt
   const editor = page.getByRole("textbox", { name: "Document body (markdown)" });
   await editor.fill("Keep editing here while checking Vault settings in another tab.");
   await expect(page.getByText("Draft saved locally", { exact: true })).toBeVisible();
-  const destination = vaultBreadcrumb(page);
+  if (width < 1024) await page.getByRole("button", { name: "Open vault navigation", exact: true }).click();
+  const switcher = page.locator("#vault-workspace-navigation").getByRole("button", { name: "Switch vault: fixture", exact: true });
+  await switcher.click();
+  const picker = page.getByRole("dialog", { name: "Vaults", exact: true });
+  const destination = picker.getByRole("link", { name: "fixture, current vault", exact: true });
   await destination.focus();
   // Browser-native new-tab gestures do not necessarily retain a JS opener.
   const popupPromise = context.waitForEvent("page");
@@ -1319,10 +1402,13 @@ for (const width of [375, 1440]) test(`modified keyboard Vault links keep a dirt
   await popup.close();
   await expect(page).toHaveURL(/\?view=edit$/);
   await expect(page.getByRole("dialog", { name: "Leave this document?", exact: true })).toHaveCount(0);
+  await expect(picker).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(switcher).toBeFocused();
   await expect(editor).toContainText("Keep editing here");
 });
 
-for (const width of [375, 1440]) test(`Vault navigation protects an unsaved editor draft at ${width}px`, async ({ page }) => {
+for (const width of [375, 1440]) test(`Header Vault chooser protects an unsaved editor draft at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 1000 });
   await fixture(page);
   await page.goto(`/vault/fixture/doc/${encodeURIComponent(path)}?view=edit`);
@@ -1330,15 +1416,56 @@ for (const width of [375, 1440]) test(`Vault navigation protects an unsaved edit
   const draft = "An unsaved draft kept while reviewing another Vault page.";
   await editor.fill(draft);
   await expect(page.getByText("Draft saved locally", { exact: true })).toBeVisible();
-  await vaultBreadcrumb(page).click();
+  if (width < 1024) await page.getByRole("button", { name: "Open vault navigation", exact: true }).click();
+  const switcher = page.locator("#vault-workspace-navigation").getByRole("button", { name: "Switch vault: fixture", exact: true });
+  const switchVault = async () => {
+    const picker = page.getByRole("dialog", { name: "Vaults", exact: true });
+    if (!await picker.isVisible()) {
+      if (!await switcher.isVisible()) await page.getByRole("button", { name: "Open vault navigation", exact: true }).click();
+      await switcher.click();
+      const search = picker.getByRole("searchbox", { name: "Find a vault", exact: true });
+      await expect(search).toBeFocused();
+      await search.fill("fixture");
+      await picker.getByRole("button", { name: /^Filter by role(?:, 1 active)?$/ }).click();
+      await picker.getByRole("button", { name: "Can edit", exact: true }).click();
+    }
+    await picker.getByRole("link", { name: "fixture, current vault", exact: true }).click();
+  };
+  await switchVault();
   const confirmation = page.getByRole("dialog", { name: "Leave this document?", exact: true });
   await expect(confirmation).toBeVisible();
+  await expect(page.locator("#vault-switcher-panel")).toHaveAttribute("inert", "");
+  await expect(page.locator("#vault-switcher-panel")).toHaveAttribute("aria-hidden", "true");
   await expect(page).toHaveURL(/\?view=edit$/);
   await expect(page.getByRole("menu")).toHaveCount(0);
   await confirmation.getByRole("button", { name: "Keep editing", exact: true }).click();
   await expect(confirmation).toHaveCount(0);
+  const remainingPicker = page.getByRole("dialog", { name: "Vaults", exact: true });
+  await expect(remainingPicker).toBeVisible();
+  await expect(remainingPicker).not.toHaveAttribute("inert", "");
+  await expect(remainingPicker.getByRole("searchbox", { name: "Find a vault", exact: true })).toHaveValue("fixture");
+  await expect(remainingPicker.getByRole("button", { name: "Can edit", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(remainingPicker.getByRole("searchbox", { name: "Find a vault", exact: true })).toBeFocused();
+  await expect(page.locator("#vault-workspace-navigation")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(switcher).toBeFocused();
   await expect(editor).toContainText(draft);
-  await vaultBreadcrumb(page).click();
+  // Global Vaults remains a native directory link and consults the same guard.
+  const globalVaults = width < 1024
+    ? page.getByRole("navigation", { name: "Primary mobile navigation", exact: true }).getByRole("link", { name: "Vaults", exact: true })
+    : page.getByTestId("app-sidebar").getByRole("link", { name: "Vaults", exact: true });
+  await expect(globalVaults).toHaveAttribute("href", "/vault");
+  await globalVaults.click();
+  await expect(confirmation).toBeVisible();
+  await expect(page).toHaveURL(/\?view=edit$/);
+  await confirmation.getByRole("button", { name: "Keep editing", exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(editor).toContainText(draft);
+  // A global departure returns focus to the editor and closes the mobile
+  // disclosure. Wait for that state before opening it again.
+  await expect(page.getByRole("textbox", { name: "Document title", exact: true })).toBeFocused();
+  if (width < 1024) await expect(page.locator("#vault-workspace-navigation")).toBeHidden();
+  await switchVault();
   await confirmation.getByRole("button", { name: "Leave document", exact: true }).click();
   await expect(page).toHaveURL(/\/vault\/fixture$/);
   await expectQuietVaultTrail(page, "Overview");
@@ -1862,7 +1989,6 @@ test("preview geometry is independent of its search entry and background sidebar
       await page.goto("/search");
       await page.evaluate(folded => {
         localStorage.setItem("akb.treeVisible", folded ? "0" : "1");
-        localStorage.setItem("akb.vaultRailCollapsed", folded ? "1" : "0");
       }, folded);
       await page.goto(entry.route);
       if (entry.global) {
@@ -1870,7 +1996,7 @@ test("preview geometry is independent of its search entry and background sidebar
         const search = page.getByTestId("global-search-dialog");
         await search.getByRole("combobox").fill("reading");
         await search.getByRole("option", { name: /문서 읽기 작업공간/ }).click();
-      } else await page.getByRole("link", { name: /문서 읽기 작업공간/ }).first().click();
+      } else await page.getByRole("region", { name: "Search results", exact: true }).getByRole("link", { name: /문서 읽기 작업공간/ }).first().click();
       const preview = page.getByTestId("document-preview-dialog");
       await expect(preview.locator(".document-reading-flow")).toBeVisible();
       const box = (await preview.boundingBox())!;
@@ -2318,7 +2444,7 @@ test("wide tables stay locally scrollable at 200 percent CSS zoom", async ({ pag
   });
   await expect(currentTitle).toBeInViewport({ ratio: 1 });
   await expect(vaultBreadcrumb(page)).toBeInViewport({ ratio: 1 });
-  await expect(page.getByRole("button", { name: /^(Open vault navigation|Expand collections)$/ })).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Open vault navigation", exact: true })).toBeInViewport();
   await region.focus();
   await page.keyboard.press("ArrowRight");
   await expect.poll(() => region.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
@@ -2357,8 +2483,12 @@ for (const width of [375, 1440]) for (const kind of ["file", "table"] as const) 
       await expect(page.locator(".app-header").getByRole("navigation", { name: "Resource location", exact: true })).toBeVisible();
     }
     const drawer = await revealVaultNavigation(page);
-    await expect(page.locator('[data-slot="vault-collections-sidebar"]').getByRole("tree", { name: "fixture explorer", exact: true })).toBeVisible();
-    if (drawer) await page.keyboard.press("Escape");
+    await expect(page.locator('[data-slot="vault-collections-sidebar"]').getByRole("navigation", { name: "fixture explorer", exact: true })).toBeVisible();
+    if (drawer) {
+      await page.getByRole("navigation", { name: "fixture explorer", exact: true }).getByRole("button").first().focus();
+      await page.keyboard.press("Escape");
+      await expect(page.locator("#vault-workspace-navigation")).toBeHidden();
+    }
     await expect(page.getByRole("button", { name: /^Explore vault:/ })).toHaveCount(0);
     const navigation = page.getByRole("navigation", { name: "Vault sections", exact: true });
     await expectVaultDestinationsReachable(page);
@@ -2388,3 +2518,71 @@ for (const width of [375, 1440]) for (const kind of ["file", "table"] as const) 
     await expectVaultDestinationsReachable(page);
   });
 }
+
+for (const scenario of [
+  { width: 375, dark: false, preview: false },
+  { width: 375, dark: true, preview: true },
+  { width: 1440, dark: false, preview: true },
+  { width: 1440, dark: true, preview: false },
+]) test(`document metadata byline wraps authors at ${scenario.width}px ${scenario.dark ? "dark" : "light"} ${scenario.preview ? "preview" : "route"}`, async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: scenario.width, height: 900 });
+  const author = "김민정 플랫폼 지식 운영팀 — " + "한글작성자이름".repeat(12);
+  await fixture(page, scenario.dark, false, body, undefined, {
+    created_by_name: author, created_by: "0c37e906-6db0-48c2-ac5d-576d0797b3f7",
+  });
+  if (scenario.preview) {
+    await page.goto("/search?q=reading&source=document");
+    await page.getByRole("link", { name: /문서 읽기 작업공간/ }).first().click();
+  } else await page.goto(`/vault/fixture/doc/${encodeURIComponent(path)}`);
+  const tools = page.getByRole("group", { name: "Document reading tools", exact: true });
+  const byline = tools.getByRole("group", { name: "Document metadata", exact: true });
+  const name = byline.getByText(author, { exact: true });
+  await expect(name).toBeVisible();
+  await expect(byline.getByText("Author", { exact: true })).toBeVisible();
+  await expect(byline).not.toContainText("Last edited by");
+  await expect(byline).not.toContainText("0c37e906");
+  await expect(byline.locator("time")).toHaveCount(1);
+  const timestamp = byline.locator("time");
+  await expect(timestamp).toHaveAttribute("datetime", new Date(lastEdited).toISOString());
+  await expect(tools.getByRole("button", { name: "Edit", exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(tools.getByRole("button", { name: "Document details", exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(page.getByRole("region", { name: "Document preview", exact: true })).toContainText("Authored heading");
+  expect(await byline.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  expect(await name.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+  const contrast = await byline.locator(':scope > span > span, time > [aria-hidden="true"]').evaluateAll(elements => {
+    const channels = (color: string) => (color.match(/[\d.]+/g) || []).map(Number);
+    const luminance = (rgb: number[]) => rgb.slice(0, 3).map(v => {
+      const c = v / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    }).reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+    return elements.map(element => {
+      let parent: Element | null = element;
+      let background = [255, 255, 255];
+      while (parent) {
+        const color = channels(getComputedStyle(parent).backgroundColor);
+        if (color.length === 3 || color[3] === 1) { background = color; break; }
+        parent = parent.parentElement;
+      }
+      const foreground = luminance(channels(getComputedStyle(element).color));
+      const bg = luminance(background);
+      return { text: element.textContent, ratio: (Math.max(foreground, bg) + 0.05) / (Math.min(foreground, bg) + 0.05) };
+    });
+  });
+  expect(contrast).toHaveLength(3);
+  for (const sample of contrast) expect(sample.ratio, sample.text || "Document metadata contrast").toBeGreaterThanOrEqual(4.5);
+  await timestamp.focus();
+  await expect(timestamp).toBeFocused();
+  await expect(page.getByRole("tooltip")).toContainText("Last edited:");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await expect(timestamp).toBeFocused();
+  await page.screenshot({ path: testInfo.outputPath("document-byline.png"), animations: "disabled" });
+
+  const panel = await openDocumentDetails(page, "Properties");
+  const propertyAuthor = panel.getByText(author, { exact: true });
+  await expect(propertyAuthor).toBeVisible();
+  expect(await panel.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  expect(await propertyAuthor.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+});

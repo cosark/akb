@@ -134,7 +134,17 @@ for (const width of [375, 1440, 2560]) for (const dark of [false, true]) {
     await expect(details).toHaveCount(0);
     await expect(general.getByRole("button", { name: "Copy vault address", exact: true })).toBeVisible();
     await expect(page.getByLabel("Vault ownership and dates", { exact: true })).toHaveCount(0);
-    await expect(page.locator('[data-slot="vault-collections-sidebar"]')).toHaveCount(0);
+    const explorer = page.getByRole("navigation", { name: "fixture explorer", exact: true });
+    if (width >= 1024) {
+      await expect(explorer).toBeVisible();
+      await expect(page.getByRole("button", { name: "Switch vault: fixture", exact: true })).toBeVisible();
+    } else {
+      await expect(page.locator("#vault-workspace-navigation")).toBeHidden();
+      await page.getByRole("button", { name: "Open vault navigation", exact: true }).click();
+      await expect(explorer).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("button", { name: "Open vault navigation", exact: true })).toBeFocused();
+    }
     await expect(page.getByRole("navigation", { name: "Vault sections" })).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("settings-general.png"), animations: "disabled" });
     const description = page.getByLabel("Description", { exact: true });

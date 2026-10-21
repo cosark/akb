@@ -89,7 +89,8 @@ describe("Public links page redesign", () => {
     expect(document.title).toBe("platform-docs · Public links · AKB");
     expect(screen.getByTestId("publication-workspace")).toHaveClass(
       "w-full",
-      "max-w-none",
+      "mx-auto",
+      "max-w-7xl",
     );
     expect(screen.getByTestId("publication-ledger-header")).toHaveClass(
       "border-border",

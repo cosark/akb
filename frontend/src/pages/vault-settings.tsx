@@ -347,7 +347,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
     <PageShell
       header={null}
       contentWidth="full"
-      className="workspace-density-compact"
+      className="workspace-density-compact mx-auto w-full max-w-7xl"
     >
       <h1 className="sr-only">Settings</h1>
       <WorkspaceSectionHeader
@@ -371,7 +371,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
       >
         <Panel variant="workspace">
         {info && !canEdit && (
-          <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3 text-sm text-foreground-muted sm:px-5">
+          <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3 text-ui text-foreground-muted sm:px-5">
             <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden />
             <span>Read only — only the vault owner can change settings.</span>
             {info.role_source === "public" && <Badge variant="info-outline">Access via public policy</Badge>}
@@ -382,7 +382,7 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
           data-testid="settings-workspace-frame"
           className="@container/vault-settings min-w-0"
         >
-          {verified && busy && <p role="status" className="px-4 py-3 text-sm text-foreground-muted sm:px-5">Saving changes…</p>}
+          {verified && busy && <p role="status" className="px-4 py-3 text-ui text-foreground-muted sm:px-5">Saving changes…</p>}
           {loadError && (
             <Alert variant="destructive" className="m-4 sm:m-5">
               {loadError}
@@ -392,9 +392,9 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
           {loading && <div className="p-4 sm:p-5"><SettingsLoadingState /></div>}
           {info && (
             <div className="divide-y divide-border">
-              <SettingsSection id="general" title="Vault details" layout="form"
+              <SettingsSection id="general" title="Vault details" layout="form" className="gap-4"
                 icon={<FileText aria-hidden />} description="Describe this vault and copy its address.">
-                <div className="grid min-w-0 gap-5 @[44rem]/settings-values:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+                <div className="grid min-w-0 max-w-5xl gap-4 @[44rem]/settings-values:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
                   <div className="min-w-0" data-testid="settings-general-editor">
                     <Label htmlFor="vault-description" className="mb-2 block text-ui">Description</Label>
                     <Textarea
@@ -429,9 +429,9 @@ function VaultSettingsWorkspace({ name }: { name: string | undefined }) {
                 </div>
               </SettingsSection>
 
-              <SettingsSection id="access" title="Access permissions" layout="form" tone="people"
+              <SettingsSection id="access" title="Access permissions" layout="form" tone="people" className="gap-4"
                 icon={<ShieldCheck aria-hidden />} description="Choose who can open this vault and what they can do.">
-                <div data-testid="settings-access-editor">
+                <div data-testid="settings-access-editor" className="max-w-5xl">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <p id="vault-access-label" className="text-ui font-medium">Who can access</p>
                     <span className="inline-flex items-center gap-1.5 text-xs text-foreground-muted">
@@ -612,7 +612,7 @@ function SettingsActionBar({
 }) {
   if (!dirty && !saving && !saved) return null;
   return (
-    <div className="mt-3 flex min-h-10 flex-wrap items-center gap-2">
+    <div className="mt-3 flex min-h-8 flex-wrap items-center gap-2">
       {(dirty || saving) && <Button
         type="button"
         size="sm"
@@ -651,12 +651,12 @@ function SettingsActionBar({
 
 function SettingsLoadingState() {
   return (
-    <div role="status" aria-label="Loading vault settings" className="space-y-8">
+    <div role="status" aria-label="Loading vault settings" className="space-y-6">
       {[0, 1, 2].map(index => (
-        <div key={index} aria-hidden className="space-y-4">
+        <div key={index} aria-hidden className="space-y-3">
           <div className="h-5 w-28 animate-pulse rounded-[var(--radius-sm)] bg-surface-2" />
           <div className="h-px bg-border" />
-          <div className="h-24 max-w-4xl animate-pulse rounded-[var(--radius-sm)] bg-surface-2" />
+          <div className="h-20 max-w-5xl animate-pulse rounded-[var(--radius-sm)] bg-surface-2" />
         </div>
       ))}
     </div>

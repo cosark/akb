@@ -692,7 +692,56 @@ describe("DocumentPage view toggle", () => {
     expect(within(info).queryByText("notes/hello.md")).not.toBeInTheDocument();
   });
 
-  it("shows the latest edit in the toolbar and exact edit and creation dates in Document info", async () => {
+  it.each(["route", "preview"])("shows the verified creator and edit time in the %s byline", async presentation => {
+    const updated = "2026-09-14T09:42:30Z";
+    const author = "홍길동 — Platform knowledge team";
+    getDocumentMock.mockResolvedValue(makeDoc({
+      created_by: "0c37e906-6db0-48c2-ac5d-576d0797b3f7", created_by_name: author, updated_at: updated,
+    }));
+    if (presentation === "preview") renderPreviewAt("/vault/v/doc/notes%2Fhello.md");
+    else renderAt("/vault/v/doc/notes%2Fhello.md");
+    const byline = await screen.findByRole("group", { name: "Document metadata" });
+    expect(within(byline).getByText("Author", { exact: true })).toBeVisible();
+    expect(within(byline).getByText(author)).toBeVisible();
+    expect(byline.querySelectorAll("time")).toHaveLength(1);
+    expect(byline.querySelector("time")).toHaveAttribute("datetime", new Date(updated).toISOString());
+    expect(byline).not.toHaveTextContent("Last edited by");
+    expect(screen.queryByText("0c37e906-6db0-48c2-ac5d-576d0797b3f7")).not.toBeInTheDocument();
+    expect(screen.getAllByText(author)).toHaveLength(1);
+    expect(screen.getByRole("group", { name: "Document reading tools" })).toContainElement(byline);
+  });
+
+  it.each([
+    { created_by_name: "  ", created_by: "legacy-author", expected: "legacy-author" },
+    { created_by_name: "Unknown", created_by: "0c37e906-6db0-48c2-ac5d-576d0797b3f7", expected: null },
+    { created_by_name: null, created_by: "unknown", expected: null },
+    { created_by_name: "0c37e906-6db0-48c2-ac5d-576d0797b3f7", created_by: null, expected: null },
+    { created_by_name: null, created_by: null, expected: null },
+  ])("uses only an available author identity in the byline: %j", async ({ expected, ...identity }) => {
+    getDocumentMock.mockResolvedValue(makeDoc({ ...identity, updated_at: "2026-09-14T09:42:30Z" }));
+    renderAt("/vault/v/doc/notes%2Fhello.md");
+    const byline = await screen.findByRole("group", { name: "Document metadata" });
+    if (expected) expect(within(byline).getByText(expected)).toBeVisible();
+    else expect(within(byline).queryByText("Author", { exact: true })).not.toBeInTheDocument();
+    expect(byline.querySelector("time")).toBeInTheDocument();
+    expect(byline).not.toHaveTextContent(/Unknown|0c37e906|Document Reader/);
+  });
+
+  it("reveals the exact byline time from the keyboard without moving focus", async () => {
+    const user = userEvent.setup();
+    const updated = "2026-09-14T09:42:30Z";
+    getDocumentMock.mockResolvedValue(makeDoc({ created_by_name: "Knowledge author", updated_at: updated }));
+    renderAt("/vault/v/doc/notes%2Fhello.md");
+    const byline = await screen.findByRole("group", { name: "Document metadata" });
+    await user.tab();
+    expect(byline.querySelector("time")).toHaveFocus();
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(`Last edited: ${exactTimestamp(updated)}`);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(byline.querySelector("time")).toHaveFocus();
+  });
+
+  it("shows the latest edit in the byline and exact edit and creation dates in Document info", async () => {
     const user = userEvent.setup();
     const updated = "2026-09-14T09:42:30Z";
     const created = "2026-08-25T01:05:00Z";
@@ -801,13 +850,13 @@ describe("DocumentPage view toggle", () => {
     const latestDate = "2026-09-14T09:42:30Z";
     const versionDate = "2026-09-01T00:00:00Z";
     const historicalCommit = "1234567abcdef"; // pragma: allowlist secret — synthetic Git commit
-    getDocumentMock.mockResolvedValue(makeDoc({ updated_at: latestDate }));
+    getDocumentMock.mockResolvedValue(makeDoc({ created_by_name: "Original author", updated_at: latestDate }));
     getDocumentHistoryMock.mockResolvedValue({
       kind: "document_history",
       source: "document",
       history: [
         { hash: "abcdef1234567", message: "Latest edit", author: "user-1", date: latestDate },
-        { hash: historicalCommit, message: "Earlier version", author: "user-1", date: versionDate },
+        { hash: historicalCommit, message: "Earlier version", author: "later-editor", author_name: "Later editor", date: versionDate },
       ],
     });
     renderAt(`/vault/v/doc/notes%2Fhello.md?commit=${historicalCommit.slice(0, 7)}${suffix}`);
@@ -817,6 +866,9 @@ describe("DocumentPage view toggle", () => {
     expect(exactText).toHaveClass("sr-only");
     expect(timestamp).not.toHaveAttribute("aria-label");
     expect(screen.queryByText(/^Last edited:/)).not.toBeInTheDocument();
+    const byline = screen.getByRole("group", { name: "Document metadata" });
+    expect(byline).toHaveTextContent("Original author");
+    expect(byline).not.toHaveTextContent("Later editor");
 
     const panel = await openDocumentDetails(user, "Properties");
     expect(within(panel).getByText("Latest edit", { exact: true }).nextElementSibling?.querySelector("time"))

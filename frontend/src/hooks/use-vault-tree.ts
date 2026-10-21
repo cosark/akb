@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { useAccessVerification, useCurrentUser } from "@/contexts/current-user-context";
-import { browseVault, type ArchiveScope, type BrowseOptions } from "@/lib/api";
+import { ApiError, browseVault, type ArchiveScope, type BrowseOptions } from "@/lib/api";
 import { isReservedCollection } from "@/lib/skill";
 import { parseFileUri } from "@/lib/uri";
 
@@ -46,18 +46,27 @@ export function vaultTreeQueryKey(
 export function useVaultTree(
   vault: string | undefined,
   archiveScope: ArchiveScope = "unarchived",
-  options: { content_type?: BrowseOptions["content_type"]; collection?: string; enabled?: boolean } = {},
+  options: { content_type?: BrowseOptions["content_type"]; collection?: string; depth?: number; enabled?: boolean } = {},
 ) {
   const user = useCurrentUser();
   const { checking, revision } = useAccessVerification();
   const query = useInfiniteQuery({
-    queryKey: [...vaultTreeQueryKey(user?.user_id, revision, vault ?? "", archiveScope), options.content_type ?? "all", options.collection ?? ""],
+    queryKey: [...vaultTreeQueryKey(user?.user_id, revision, vault ?? "", archiveScope), options.content_type ?? "all", options.collection ?? "", ...(options.depth === undefined ? [] : [options.depth])],
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) => browseVault(vault!, options.collection, -1, {
-      page_size: 100, archive_scope: archiveScope,
-      ...(options.content_type ? { content_type: options.content_type } : {}),
-      ...(pageParam ? { cursor: pageParam } : {}),
-    }),
+    queryFn: async ({ pageParam, client, queryKey, signal }) => {
+      try {
+        return await browseVault(vault!, options.collection, options.depth ?? -1, {
+          page_size: 100, archive_scope: archiveScope,
+          ...(options.content_type ? { content_type: options.content_type } : {}),
+          ...(pageParam ? { cursor: pageParam } : {}),
+        });
+      } catch (error) {
+        if (!signal.aborted && error instanceof ApiError && [401, 403].includes(error.status)) {
+          client.getQueryCache().find({ queryKey, exact: true })?.setState({ data: undefined, dataUpdatedAt: 0 });
+        }
+        throw error;
+      }
+    },
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     staleTime: 30_000,
     retry: false,
@@ -83,7 +92,8 @@ export function useVaultTree(
     return () => window.removeEventListener("akb:document-status-changed", refresh);
   }, [vault, refetch]);
 
-  const data = vault && !checking ? query.data : undefined;
+  const accessDenied = query.error instanceof ApiError && [401, 403].includes(query.error.status);
+  const data = vault && !checking && !accessDenied ? query.data : undefined;
   const lastPage = data?.pages.at(-1);
   const showingPreviousScope = query.isPlaceholderData;
   const unsupported = Boolean(
@@ -114,6 +124,7 @@ export function useVaultTree(
   return {
     tree,
     items,
+    accessDenied,
     complete: lastPage?.complete === true,
     paginationUnsupported: Boolean(lastPage && typeof lastPage.complete !== "boolean"),
     hasMore: query.hasNextPage,
@@ -126,6 +137,22 @@ export function useVaultTree(
     error,
     refetch,
   };
+}
+
+/** A browse context describes a prefix, even when that collection was deleted.
+ * Verify the actual row through its bounded parent catalog before offering it. */
+export function useCollectionProof(vault: string, path: string, enabled = true) {
+  const parent = path.split("/").slice(0, -1).join("/");
+  const query = useVaultTree(vault, "unarchived", {
+    collection: parent || undefined, content_type: "collections", depth: 0,
+    enabled: enabled && Boolean(path),
+  });
+  const row = !query.showingPreviousScope && !query.accessDenied && !query.error
+    ? query.items?.find(item => item.type === "collection" && item.path === path) : undefined;
+  const node: TreeNode | undefined = row ? { kind: "collection", name: row.name, path: row.path, raw: row } : undefined;
+  return { ...query, verified: Boolean(row),
+    missing: enabled && Boolean(path) && !query.showingPreviousScope && !query.error && query.complete && !query.refreshing && !row,
+    node };
 }
 
 export function buildTree(items: BrowseItem[]): TreeNode[] {

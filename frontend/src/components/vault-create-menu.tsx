@@ -1,19 +1,20 @@
 import { useRef, type RefObject } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { ChevronDown, FilePlus, Plus, Table2, Upload } from "lucide-react";
+import { FilePlus, FolderPlus, Plus, Table2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-export function VaultCreateMenu({ triggerRef, onDocument, onTable, onUpload }: {
+export function VaultCreateMenu({ triggerRef, onDocument, onTable, onUpload, onCollection }: {
   triggerRef: RefObject<HTMLButtonElement | null>;
   onDocument: () => void;
   onTable: () => void;
   onUpload: () => void;
+  onCollection: () => void;
 }) {
   const launching = useRef(false);
   return <DropdownMenu.Root modal={false} onOpenChange={open => { if (open) launching.current = false; }}>
     <DropdownMenu.Trigger asChild>
-      <Button ref={triggerRef} variant="accent" size="sm" className="min-h-11 sm:min-h-8 [@media(pointer:coarse)]:min-h-11" aria-label="New content">
-        <Plus className="h-4 w-4" aria-hidden />New<ChevronDown className="h-3.5 w-3.5" aria-hidden />
+      <Button ref={triggerRef} variant="outline" size="icon" className="h-9 w-9 shrink-0 text-link max-sm:h-11 max-sm:w-11 pointer-coarse:h-11 pointer-coarse:w-11" aria-label="New content" title="Add content">
+        <Plus className="h-4 w-4" aria-hidden />
       </Button>
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
@@ -22,6 +23,7 @@ export function VaultCreateMenu({ triggerRef, onDocument, onTable, onUpload }: {
         className="z-[var(--z-popover)] min-w-48 rounded-[var(--radius-md)] border border-border bg-surface p-1 shadow-md">
         {[
           { label: "New document", Icon: FilePlus, action: onDocument },
+          { label: "New collection", Icon: FolderPlus, action: onCollection },
           { label: "New table", Icon: Table2, action: onTable },
           { label: "Upload file", Icon: Upload, action: onUpload },
         ].map(({ label, Icon, action }) => <DropdownMenu.Item key={label}

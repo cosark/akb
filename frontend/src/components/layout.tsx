@@ -1,7 +1,7 @@
 import { Link, Outlet, Navigate, matchPath, useLocation } from "react-router-dom";
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Boxes, House, PanelLeftOpen, PanelLeftClose, type LucideIcon } from "lucide-react";
+import { Boxes, House, type LucideIcon } from "lucide-react";
 import {
   ApiError,
   authSessionSnapshot,
@@ -23,11 +23,11 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { AppPageLocation } from "@/components/app-page-location";
 import { VaultOverviewNavigationFocus } from "@/components/vault-overview-navigation";
 import { appRouteBoundaryForPath } from "@/app-route-contract";
-import { Button } from "@/components/ui/button";
-import type { VaultNavigationControl } from "@/components/vault-shell";
+import { VaultParentBackLink } from "@/components/vault-navigation-controls";
 import { CurrentUserProvider } from "@/contexts/current-user-context";
 import { ResourceLocationProvider } from "@/contexts/resource-location-context";
 import { ResourceNavigationProvider } from "@/contexts/resource-navigation-context";
+import { VaultSwitcherProvider } from "@/contexts/vault-switcher-context";
 import { SettingsDialogProvider } from "@/contexts/settings-dialog-context";
 import { SearchStatusProvider } from "@/hooks/use-search-status";
 import { InlineLoadingState, LoadingState } from "@/components/ui/loading-state";
@@ -67,7 +67,6 @@ export function Layout({ routeOverlay, protectBackgroundDrafts = false }: { rout
   const [revalidating, setRevalidating] = useState(false);
   const [accessRevision, setAccessRevision] = useState(0);
   const [vaultNavigationWidth, setVaultNavigationWidth] = useState(0);
-  const [vaultNavigationControl, setVaultNavigationControl] = useState<VaultNavigationControl | null>(null);
   const searchControlsRef = useRef<HTMLDivElement>(null);
   const accountControlsRef = useRef<HTMLDivElement>(null);
   const [minimumVaultWorkspaceWidth, setMinimumVaultWorkspaceWidth] = useState(656);
@@ -201,6 +200,7 @@ export function Layout({ routeOverlay, protectBackgroundDrafts = false }: { rout
   const isSettingsWorkspace = Boolean(matchPath("/settings", location.pathname));
   const overviewMatch = matchPath("/vault/:name", location.pathname);
   const isVaultOverview = !!overviewMatch && overviewMatch.params.name !== "new";
+  const namedVault = wide && matchPath("/vault/:name/*", location.pathname)?.params.name;
   const viewportLocked = wide || isSearchWorkspace;
   const sidebarCompact = wide ? vaultSidebar.compact : sidebarCollapsed;
   const surface: AppSurface = location.pathname === "/" || wide || isSearchRoute || isSettingsWorkspace ? "paper" : "workspace";
@@ -266,6 +266,7 @@ export function Layout({ routeOverlay, protectBackgroundDrafts = false }: { rout
     <SearchStatusProvider identity={activeFingerprint!} enabled={!revalidating}>
     <CurrentUserProvider user={session.user} checking={revalidating} revision={accessRevision}>
     <ResourceNavigationProvider>
+    <VaultSwitcherProvider>
     <ResourceLocationProvider identity={activeFingerprint!} checking={revalidating} revision={accessRevision}>
     <SettingsDialogProvider identity={session.user.user_id}>
     <div className={`${rootClass} [--workspace-gutter:1rem] sm:[--workspace-gutter:1.5rem] lg:[--workspace-gutter:2rem] xl:[--workspace-gutter:3rem] 2xl:[--workspace-gutter:9rem] ${sidebarCompact ? "lg:pl-14" : "lg:pl-52"}`} style={{ "--vault-navigation-width": `${wide ? vaultNavigationWidth : 0}px` } as CSSProperties} aria-busy={revalidating || undefined}>
@@ -303,14 +304,8 @@ export function Layout({ routeOverlay, protectBackgroundDrafts = false }: { rout
           </div>
 
           <div className="flex h-full min-w-0 flex-1 items-center pr-3 lg:px-5">
-            {wide && vaultNavigationControl && <Button id="vault-navigation-trigger" variant="ghost" size="icon"
-              className="mr-2 hidden h-9 w-9 shrink-0 lg:inline-flex"
-              aria-label={vaultNavigationControl.open ? "Close vault navigation" : "Open vault navigation"}
-              aria-expanded={vaultNavigationControl.open} aria-controls="vault-workspace-navigation"
-              onClick={vaultNavigationControl.onToggle}>
-              {vaultNavigationControl.open ? <PanelLeftClose className="h-4 w-4" aria-hidden /> : <PanelLeftOpen className="h-4 w-4" aria-hidden />}
-            </Button>}
-            <AppPageLocation isAdmin={session.user.is_admin} />
+            {namedVault && <VaultParentBackLink className="mr-2 hidden lg:inline-flex" />}
+            <AppPageLocation isAdmin={session.user.is_admin} parentBack={Boolean(namedVault)} />
             <div ref={searchControlsRef} className="ml-auto flex min-w-0 flex-1 items-center gap-2 lg:flex-none lg:pl-3">
               {!isVaultOverview && <HeaderIndexingStatus />}
               {/* Quick search stays available on every route. The full Search
@@ -381,7 +376,7 @@ export function Layout({ routeOverlay, protectBackgroundDrafts = false }: { rout
             {viewportLocked ? (
               <CurrentUserProvider user={session.user} checking={revalidating} revision={accessRevision}>
                 <ErrorBoundary resetKeys={[location.pathname, location.search]}>
-                  <Outlet context={{ setVaultNavigationWidth, setVaultNavigationControl, minimumVaultWorkspaceWidth }} />
+                  <Outlet context={{ setVaultNavigationWidth, minimumVaultWorkspaceWidth }} />
                 </ErrorBoundary>
               </CurrentUserProvider>
             ) : (
@@ -414,6 +409,7 @@ export function Layout({ routeOverlay, protectBackgroundDrafts = false }: { rout
     {/* Settings previews retain editable drafts. Their mode changes and exits
         consult that workspace's guard without sharing breadcrumb state. */}
     {protectBackgroundDrafts && routeOverlay}
+    </VaultSwitcherProvider>
     </ResourceNavigationProvider>
     {/* Route-backed previews share the shell's identity/access proof, but keep
         their own location and navigation scope. The inactive background must
@@ -493,16 +489,17 @@ function MobileNavLink({
   name: string;
   icon: LucideIcon;
 }) {
+  const className = `flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
+    active
+      ? "bg-surface-selected text-surface-selected-foreground"
+      : "text-foreground-muted hover:text-foreground hover:bg-surface-hover"
+  }`;
   return (
     <Link
       to={to}
       aria-label={name}
       aria-current={active ? "page" : undefined}
-      className={`flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] transition-token focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
-        active
-          ? "bg-surface-selected text-surface-selected-foreground"
-          : "text-foreground-muted hover:text-foreground hover:bg-surface-hover"
-      }`}
+      className={className}
     >
       <Icon className="h-4 w-4" aria-hidden />
     </Link>

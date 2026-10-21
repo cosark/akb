@@ -139,6 +139,10 @@
      follow the viewport; body gutters follow the actual reading container. */
   --spacing-document-preview-edge: clamp(1rem, 2vw, 3rem);
   --spacing-document-reading-gutter: clamp(1rem, 2cqi, 2rem);
+  --spacing-document-command-row: 3rem;
+  --spacing-document-command-touch-row: 4rem;
+  --spacing-document-command-inset: 1.25rem;
+  --spacing-vault-box-depth: 1rem;
 
   /* ── Radius — soft, rounded family look (12px controls, 14px cards,
      16px modals/hero — mirrors seahorse/akb-platform) ─────────────── */
@@ -181,6 +185,9 @@
   --duration-fast: 120ms;
   --duration-base: 220ms;
   --duration-slow: 420ms;
+  --duration-title-reveal-wait: 600ms;
+  --duration-title-reveal-min: 1800ms;
+  --motion-title-reveal-speed: 28;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
@@ -661,6 +668,99 @@ body::before {
 .feat-eyebrow-neutral   { color: var(--color-foreground-muted); }
 
 /* ── Motion ──────────────────────────────────────────────────────── */
+/* Inspect an overflowing title once; icons, metadata and row boxes stay put. */
+/* Three shallow faces extend the Vault's Box glyph into a usable container.
+   Only decorative faces skew; text and the full native-link target stay flat. */
+.vault-box::before,
+.vault-box::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  border: 1px solid var(--color-border-strong);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+.vault-box::before {
+  left: var(--spacing-vault-box-depth);
+  right: 0;
+  top: 0;
+  height: var(--spacing-vault-box-depth);
+  transform: skewX(-45deg);
+  transform-origin: left top;
+  border-bottom: 0;
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  background: var(--color-workspace-section);
+}
+.vault-box::after {
+  right: 0;
+  top: var(--spacing-vault-box-depth);
+  bottom: 0;
+  width: var(--spacing-vault-box-depth);
+  transform: skewY(-45deg);
+  transform-origin: left top;
+  border-left: 0;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  background: var(--color-surface-2);
+}
+.vault-box-link,
+.vault-box-loading {
+  position: relative;
+  isolation: isolate;
+  padding-top: calc(var(--spacing-vault-box-depth) + .75rem);
+  padding-right: calc(var(--spacing-vault-box-depth) + .75rem);
+}
+.vault-box-link::before,
+.vault-box-loading > .vault-box-front {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  z-index: -1;
+  top: var(--spacing-vault-box-depth);
+  right: var(--spacing-vault-box-depth);
+  bottom: 0;
+  left: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface);
+  transition: border-color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+.vault-box:has(.vault-box-link):is(:hover, :focus-within)::before,
+.vault-box:has(.vault-box-link):is(:hover, :focus-within)::after,
+.vault-box:is(:hover, :focus-within) .vault-box-link::before {
+  border-color: var(--color-link);
+}
+.vault-box:hover .vault-box-link::before {
+  background: var(--color-surface-hover);
+}
+
+/* Collection index sheets use a quiet folded corner, distinct from Vault boxes. */
+.collection-sheet::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  top: -1px;
+  right: -1px;
+  width: .875rem;
+  height: .875rem;
+  border-bottom-left-radius: var(--radius-xs);
+  background: linear-gradient(45deg, var(--color-surface-2) 46%, var(--color-border-strong) 49%, var(--color-background) 52%);
+}
+
+.overflow-reveal-title { display: block; min-width: 0; overflow: hidden; }
+.overflow-reveal-title-text { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.overflow-reveal-title:is([data-reveal="waiting"], [data-reveal="running"]) .overflow-reveal-title-text {
+  animation: akb-title-reveal max(var(--duration-title-reveal-min), calc(var(--title-reveal-travel) / var(--motion-title-reveal-speed) * 1s)) linear var(--duration-title-reveal-wait) 1 forwards;
+}
+.overflow-reveal-title:is([data-reveal="running"], [data-reveal="settled"]) .overflow-reveal-title-text {
+  width: max-content;
+  overflow: visible;
+  text-overflow: clip;
+}
+.overflow-reveal-title[data-reveal="settled"] .overflow-reveal-title-text { transform: translateX(var(--title-reveal-distance)); }
+@keyframes akb-title-reveal { from { transform: translateX(0); } to { transform: translateX(var(--title-reveal-distance)); } }
+@media (prefers-reduced-motion: reduce), (hover: none), (pointer: coarse) {
+  .overflow-reveal-title .overflow-reveal-title-text { animation: none; transform: none; width: auto; overflow: hidden; text-overflow: ellipsis; }
+}
+
 @keyframes akb-in {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: none; }
@@ -893,11 +993,14 @@ body::before {
 [data-reader-control][hidden] { display: none; }
 .document-command-inner [data-reader-control] { height: var(--reader-control-size); min-height: var(--reader-control-size); border-radius: var(--radius-sm); font-size: .875rem; line-height: 1.25rem; font-weight: 500; gap: .375rem; }
 .document-command-inner [data-reader-icon], .document-command-inner [data-reader-navigation] { width: var(--reader-control-size); min-width: var(--reader-control-size); padding-inline: 0; }
-.document-unified-toolbar .document-command-inner { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; padding-block: .25rem; }
+.document-unified-toolbar .document-command-inner { display: grid; min-height: calc(var(--spacing-document-command-row) - 1px); grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; padding: .375rem var(--spacing-document-command-inset); }
+/* Include the common bottom hairline in the row metric, so adjacent panes
+   meet exactly instead of adding a border below an independent min-height. */
+[data-navigation-mode]:has(.document-unified-toolbar) [data-slot="collection-management-row"] { height: var(--spacing-document-command-row); }
 .document-unified-toolbar [data-slot="resource-command-meta"] { display: contents; }
 .document-unified-toolbar [data-slot="resource-command-actions"] { flex-wrap: nowrap; gap: .25rem; grid-column: 2; }
 .document-reader-controls { display: flex; align-items: center; gap: .375rem; }
-.document-reader-status { display: flex; min-width: 0; align-items: center; gap: .5rem; }
+.document-reader-status { display: flex; min-width: 0; align-items: center; column-gap: .75rem; row-gap: .25rem; }
 .document-reader-status time { font-size: .75rem; line-height: 1rem; }
 .document-command-inner [data-reader-icon] > svg { width: var(--reader-icon-size); height: var(--reader-icon-size); }
 .document-edit-toolbar .document-command-inner { grid-template-columns: minmax(0,1fr) auto; }
@@ -930,7 +1033,15 @@ body::before {
 .document-panel-sections summary svg { color: var(--color-foreground-muted); transition: transform var(--duration-fast) var(--ease-out); }
 .document-panel-sections details[open] > summary svg { transform: rotate(180deg); }
 .document-panel-section-body { padding-bottom: 1.25rem; }
-@container resource-commands (min-width: 48rem) { .document-command-inner { --reader-control-size: 1.75rem; --reader-icon-size: .875rem; } .document-command-inner [data-reader-navigation] { width: auto; padding-inline: .625rem; } }
+@media (pointer: fine) {
+  /* Inline Vault navigation reserves at least 41rem for its working pane.
+     Use that same boundary for compact pointer tools and aligned row heights. */
+  @container resource-commands (min-width: 41rem) { .document-command-inner { --reader-control-size: 1.75rem; --reader-icon-size: .875rem; } .document-command-inner [data-reader-navigation] { width: auto; padding-inline: .625rem; } }
+}
+@media (pointer: coarse) {
+  .document-unified-toolbar .document-command-inner { min-height: calc(var(--spacing-document-command-touch-row) - 1px); }
+  [data-navigation-mode]:has(.document-unified-toolbar) [data-slot="collection-management-row"] { height: var(--spacing-document-command-touch-row); }
+}
 @container resource-commands (max-width: 39.999rem) {
   .document-unified-toolbar:not(.document-edit-toolbar) .document-command-inner { grid-template-columns: minmax(0, 1fr) auto; gap: .25rem .5rem; }
   .document-unified-toolbar:not(.document-edit-toolbar) [data-slot="resource-command-actions"] { grid-column: 1 / -1; grid-row: 1; }

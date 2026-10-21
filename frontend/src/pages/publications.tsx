@@ -307,7 +307,7 @@ function PublicationsWorkspace({
 
   return (
     <>
-      <div data-testid="publication-workspace" className="workspace-density-compact w-full max-w-none">
+      <div data-testid="publication-workspace" className="workspace-density-compact @container/publications mx-auto w-full max-w-7xl">
         <h1 id="publications-heading" className="sr-only">
           Public links
         </h1>
@@ -494,7 +494,7 @@ function PublicationRow({
     : `${publication.view_count ?? 0} views`;
 
   return (
-    <li className="grid gap-3 px-4 py-3 transition-token hover:bg-surface-hover sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-5">
+    <li className="grid gap-2 px-4 py-3 transition-token hover:bg-surface-hover @lg/publications:px-5 @lg/publications:py-2.5 @min-[42rem]/publications:grid-cols-[minmax(0,1fr)_auto] @min-[42rem]/publications:items-center">
       <div className="flex min-w-0 items-start gap-2.5">
         <span
           data-testid="publication-index"
@@ -524,7 +524,7 @@ function PublicationRow({
             </Badge>
           </div>
 
-          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-relaxed text-foreground-muted">
+          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-4 text-foreground-muted">
             <span>{RESOURCE_LABEL[publication.resource_type]}</span><span aria-hidden>·</span>
             <span>
               Delivery: {publication.mode === "snapshot" ? "Snapshot" : publication.mode === "live" ? "Live" : "Unknown"}
@@ -559,7 +559,7 @@ function PublicationRow({
         </div>
       </div>
 
-      <div className="flex shrink-0 items-center justify-end gap-2">
+      <div className="ml-7 flex shrink-0 flex-wrap items-center justify-start gap-1 @min-[42rem]/publications:ml-0 @min-[42rem]/publications:justify-end">
         <button
           type="button"
           onClick={onCopy}
@@ -600,7 +600,7 @@ function PublicationPolicySummary() {
   return (
     <div
       data-testid="publication-policy-summary"
-      className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-surface px-4 py-2.5 text-xs sm:px-5"
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-surface px-4 py-2 text-xs @lg/publications:px-5"
     >
       <span className="inline-flex items-center gap-1.5 font-semibold text-foreground">
         <Globe className="h-3.5 w-3.5 text-success" aria-hidden />
@@ -687,9 +687,9 @@ function PublicationControls({
   return (
     <div
       data-testid="publication-controls"
-      className="flex flex-col gap-2 border-b border-border bg-surface px-4 py-3 sm:flex-row sm:items-center sm:px-5"
+      className="flex flex-wrap items-center gap-2 border-b border-border bg-surface px-4 py-3 @lg/publications:px-5 @lg/publications:py-2.5"
     >
-      <label className="relative min-w-0 flex-1 sm:max-w-sm">
+      <label className="relative min-w-0 flex-1 basis-64">
         <span className="sr-only">Filter public links</span>
         <Search
           className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-foreground-muted"
@@ -706,7 +706,7 @@ function PublicationControls({
       <div
         role="group"
         aria-label="Filter public links by type"
-        className="flex flex-wrap items-center gap-2"
+        className="flex flex-wrap items-center gap-1"
       >
         {PUBLICATION_FILTERS.map((filter) => (
           <button
@@ -720,7 +720,7 @@ function PublicationControls({
           </button>
         ))}
       </div>
-      <span className="shrink-0 text-xs tabular-nums text-foreground-muted sm:pl-1">
+      <span className="ml-auto shrink-0 text-xs tabular-nums text-foreground-muted">
         {visibleCount}/{totalCount}
       </span>
     </div>
@@ -729,7 +729,7 @@ function PublicationControls({
 
 function PublicationNoResults({ onClear }: { onClear: () => void }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-4 bg-surface px-4 py-5 sm:px-5">
+    <div className="flex flex-wrap items-center justify-between gap-3 bg-surface px-4 py-4 @lg/publications:px-5">
       <div className="min-w-0">
         <h3 className="text-sm font-semibold text-foreground">
           No matching public links
@@ -747,12 +747,12 @@ function PublicationNoResults({ onClear }: { onClear: () => void }) {
 
 function PublicationEmptyState({ vault }: { vault: string }) {
   return (
-    <div data-testid="publication-empty-state" className="flex flex-wrap items-center justify-between gap-4 bg-surface px-4 py-5 sm:px-5">
+    <div data-testid="publication-empty-state" className="flex flex-wrap items-center justify-between gap-3 bg-surface px-4 py-4 @lg/publications:px-5">
       <div className="min-w-0 max-w-xl">
         <h3 className="text-sm font-semibold text-foreground">
           No public links yet
         </h3>
-        <p className="mt-1 text-sm leading-relaxed text-foreground-muted">
+        <p className="mt-1 text-ui leading-relaxed text-foreground-muted">
           Open a document, table, or file and choose Publish to create a public link.
         </p>
       </div>
@@ -795,7 +795,7 @@ function PublicationSkeleton() {
       {[0, 1, 2].map((index) => (
         <div
           key={index}
-          className="flex items-center gap-3 border-b border-border px-4 py-2.5 sm:px-5"
+          className="flex items-center gap-3 border-b border-border px-4 py-3 @lg/publications:px-5 @lg/publications:py-2.5"
           aria-hidden
         >
           <Skeleton className="h-3 w-5 shrink-0 rounded-[var(--radius-sm)]" />
