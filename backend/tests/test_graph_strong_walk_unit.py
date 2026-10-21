@@ -1,4 +1,5 @@
-"""Strength-aware neighbourhood walk (``edge_type`` on ``/graph?uri=`` and ``akb_graph``) — DB-free.
+"""Strength- and direction-aware neighbourhood walk (``edge_type`` and ``direction`` on
+``/graph?uri=`` and ``akb_graph``) — DB-free.
 
 ``edge_type`` ("strong" | "weak"; omitted = every edge) restricts the BFS itself,
 in both directions, so the ``limit`` node cap is spent on the neighbours the
@@ -6,11 +7,16 @@ caller asked for instead of being spent on edges that are then filtered away.
 The vault overview is not strength-aware and a request that pairs it with
 ``edge_type`` is refused.
 
-This file pins what needs no database: the SQL fragment that is the twin of
-``resolve_edge_type``, that the walk applies it to the outgoing and the incoming
-fetch alike, how ``hops`` / ``limit`` / ``truncated`` behave, and the REST and
-MCP parameter handling. That the fragment *selects the right rows* is a fact
-about PostgreSQL and runs there, in ``test_graph_strong_walk_postgres.py``.
+``direction`` ("both", the default | "outward") chooses which edges of a reached
+node the walk follows. ``outward`` takes its outgoing edges plus the incoming
+``derived_from`` ones, so the walk stops at shared context instead of fanning out
+through a hub. It composes with ``edge_type`` and, like it, needs ``uri``.
+
+This file pins what needs no database: the SQL fragments (the twin of
+``resolve_edge_type``, and the incoming-edge narrowing), that the walk applies
+them to the right fetches, how ``hops`` / ``limit`` / ``truncated`` behave, and
+the REST and MCP parameter handling. That the fragments *select the right rows*
+is a fact about PostgreSQL and runs there, in ``test_graph_strong_walk_postgres.py``.
 """
 
 from __future__ import annotations
@@ -31,7 +37,16 @@ from app.config import settings
 settings.git_storage_path = tempfile.mkdtemp(prefix="akb-strong-walk-unit-")
 
 from app.services import kg_service
-from app.services.kg_service import EDGE_TYPES, edge_strength_sql, resolve_edge_type
+from app.services.kg_service import (
+    DEFAULT_GRAPH_DIRECTION,
+    EDGE_TYPES,
+    GRAPH_DIRECTIONS,
+    LINK_RELATION_TYPES,
+    OUTWARD_INCOMING_RELATION,
+    edge_strength_sql,
+    incoming_walk_sql,
+    resolve_edge_type,
+)
 from mcp_server import server
 from mcp_server.tools import TOOLS
 
@@ -45,6 +60,7 @@ def uri(name: str) -> str:
 
 STRONG_SQL = edge_strength_sql("strong")
 WEAK_SQL = edge_strength_sql("weak")
+OUTWARD_SQL = incoming_walk_sql("outward")
 
 
 # ── The SQL twin of resolve_edge_type ────────────────────────────────────
@@ -91,6 +107,29 @@ def test_the_predicates_partition_the_edges_the_way_resolve_edge_type_does():
             assert strong(kind, stored) != weak(kind, stored), (kind, stored)  # a partition
 
 
+# ── The direction fragment and its vocabulary ────────────────────────────
+
+
+def test_the_direction_vocabulary_is_both_and_outward_and_defaults_to_both():
+    assert GRAPH_DIRECTIONS == ("both", "outward")
+    assert DEFAULT_GRAPH_DIRECTION == "both"
+    # The one relation `outward` follows against the arrow is one `akb_link` can write.
+    assert OUTWARD_INCOMING_RELATION == "derived_from"
+    assert OUTWARD_INCOMING_RELATION in LINK_RELATION_TYPES
+
+
+def test_the_direction_predicate_is_the_documented_rule():
+    assert incoming_walk_sql(None) == ""
+    assert incoming_walk_sql("both") == ""
+    assert incoming_walk_sql("outward") == "relation_type = 'derived_from'"
+
+
+@pytest.mark.parametrize("bad", ["sideways", "", "Outward", "incoming", "outward; DROP TABLE edges", 1, ["outward"]])
+def test_a_direction_outside_the_vocabulary_never_reaches_sql(bad):
+    with pytest.raises(ValueError, match="direction"):
+        incoming_walk_sql(bad)  # type: ignore[arg-type]
+
+
 # ── The walk, against an in-memory edge table ────────────────────────────
 
 
@@ -120,20 +159,24 @@ class _Edges:
     by which exact fragment the query carries — so a walk that forgot it on one
     direction, or built it for the wrong strength, is caught here. The fragment's
     own semantics are not re-implemented: the row is kept or dropped by
-    `resolve_edge_type`, the rule the fragment is the twin of.
+    `resolve_edge_type`, the rule the fragment is the twin of. The direction
+    fragment is applied the same way: a query that carries it keeps only rows of
+    the one relation it names, so it is caught on a fetch where it does not belong.
     """
 
-    def __init__(self, *edges: tuple[str, str, str, str | None]) -> None:
-        # (source, target, kind, stored edge_type)
-        self.edges = list(edges)
+    def __init__(self, *edges: tuple) -> None:
+        # (source, target, kind, stored edge_type[, relation]); `references` unless said
+        self.edges = [edge if len(edge) == 5 else (*edge, "references") for edge in edges]
         self.queries: list[str] = []
 
-    def _keep(self, query: str, kind: str, stored: str | None) -> bool:
+    def _keep(self, query: str, kind: str, stored: str | None, relation: str) -> bool:
         served = resolve_edge_type(kind, stored)
-        if STRONG_SQL in query:
-            return served == "strong"
-        if WEAK_SQL in query:
-            return served == "weak"
+        if STRONG_SQL in query and served != "strong":
+            return False
+        if WEAK_SQL in query and served != "weak":
+            return False
+        if OUTWARD_SQL in query and relation != OUTWARD_INCOMING_RELATION:
+            return False
         return True
 
     async def fetch(self, query: str, *args):
@@ -145,18 +188,21 @@ class _Edges:
         return [
             {
                 "source_uri": s, "target_uri": t, "source_type": "doc", "target_type": "doc",
-                "relation_type": "references", "kind": kind, "stored_edge_type": stored,
+                "relation_type": relation, "kind": kind, "stored_edge_type": stored,
             }
-            for s, t, kind, stored in self.edges
-            if (s if outgoing else t) in seeds and self._keep(query, kind, stored)
+            for s, t, kind, stored, relation in self.edges
+            if (s if outgoing else t) in seeds and self._keep(query, kind, stored, relation)
         ]
 
 
-async def _walk(edges: _Edges, start: str, *, hops: int = 2, limit: int = 50, edge_type=None):
+async def _walk(
+    edges: _Edges, start: str, *, hops: int = 2, limit: int = 50, edge_type=None, direction=None,
+):
     nodes: dict[str, dict] = {}
     edge_list: list[dict] = []
     truncated = await kg_service._bfs_collect(
-        edges, VAULT_ID, VAULT, start, hops, limit, nodes, edge_list, edge_type=edge_type,
+        edges, VAULT_ID, VAULT, start, hops, limit, nodes, edge_list,
+        edge_type=edge_type, direction=direction,
     )
     return nodes, edge_list, truncated
 
@@ -266,6 +312,7 @@ def _star(count: int) -> _Edges:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("direction", [None, "outward"])  # the leaves are outgoing, so both walks take them
 @pytest.mark.parametrize(
     ("leaves", "limit", "kept", "truncated"),
     [
@@ -277,8 +324,8 @@ def _star(count: int) -> _Edges:
         (0, 5, 1, False),
     ],
 )
-async def test_truncated_means_a_qualifying_node_did_not_fit(leaves, limit, kept, truncated):
-    nodes, edge_list, reported = await _walk(_star(leaves), uri("c"), hops=1, limit=limit)
+async def test_truncated_means_a_qualifying_node_did_not_fit(leaves, limit, kept, truncated, direction):
+    nodes, edge_list, reported = await _walk(_star(leaves), uri("c"), hops=1, limit=limit, direction=direction)
 
     assert len(nodes) == kept
     assert reported is truncated
@@ -322,6 +369,202 @@ async def test_nodes_beyond_the_radius_are_not_a_truncation():
     assert truncated is False
 
 
+# ── Direction: an outward walk stops at shared context ───────────────────
+
+
+def _incidents() -> _Edges:
+    """An incident, the cluster it ran on, a sibling incident on that same cluster,
+    and a postmortem derived from the incident that also names a service."""
+    return _Edges(
+        (uri("incident"), uri("cluster"), "explicit", None, "depends_on"),
+        (uri("other-incident"), uri("cluster"), "explicit", None, "depends_on"),
+        (uri("pm"), uri("incident"), "explicit", None, "derived_from"),
+        (uri("pm"), uri("service"), "explicit", None, "references"),
+    )
+
+
+def _short(u: str) -> str:
+    return u.rsplit("/", 1)[-1].removesuffix(".md")
+
+
+def _edge_names(edge_list: list[dict]) -> set[tuple[str, str, str]]:
+    return {(_short(e["source"]), _short(e["target"]), e["relation"]) for e in edge_list}
+
+
+@pytest.mark.asyncio
+async def test_an_outward_walk_follows_its_own_context_and_what_was_derived_from_it():
+    nodes, edge_list, truncated = await _walk(_incidents(), uri("incident"), direction="outward")
+
+    assert _names(nodes) == {"incident", "cluster", "pm", "service"}
+    assert "other-incident" not in _names(nodes)  # it only points at the cluster, which is shared context
+    assert _edge_names(edge_list) == {
+        ("incident", "cluster", "depends_on"),  # outgoing
+        ("pm", "incident", "derived_from"),  # incoming, but derived_from
+        ("pm", "service", "references"),  # the postmortem's own outgoing edge, one hop further out
+    }
+    assert {_short(u): n["depth"] for u, n in nodes.items()} == {
+        "incident": 0, "cluster": 1, "pm": 1, "service": 2,
+    }
+    assert truncated is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direction", [None, "both"])
+async def test_both_is_the_walk_it_always_was(direction):
+    edges = _incidents()
+
+    nodes, edge_list, truncated = await _walk(edges, uri("incident"), direction=direction)
+
+    assert _names(nodes) == {"incident", "cluster", "pm", "other-incident", "service"}
+    assert len(edge_list) == 4 and truncated is False
+    assert not any(OUTWARD_SQL in q for q in edges.queries)  # no narrowing on either fetch
+
+
+@pytest.mark.asyncio
+async def test_an_outward_walk_respects_hops():
+    nodes, edge_list, truncated = await _walk(_incidents(), uri("incident"), hops=1, direction="outward")
+
+    assert _names(nodes) == {"incident", "cluster", "pm"}  # the postmortem's edge to the service is a second hop
+    assert _edge_names(edge_list) == {
+        ("incident", "cluster", "depends_on"), ("pm", "incident", "derived_from"),
+    }
+    assert truncated is False  # the radius is not a cut
+
+
+@pytest.mark.asyncio
+async def test_started_on_a_hub_an_outward_walk_returns_the_hub_alone():
+    nodes, edge_list, truncated = await _walk(_incidents(), uri("cluster"), direction="outward")
+    everything, _, _ = await _walk(_incidents(), uri("cluster"))
+
+    assert _names(nodes) == {"cluster"} and edge_list == [] and truncated is False
+    assert _names(everything) == {"cluster", "incident", "other-incident", "pm"}
+
+
+@pytest.mark.asyncio
+async def test_derived_from_is_followed_against_the_arrow_from_every_reached_node():
+    lineage = _Edges(
+        (uri("pm"), uri("incident"), "explicit", None, "derived_from"),
+        (uri("summary"), uri("pm"), "explicit", None, "derived_from"),  # derived from the postmortem, not the incident
+        (uri("incident"), uri("raw-log"), "explicit", None, "derived_from"),  # the incident derives from a log: outgoing
+    )
+
+    nodes, edge_list, _ = await _walk(lineage, uri("incident"), direction="outward")
+
+    assert _names(nodes) == {"incident", "pm", "summary", "raw-log"}
+    assert len(edge_list) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("relation", [*LINK_RELATION_TYPES, "links_to"])
+async def test_only_derived_from_is_followed_against_the_arrow(relation):
+    pointing_at = _Edges((uri("other"), uri("c"), "explicit", None, relation))
+    pointed_to = _Edges((uri("c"), uri("other"), "explicit", None, relation))
+
+    inbound_nodes, inbound_edges, _ = await _walk(pointing_at, uri("c"), direction="outward")
+    outbound_nodes, outbound_edges, _ = await _walk(pointed_to, uri("c"), direction="outward")
+
+    assert _names(outbound_nodes) == {"c", "other"} and len(outbound_edges) == 1  # outgoing: always
+    if relation == OUTWARD_INCOMING_RELATION:
+        assert _names(inbound_nodes) == {"c", "other"} and len(inbound_edges) == 1
+    else:
+        assert _names(inbound_nodes) == {"c"} and inbound_edges == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("edge_type", [None, *EDGE_TYPES])
+async def test_the_direction_predicate_is_on_the_incoming_fetch_only(edge_type):
+    edges = _incidents()
+
+    await _walk(edges, uri("incident"), edge_type=edge_type, direction="outward")
+
+    outgoing = [q for q in edges.queries if "source_uri = ANY" in q]
+    incoming = [q for q in edges.queries if "target_uri = ANY" in q]
+    assert outgoing and incoming
+    assert all(OUTWARD_SQL in q for q in incoming)
+    assert not any(OUTWARD_SQL in q for q in outgoing)  # an outgoing edge is followed whatever its relation
+    strength = edge_strength_sql(edge_type)
+    if strength:  # ... and the strength still narrows both, ANDed on beside it
+        assert all(strength in q for q in outgoing + incoming)
+    assert all("starts_with(source_uri" in q and "starts_with(target_uri" in q for q in outgoing + incoming)
+
+
+def _strength_mix() -> _Edges:
+    return _Edges(
+        (uri("incident"), uri("cluster"), "explicit", None, "depends_on"),  # strong, outgoing
+        (uri("incident"), uri("owner"), "explicit", "weak", "references"),  # weak, outgoing
+        (uri("pm"), uri("incident"), "explicit", None, "derived_from"),  # strong, derived from it
+        (uri("draft"), uri("incident"), "explicit", "weak", "derived_from"),  # weak, derived from it
+        (uri("log"), uri("incident"), "implicit", None, "derived_from"),  # implicit, so weak
+        (uri("sibling"), uri("cluster"), "explicit", None, "depends_on"),  # strong, but shared context
+    )
+
+
+@pytest.mark.asyncio
+async def test_outward_composes_with_edge_type():
+    start = uri("incident")
+
+    outward = await _walk(_strength_mix(), start, direction="outward")
+    strong = await _walk(_strength_mix(), start, edge_type="strong", direction="outward")
+    weak = await _walk(_strength_mix(), start, edge_type="weak", direction="outward")
+    strong_both = await _walk(_strength_mix(), start, edge_type="strong")
+
+    assert _names(outward[0]) == {"incident", "cluster", "owner", "pm", "draft", "log"}
+    assert _names(strong[0]) == {"incident", "cluster", "pm"}
+    assert {e["edge_type"] for e in strong[1]} == {"strong"}
+    assert _names(weak[0]) == {"incident", "owner", "draft", "log"}
+    assert {e["edge_type"] for e in weak[1]} == {"weak"}
+    # Each narrows what the other leaves: the strong walk that is not outward reaches the sibling.
+    assert _names(strong_both[0]) == {"incident", "cluster", "pm", "sibling"}
+
+
+@pytest.mark.asyncio
+async def test_an_edge_the_walk_did_not_follow_is_not_emitted_even_between_visited_nodes():
+    """x points at y and both are reached. x sits on the radius, so its own edges are
+    never read, and y only takes an incoming edge when it is `derived_from`."""
+    web = _Edges(
+        (uri("s"), uri("y"), "explicit", None), (uri("s"), uri("p"), "explicit", None),
+        (uri("p"), uri("x"), "explicit", None), (uri("x"), uri("y"), "explicit", None),
+    )
+
+    both_nodes, both_edges, _ = await _walk(web, uri("s"))
+    outward_nodes, outward_edges, _ = await _walk(web, uri("s"), direction="outward")
+
+    assert _names(both_nodes) == _names(outward_nodes) == {"s", "y", "p", "x"}
+    assert _edge_names(both_edges) == {
+        ("s", "y", "references"), ("s", "p", "references"), ("p", "x", "references"), ("x", "y", "references"),
+    }
+    assert _edge_names(outward_edges) == _edge_names(both_edges) - {("x", "y", "references")}
+    # No stub endpoints either way: everything emitted joins two returned nodes.
+    assert all(e["source"] in outward_nodes and e["target"] in outward_nodes for e in outward_edges)
+
+
+@pytest.mark.asyncio
+async def test_a_hub_does_not_spend_the_node_cap_on_an_outward_walk():
+    """The shape seen on real data: every incident points at one cluster."""
+    hub = uri("cluster")
+    edges = _Edges(*[(uri(f"incident-{i}"), hub, "explicit", None, "depends_on") for i in range(300)])
+    start = uri("incident-0")
+
+    fan_out, _, fan_out_truncated = await _walk(edges, start, limit=200, edge_type="strong")
+    nodes, edge_list, truncated = await _walk(edges, start, limit=200, edge_type="strong", direction="outward")
+
+    assert len(fan_out) == 200 and fan_out_truncated is True  # incident, cluster, then every other incident
+    assert _names(nodes) == {"incident-0", "cluster"} and len(edge_list) == 1
+    assert truncated is False
+
+
+@pytest.mark.asyncio
+async def test_neighbours_an_outward_walk_does_not_follow_are_not_a_cut():
+    """Five documents point at c. With room for only c, nothing that qualified was left out."""
+    edges = _Edges(*[(uri(f"leaf-{i}"), uri("c"), "explicit", None) for i in range(5)])
+
+    nodes, edge_list, truncated = await _walk(edges, uri("c"), hops=1, limit=1, direction="outward")
+    default_nodes, _, default_truncated = await _walk(edges, uri("c"), hops=1, limit=1)
+
+    assert _names(nodes) == {"c"} and edge_list == [] and truncated is False
+    assert len(default_nodes) == 1 and default_truncated is True  # the same cap does cut the default walk
+
+
 # ── get_graph: parameter handling ────────────────────────────────────────
 
 
@@ -358,6 +601,57 @@ async def test_edge_type_without_a_uri_is_refused_not_ignored(monkeypatch, edge_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["sideways", "", "Outward", "incoming", 0, ["outward"]])
+async def test_an_invalid_direction_is_refused_before_the_database(monkeypatch, bad):
+    _forbid_pool(monkeypatch)
+
+    result = await kg_service.get_graph(VAULT, uri("c"), vault_id=VAULT_ID, direction=bad)
+
+    assert result["code"] == "invalid_argument"
+    assert "direction must be one of ['both', 'outward']" in result["error"]
+    assert "nodes" not in result
+
+
+@pytest.mark.asyncio
+async def test_a_bad_direction_is_a_bad_value_before_it_is_a_missing_uri(monkeypatch):
+    _forbid_pool(monkeypatch)
+
+    result = await kg_service.get_graph(VAULT, None, vault_id=VAULT_ID, direction="sideways")
+
+    assert result["code"] == "invalid_argument"
+    assert "direction must be one of" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_outward_without_a_uri_is_refused_not_ignored(monkeypatch):
+    """The overview has no direction to restrict; answering with every edge would mislead."""
+    _forbid_pool(monkeypatch)
+
+    result = await kg_service.get_graph(VAULT, None, vault_id=VAULT_ID, direction="outward")
+
+    assert result["code"] == "invalid_argument"
+    assert "`uri`" in result["error"] and "outward" in result["error"]
+    assert "hint" in result and "nodes" not in result
+
+
+@pytest.mark.asyncio
+async def test_both_without_a_uri_is_the_overview_it_always_was(monkeypatch):
+    """`both` is the default and what the overview does, so naming it asks for nothing new."""
+    seen: dict = {}
+
+    async def _overview(vault, **kwargs):
+        seen.update(kwargs, vault=vault)
+        return {"nodes": [], "edges": [], "truncated": False}
+
+    monkeypatch.setattr(kg_service, "get_overview", _overview)
+
+    result = await kg_service.get_graph(VAULT, None, limit=77, vault_id=VAULT_ID, direction="both")
+
+    assert result == {"nodes": [], "edges": [], "truncated": False}
+    assert seen == {"vault": VAULT, "vault_id": VAULT_ID, "top_k": 77}
+
+
+@pytest.mark.asyncio
 async def test_without_edge_type_the_overview_is_untouched(monkeypatch):
     seen: dict = {}
 
@@ -385,12 +679,15 @@ async def test_a_uri_outside_the_vault_returns_an_empty_untruncated_graph(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("direction", [None, "both", "outward"])
 @pytest.mark.parametrize("edge_type", [None, "strong", "weak"])
-async def test_the_neighbourhood_forwards_edge_type_and_reports_truncation(monkeypatch, edge_type):
+async def test_the_neighbourhood_forwards_edge_type_and_direction_and_reports_truncation(
+    monkeypatch, edge_type, direction,
+):
     seen: dict = {}
 
-    async def _bfs(conn, vault_id, vault, start, hops, limit, nodes, edges, *, edge_type=None):
-        seen.update(hops=hops, limit=limit, edge_type=edge_type)
+    async def _bfs(conn, vault_id, vault, start, hops, limit, nodes, edges, *, edge_type=None, direction=None):
+        seen.update(hops=hops, limit=limit, edge_type=edge_type, direction=direction)
         nodes[start] = {"uri": start, "resource_type": "doc", "name": "x", "depth": 0}
         return True
 
@@ -402,10 +699,10 @@ async def test_the_neighbourhood_forwards_edge_type_and_reports_truncation(monke
     monkeypatch.setattr(kg_service, "get_pool", _pool)
 
     result = await kg_service.get_graph(
-        VAULT, uri("c"), hops=3, limit=9, vault_id=VAULT_ID, edge_type=edge_type,
+        VAULT, uri("c"), hops=3, limit=9, vault_id=VAULT_ID, edge_type=edge_type, direction=direction,
     )
 
-    assert seen == {"hops": 3, "limit": 9, "edge_type": edge_type}
+    assert seen == {"hops": 3, "limit": 9, "edge_type": edge_type, "direction": direction}
     assert result["truncated"] is True
     assert [n["uri"] for n in result["nodes"]] == [uri("c")]
 
@@ -492,6 +789,68 @@ def test_rest_documents_edge_type_as_an_enum_on_the_neighbourhood_route():
     assert "neighbourhood" in param["description"].lower()
 
 
+def test_rest_forwards_direction_to_the_service(client, monkeypatch):
+    seen: list = []
+
+    async def _graph(vault, resource_uri=None, **kwargs):
+        seen.append((kwargs["edge_type"], kwargs["direction"]))
+        return {"nodes": [], "edges": [], "truncated": False}
+
+    monkeypatch.setattr(knowledge, "get_graph", _graph)
+    for extra in ({}, {"direction": "outward"}, {"direction": "both"}, {"edge_type": "strong", "direction": "outward"}):
+        assert client.get("/api/v1/graph", params={"uri": uri("c"), **extra}).status_code == 200
+
+    assert seen == [(None, None), (None, "outward"), (None, "both"), ("strong", "outward")]
+
+
+@pytest.mark.parametrize("bad", ["sideways", "", "Outward", "incoming", "outward,both"])
+def test_rest_rejects_an_invalid_direction(client, monkeypatch, bad):
+    async def _graph(*_args, **_kwargs):
+        raise AssertionError("an invalid direction must be refused before the service runs")
+
+    monkeypatch.setattr(knowledge, "get_graph", _graph)
+
+    response = client.get("/api/v1/graph", params={"uri": uri("c"), "direction": bad})
+
+    assert response.status_code == 422
+
+
+def test_rest_refuses_outward_on_the_vault_overview(client):
+    response = client.get("/api/v1/graph", params={"vault": VAULT, "direction": "outward"})
+
+    assert response.status_code == 400
+    assert "`uri`" in response.json()["detail"]
+
+
+def test_rest_accepts_both_on_the_vault_overview(client, monkeypatch):
+    async def _overview(vault, **kwargs):
+        return {
+            "nodes": [], "edges": [], "nodes_total": 0, "edges_total": 0, "returned": 0,
+            "truncated": False, "orphans_returned": 0, "orphans_truncated": False,
+        }
+
+    monkeypatch.setattr(kg_service, "get_overview", _overview)
+
+    response = client.get("/api/v1/graph", params={"vault": VAULT, "direction": "both"})
+
+    assert response.status_code == 200
+    assert response.json()["kind"] == "graph_overview"
+
+
+def test_rest_documents_direction_as_an_enum_on_the_neighbourhood_route():
+    from app.main import app
+
+    paths = app.openapi()["paths"]
+    param = next(p for p in paths["/api/v1/graph"]["get"]["parameters"] if p["name"] == "direction")
+
+    assert param["required"] is False
+    options = param["schema"].get("anyOf") or [param["schema"]]
+    assert next(o["enum"] for o in options if "enum" in o) == list(GRAPH_DIRECTIONS)
+    assert "neighbourhood" in param["description"].lower() and "derived_from" in param["description"]
+    # The overview has no direction to choose.
+    assert "direction" not in {p["name"] for p in paths["/api/v1/graph/overview"]["get"]["parameters"]}
+
+
 # ── MCP ──────────────────────────────────────────────────────────────────
 
 
@@ -556,3 +915,74 @@ async def test_akb_graph_refuses_edge_type_with_a_vault_and_no_uri(monkeypatch, 
 
     assert result["code"] == "invalid_argument"
     assert "uri" in result["error"] and result["hint"]
+
+
+def test_akb_graph_advertises_direction_from_the_shared_vocabulary():
+    graph = next(tool for tool in TOOLS if tool.name == "akb_graph")
+    direction = graph.input_schema["properties"]["direction"]
+
+    assert direction["enum"] == list(GRAPH_DIRECTIONS)
+    assert direction["default"] == DEFAULT_GRAPH_DIRECTION == "both"
+    assert "direction" not in graph.input_schema.get("required", [])
+    assert "uri" in direction["description"] and "derived_from" in direction["description"]
+    assert "direction=outward" in graph.description  # one short sentence on the tool itself
+    assert "direction" in server._TOOL_ARG_NAMES["akb_graph"]
+    # `akb_relations` has a `direction` of its own, over another vocabulary: not the same parameter.
+    relations = next(tool for tool in TOOLS if tool.name == "akb_relations")
+    assert relations.input_schema["properties"]["direction"]["enum"] == ["incoming", "outgoing", "both"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [({}, None), ({"direction": None}, None), ({"direction": "both"}, "both"), ({"direction": "outward"}, "outward")],
+)
+async def test_akb_graph_forwards_direction(monkeypatch, reader, extra, expected):
+    seen: dict = {}
+
+    async def _graph(vault, **kwargs):
+        seen.update(kwargs)
+        return {"nodes": [], "edges": [], "truncated": False}
+
+    monkeypatch.setattr(server, "get_graph", _graph)
+
+    await server._dispatch(
+        "akb_graph", {"uri": uri("c"), "hops": 1, "edge_type": "strong", **extra}, _mcp_user(),
+    )
+
+    assert seen["direction"] == expected
+    assert seen["edge_type"] == "strong"  # the two compose; neither replaces the other
+    assert (seen["hops"], seen["limit"]) == (1, 50)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["sideways", "", "Outward", "incoming", 0])
+async def test_akb_graph_refuses_an_invalid_direction(monkeypatch, reader, bad):
+    _forbid_pool(monkeypatch)
+
+    result = await server._dispatch("akb_graph", {"uri": uri("c"), "direction": bad}, _mcp_user())
+
+    assert result["code"] == "invalid_argument"
+    assert "direction must be one of" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_akb_graph_refuses_outward_with_a_vault_and_no_uri(monkeypatch, reader):
+    _forbid_pool(monkeypatch)
+
+    result = await server._dispatch("akb_graph", {"vault": VAULT, "direction": "outward"}, _mcp_user())
+
+    assert result["code"] == "invalid_argument"
+    assert "uri" in result["error"] and result["hint"]
+
+
+@pytest.mark.asyncio
+async def test_akb_graph_accepts_both_with_a_vault_and_no_uri(monkeypatch, reader):
+    async def _overview(vault, **kwargs):
+        return {"nodes": [], "edges": [], "truncated": False}
+
+    monkeypatch.setattr(kg_service, "get_overview", _overview)
+
+    result = await server._dispatch("akb_graph", {"vault": VAULT, "direction": "both"}, _mcp_user())
+
+    assert result == {"nodes": [], "edges": [], "truncated": False}

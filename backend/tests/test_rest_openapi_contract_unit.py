@@ -16,7 +16,7 @@ settings.git_storage_path = tempfile.mkdtemp(prefix="akb-rest-openapi-")
 
 from app.api.routes.tables import _raise_service_error
 from app.main import app
-from app.services.kg_service import EDGE_TYPES
+from app.services.kg_service import EDGE_TYPES, GRAPH_DIRECTIONS
 
 
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
@@ -458,6 +458,17 @@ def test_graph_rest_openapi_contract_is_codegen_typed():
     walk_options = walk_edge_type["schema"].get("anyOf") or [walk_edge_type["schema"]]
     assert next(option["enum"] for option in walk_options if "enum" in option) == edge_types
     assert "edge_type" not in {param["name"] for param in paths["/api/v1/graph/overview"]["get"]["parameters"]}
+
+    # `direction` selects which edges of a reached node the walk takes (both, or
+    # outgoing plus incoming `derived_from`). It is not the relations route's
+    # `direction`, whose vocabulary is incoming / outgoing / both, and it is a
+    # parameter of the neighbourhood walk only.
+    walk_direction = graph_params["direction"]
+    assert walk_direction["required"] is False
+    direction_options = walk_direction["schema"].get("anyOf") or [walk_direction["schema"]]
+    assert next(option["enum"] for option in direction_options if "enum" in option) == list(GRAPH_DIRECTIONS)
+    assert "derived_from" in walk_direction["description"]
+    assert "direction" not in {param["name"] for param in paths["/api/v1/graph/overview"]["get"]["parameters"]}
 
     get_relations = paths["/api/v1/relations"]["get"]
     params = {param["name"]: param for param in get_relations["parameters"]}

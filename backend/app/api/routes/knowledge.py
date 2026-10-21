@@ -28,6 +28,7 @@ from app.models.knowledge import (
 )
 from app.services.kg_service import (
     EdgeType,
+    GraphDirection,
     LinkRelationType as RelationType,
     get_resource_relations,
     get_graph,
@@ -224,9 +225,18 @@ async def vault_graph(
         None,
         description=(
             "Neighbourhood walk only (needs `uri`): follow and return only edges of "
-            "this strength, in both directions, so `limit` is spent on matching "
-            "neighbours. Omit for every edge. The vault overview is not "
+            "this strength, in the directions `direction` allows, so `limit` is spent on "
+            "matching neighbours. Omit for every edge. The vault overview is not "
             "strength-aware; `edge_type` without `uri` is refused with 400."
+        ),
+    ),
+    direction: GraphDirection | None = Query(
+        None,
+        description=(
+            "Neighbourhood walk only: `both` (default) follows every edge of a reached node; "
+            "`outward` follows its outgoing edges plus incoming `derived_from` edges, so the walk "
+            "stops at shared context instead of fanning out through hubs. Composes with "
+            "`edge_type`. `outward` without `uri` is refused with 400."
         ),
     ),
     user: AuthenticatedUser = Depends(get_current_user),
@@ -248,7 +258,7 @@ async def vault_graph(
     access = await check_vault_access(user.user_id, vault_name, required_role="reader")
     result = await get_graph(
         vault_name, resource_uri=uri, hops=hops, limit=limit,
-        vault_id=access["vault_id"], edge_type=edge_type,
+        vault_id=access["vault_id"], edge_type=edge_type, direction=direction,
     )
     kind = "graph_neighbors" if uri else "graph_overview"
     return {**_bridge_service_error(result), "kind": kind}

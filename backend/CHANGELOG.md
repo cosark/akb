@@ -71,13 +71,14 @@ specifically; the proxy has its own log in
 
 - `GET /graph?uri=…` and `akb_graph(uri=…)` take an optional `edge_type` of
   `strong` or `weak`. The walk then follows, and returns, only edges of that
-  strength, in both directions: a neighbour reachable only through an edge of
-  the other strength is not visited, so the `limit` node cap is spent on the
-  neighbours that were asked for rather than on edges that would be filtered
-  away. Omitted, the walk is exactly what it was. Strength is the one
-  `edge_type` already served on every edge (an implicit edge is always weak; an
-  explicit edge is strong unless stored as weak, including every edge made
-  before the attribute existed).
+  strength, in whichever directions it follows (both, unless `direction` below
+  says otherwise): a neighbour reachable only through an edge of the other
+  strength is not visited, so the `limit` node cap is spent on the neighbours
+  that were asked for rather than on edges that would be filtered away.
+  Omitted, the walk is exactly what it was. Strength is the one `edge_type`
+  already served on every edge (an implicit edge is always weak; an explicit
+  edge is strong unless stored as weak, including every edge made before the
+  attribute existed).
 - The vault overview is not strength-aware and is unchanged. Pairing `edge_type`
   with a `vault` and no `uri` is refused (`invalid_argument`, REST 400) rather
   than answered with every edge. An `edge_type` outside `strong` / `weak` is
@@ -89,6 +90,26 @@ specifically; the proxy has its own log in
 - No migration. The `@akb/client` `graph.neighbors` option is `edgeType`. A
   server without this change ignores the parameter, and its response has no
   `truncated`.
+- The same two routes also take an optional `direction`: `both` (the default, and
+  exactly the walk described above) or `outward`. An `outward` walk takes, from
+  each node it reaches, that node's outgoing edges plus its incoming `derived_from`
+  edges (what was derived from it, such as a postmortem derived from an incident),
+  and no other incoming edge. It therefore ends at shared context instead of
+  fanning out through a hub: from an incident it reaches the cluster, node,
+  service and owner it names and the postmortems derived from it, not every other
+  incident that points at the same cluster, which with `edge_type=strong` and
+  `both` filled the 200-node cap. `direction` composes with `edge_type`, each
+  narrowing what the other leaves. The edges returned are the ones the walk
+  followed, so an edge between two returned nodes that the walk did not follow is
+  not in the result. `truncated` means what it meant: a node the walk would have
+  taken did not fit.
+- `direction=outward` without `uri` is refused the way `edge_type` is
+  (`invalid_argument`, REST 400), because the vault overview has no direction to
+  restrict; `both` is what the overview does anyway and is accepted there. A value
+  outside `both` / `outward` is rejected (REST 422). The `@akb/client`
+  `graph.neighbors` option is `direction`; a server without this change ignores
+  the parameter and walks both ways. This `direction` is not the one `akb_relations`
+  and `GET /relations` take, whose values are `incoming` / `outgoing` / `both`.
 
 ### Search retrieval
 
