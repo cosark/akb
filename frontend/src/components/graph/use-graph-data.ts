@@ -135,6 +135,10 @@ export function endpointUri(end: unknown): string {
 /** uri → degree (incident visible-edge count). Normalizes legacy object
  *  endpoints through endpointUri. Shared by scene labels and page hub ranking
  *  so the visible-degree rule lives once. */
+/** Incoming strong relations the walk also follows: what was derived from a resource (an incident's postmortem) and what
+ *  depends on it (the services an incident's service affects). Everything else is followed outward only. */
+const WALKED_BACK: ReadonlySet<string> = new Set(["derived_from", "depends_on"]);
+
 /** A focused neighbourhood that keeps only strong connections.
  *
  *  Strong connections are explicit relations: from the focus they are followed
@@ -165,7 +169,7 @@ export function strongNeighborhood(
     const here = queue[index], next = reach.get(here)! + 1;
     if (next > hops) continue;
     for (const e of explicit) {
-      const other = e.source === here ? e.target : e.relation === "derived_from" && e.target === here ? e.source : undefined;
+      const other = e.source === here ? e.target : WALKED_BACK.has(e.relation) && e.target === here ? e.source : undefined;
       if (other === undefined || reach.has(other)) continue;
       reach.set(other, next); queue.push(other); tree.add(edgeId(e));
     }
