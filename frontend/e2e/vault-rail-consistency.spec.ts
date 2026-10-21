@@ -70,16 +70,16 @@ for (const dark of [false, true]) test(`Focused vault navigation ${dark ? "dark"
   await expect(document).toBeFocused();
 
   const filter = collections.getByRole("searchbox", { name: "Filter resources", exact: true });
-  const toggle = collections.getByRole("button", { name: "Filter content", exact: true });
+  const toggle = collections.getByRole("button", { name: /^Filter content(?:, \d+ active)?$/ });
   await expect(filter).toBeVisible();
   await toggle.click();
   await expect(filter).toBeFocused();
   await filter.fill("not found");
   await collections.getByRole("button", { name: "Collection document state" }).click();
   await page.getByRole("menuitemradio", { name: /^All documents/ }).click();
-  await collections.getByRole("button", { name: "Filter content, 2 active", exact: true }).click();
+  await collections.getByRole("button", { name: "Filter content, 3 active", exact: true }).click();
   await expect(filter).toBeVisible();
-  await expect(collections.getByRole("status").filter({ hasText: "Name: not found · Includes archived" })).toBeVisible();
+  await expect(collections.getByRole("status").filter({ hasText: "Name: not found · Collection: guides · Includes archived" })).toBeVisible();
   await collections.getByRole("button", { name: "Reset filters", exact: true }).click();
   await expect(filter).toBeFocused();
   await expect(filter).toHaveValue("");

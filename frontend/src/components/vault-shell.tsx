@@ -337,7 +337,7 @@ export function VaultShell() {
       window.removeEventListener("keydown", close);
       document.removeEventListener("focusin", leave);
     };
-  }, [inlineNavigation, mobileNavOpen]);
+  }, [inlineNavigation, mobileNavOpen, location.key]);
 
   // The same shortcut toggles the same panel on every named Vault route.
   useEffect(() => {

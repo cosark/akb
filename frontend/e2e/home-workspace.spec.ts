@@ -271,8 +271,12 @@ for (const width of [2560, 1440, 768, 375]) for (const dark of [false, true]) {
       await globalVaults.click();
       await expect(page).toHaveURL(/\/vault$/);
       await expect(page.getByRole("dialog", { name: "Vaults", exact: true })).toHaveCount(0);
-      await expect(nav).toHaveCount(0);
-      await expect.poll(async () => (await page.locator("header.app-header").boundingBox())!.x).toBe(56);
+      await expect(nav).toBeVisible();
+      await expect(nav.getByRole("navigation", { name: "Vaults", exact: true })).toBeVisible();
+      await expect.poll(async () => {
+        const current = (await nav.boundingBox())!;
+        return Math.abs((await page.locator("header.app-header").boundingBox())!.x - (current.x + current.width + 1));
+      }).toBeLessThanOrEqual(1);
       await page.screenshot({ path: testInfo.outputPath("vault-unselected-lines.png"), fullPage: true });
     } else {
       await page.keyboard.press("Escape");

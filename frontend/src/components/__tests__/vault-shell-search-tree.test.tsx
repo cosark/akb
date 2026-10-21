@@ -279,6 +279,7 @@ describe("Focused Vault navigation", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Open vault navigation" }));
     const control = screen.getByRole("button", { name: "Collection disclosure" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Close vault navigation" })).toHaveFocus());
     control.focus();
     control.addEventListener("keydown", event => event.preventDefault(), { once: true });
     await user.keyboard("{Escape}");
