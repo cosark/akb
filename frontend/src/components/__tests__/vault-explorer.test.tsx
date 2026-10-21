@@ -269,11 +269,18 @@ describe("collection exploration", () => {
   }
 
   it("narrows only the rail, preserves filters, and returns to its actual parent", async () => {
-    browseMock.mockResolvedValue(nested);
+    browseMock.mockImplementation(async (_vault: string, _collection: string, _depth: number, options: { name_query?: string } = {}) => ({
+      ...nested,
+      name_query: options.name_query,
+      items: options.name_query
+        ? nested.items.filter(item => `${item.name} ${item.path}`.toLocaleLowerCase().includes(options.name_query!.toLocaleLowerCase()))
+        : nested.items,
+    }));
     const user = userEvent.setup();
     const { container } = renderAt("/vault/v/doc/architecture%2Fdesign%2Fdecision.md", "focused");
     await screen.findByRole("button", { name: "design" });
     await user.type(screen.getByRole("searchbox", { name: "Filter resources" }), "Shared");
+    await waitFor(() => expect(browseMock).toHaveBeenCalledWith("v", undefined, -1, expect.objectContaining({ name_query: "Shared" })));
     const reads = browseMock.mock.calls.length;
     await explore(user, "architecture/design");
     const context = screen.getByRole("navigation", { name: "Collection exploration" });
@@ -292,7 +299,7 @@ describe("collection exploration", () => {
     await user.click(within(context).getByRole("button", { name: "Collection exploration path" }));
     await user.click(screen.getByRole("menuitem", { name: "All collections" }));
     expect(screen.queryByRole("navigation", { name: "Collection exploration" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "guides" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "guides" })).toBeVisible();
     expect(browseMock.mock.calls.length).toBeGreaterThan(reads);
     expect(browseMock.mock.calls.every(call => call[3]?.page_size === 100 && !call[3]?.cursor)).toBe(true);
   });
