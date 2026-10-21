@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
@@ -110,6 +110,45 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+describe("provider editor response ownership", () => {
+  async function startSave() {
+    vi.mocked(getAdminAuthConfig).mockResolvedValue(ssoConfig);
+    vi.mocked(getAdminSession).mockResolvedValue({ schema_version: 1, auth_mode: "sso", user: { id: "admin-a", username: "admin", email: "admin@example.com", display_name: "Admin", is_admin: true } });
+    vi.mocked(getAdminSsoCatalog).mockResolvedValue({ ...directCatalog, providers: [provider, { ...provider, alias: "partners", display_name: "Partner SSO" }] });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByLabelText("Alias");
+    await user.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    await user.type(screen.getByLabelText("Client secret"), "secret-for-a");
+    await user.click(screen.getByRole("button", { name: /Save disabled configuration/ }));
+    return user;
+  }
+  it.each(["success", "failure"])("does not apply Provider A's late %s to Provider B", async outcome => {
+    let resolve!: (value: typeof provider) => void;
+    let reject!: (error: Error) => void;
+    vi.mocked(configureAdminSsoProvider).mockReturnValue(new Promise((r, j) => { resolve = r; reject = j; }));
+    const user = await startSave();
+    await user.click(screen.getAllByRole("button", { name: "Edit" })[1]);
+    await user.type(screen.getByLabelText("Client secret"), "secret-for-b");
+    await act(async () => { if (outcome === "success") resolve(provider); else reject(new Error("A failed")); });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Save disabled configuration/ })).not.toBeDisabled());
+    expect(screen.getByLabelText("Alias")).toHaveValue("partners");
+    expect(screen.getByLabelText("Client secret")).toHaveValue("secret-for-b");
+    expect(screen.queryByText("A failed")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Provider configuration was saved disabled/)).not.toBeInTheDocument();
+  });
+  it("retains the submitted secret and reports uncertainty when that provider disappeared", async () => {
+    let resolve!: (value: typeof provider) => void;
+    vi.mocked(configureAdminSsoProvider).mockReturnValue(new Promise(r => { resolve = r; }));
+    await startSave();
+    vi.mocked(getAdminSsoCatalog).mockResolvedValue({ ...directCatalog, providers: [] });
+    await act(async () => resolve(provider));
+    await screen.findByText(/saved provider could not be verified/);
+    expect(screen.getByLabelText("Client secret")).toHaveValue("secret-for-a");
+    expect(screen.queryByText(/Provider configuration was saved disabled/)).not.toBeInTheDocument();
+  });
 });
 
 describe("AdminPage mode boundary", () => {
@@ -412,4 +451,84 @@ describe("AdminPage mode boundary", () => {
     expect(await screen.findByText(/managed by the deployment operator/i)).toBeInTheDocument();
     expect(screen.queryByLabelText("Client secret")).toBeNull();
   });
+});
+
+
+it("retains the provider editor and successful toggle notice when revalidation fails", async () => {
+  vi.mocked(getAdminAuthConfig).mockResolvedValue(ssoConfig);
+  vi.mocked(getAdminSession).mockResolvedValue({ schema_version: 1, auth_mode: "sso", user: { id: "admin-a", username: "admin", email: "admin@example.com", display_name: "Admin", is_admin: true } });
+  vi.mocked(setAdminSsoProviderEnabled).mockResolvedValue({ ...provider, enabled: false, state: "configured_disabled" });
+  const user = userEvent.setup();
+  renderPage();
+  await screen.findByText("Company SSO");
+  await user.type(screen.getByLabelText("Button label"), "Draft label");
+  vi.mocked(getAdminSsoCatalog).mockRejectedValueOnce(new Error("Temporary outage"));
+  await user.click(screen.getByRole("button", { name: "Disable" }));
+  expect(await screen.findByText("Company SSO was disabled.")).toBeVisible();
+  expect(screen.getByLabelText("Button label")).toHaveValue("Draft label");
+  expect(screen.getByText(/Could not update provider configuration/)).toBeVisible();
+  expect(screen.getByText("Disabled")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Enable" })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "Disable" })).toBeNull();
+  vi.mocked(getAdminSsoCatalog).mockResolvedValueOnce({ ...directCatalog, providers: [{ ...provider, enabled: false, state: "configured_disabled" }] });
+  await user.click(screen.getByRole("button", { name: "Retry providers" }));
+  await waitFor(() => expect(screen.queryByText(/Could not update provider configuration/)).toBeNull());
+  expect(screen.getByLabelText("Button label")).toHaveValue("Draft label");
+  vi.mocked(setAdminSsoProviderEnabled).mockResolvedValueOnce(provider);
+  await user.click(screen.getByRole("button", { name: "Enable" }));
+  expect(setAdminSsoProviderEnabled).toHaveBeenLastCalledWith("workforce", true);
+  expect(await screen.findByText("Company SSO was enabled.")).toBeVisible();
+});
+
+
+it("keeps denied provider data hidden through a failed retry until a successful read", async () => {
+  vi.mocked(getAdminAuthConfig).mockResolvedValue(ssoConfig);
+  vi.mocked(getAdminSession).mockResolvedValue({ schema_version: 1, auth_mode: "sso", user: { id: "admin-a", username: "admin", email: "admin@example.com", display_name: "Admin", is_admin: true } });
+  const user = userEvent.setup();
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = (key: string) => <QueryClientProvider client={queryClient}><MemoryRouter><AdminPage key={key} /></MemoryRouter></QueryClientProvider>;
+  const { rerender } = render(view("initial"));
+  await screen.findByText("Company SSO");
+  vi.mocked(getAdminSsoCatalog)
+    .mockRejectedValueOnce(Object.assign(new Error("Access denied"), { status: 403 }))
+    .mockRejectedValueOnce(Object.assign(new Error("Unavailable"), { status: 503 }))
+    .mockResolvedValueOnce(directCatalog);
+  await user.click(screen.getByRole("button", { name: "Disable" }));
+  await screen.findByRole("button", { name: "Retry providers" });
+  expect(screen.queryByText("Company SSO")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Retry providers" }));
+  await waitFor(() => expect(getAdminSsoCatalog).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Retry providers" })).toBeEnabled());
+  expect(screen.queryByText("Company SSO")).toBeNull();
+  expect(screen.queryByLabelText("Client secret")).toBeNull();
+  expect(queryClient.getQueryData(["admin-sso-catalog", 1])).toBeNull();
+  // Reuse the cache with a fresh control: an offline retry must not restore
+  // the old protected provider on mount.
+  let restore!: (value: typeof directCatalog) => void;
+  vi.mocked(getAdminSsoCatalog).mockReset();
+  vi.mocked(getAdminSsoCatalog).mockReturnValue(new Promise(resolve => { restore = resolve; }));
+  rerender(view("remounted"));
+  expect(screen.queryByText("Company SSO")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Retry providers" }));
+  await act(async () => restore(directCatalog));
+  expect(await screen.findByText("Company SSO")).toBeVisible();
+});
+
+it("does not purge a newer provider snapshot when a cancelled catalog read later denies access", async () => {
+  vi.mocked(getAdminAuthConfig).mockResolvedValue(ssoConfig);
+  vi.mocked(getAdminSession).mockResolvedValue({ schema_version: 1, auth_mode: "sso", user: { id: "admin-a", username: "admin", email: "admin@example.com", display_name: "Admin", is_admin: true } });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><MemoryRouter><AdminPage /></MemoryRouter></QueryClientProvider>);
+  await screen.findByText("Company SSO");
+  let denyOld!: (reason: Error) => void;
+  vi.mocked(getAdminSsoCatalog).mockReturnValueOnce(new Promise((_, reject) => { denyOld = reject; }));
+  act(() => { void client.refetchQueries({ queryKey: ["admin-sso-catalog", 1] }); });
+  const disabled = { ...provider, enabled: false, state: "configured_disabled" as const };
+  vi.mocked(setAdminSsoProviderEnabled).mockResolvedValueOnce(disabled);
+  vi.mocked(getAdminSsoCatalog).mockResolvedValueOnce({ ...directCatalog, providers: [disabled] });
+  await userEvent.setup().click(screen.getByRole("button", { name: "Disable" }));
+  expect(await screen.findByRole("button", { name: "Enable" })).toBeEnabled();
+  await act(async () => denyOld(Object.assign(new Error("Old denied response"), { status: 403 })));
+  expect(screen.getByText("Company SSO")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Enable" })).toBeEnabled();
 });

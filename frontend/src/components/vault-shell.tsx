@@ -17,8 +17,7 @@ import {
 } from "@/contexts/document-create-dialog-context";
 import { useColumnResize } from "@/hooks/use-column-resize";
 import { cn } from "@/lib/utils";
-import { VaultSectionNavigation } from "@/components/vault-navigation-menu";
-import { VaultHeaderActionsProvider } from "@/components/vault-header-actions";
+import { focusedVaultPageForPath } from "@/lib/vault-workspace";
 
 const TREE_VISIBLE_KEY = "akb.treeVisible";
 const VAULT_COLLAPSED_KEY = "akb.vaultRailCollapsed";
@@ -29,9 +28,9 @@ export interface VaultNavigationControl {
 }
 
 /**
- * Vault selection and Collections stay independent. Working pages own a compact
- * section row; resource readers keep only their breadcrumb and commands.
- * Column widths and explicit collapse preferences persist across both modes.
+ * Content exploration retains Collections; Vault-level tasks omit it. All named
+ * Vault routes share the same header menu. Explicit rail choices
+ * survive the presentation change, including browser history and direct entry.
  */
 export function VaultShell() {
   const { name } = useParams<{ name: string }>();
@@ -42,15 +41,17 @@ export function VaultShell() {
     setVaultNavigationControl?: (control: VaultNavigationControl | null) => void;
     minimumVaultWorkspaceWidth?: number;
   } | null>();
-  const isGraph = location.pathname.endsWith("/graph");
+  const focusedPage = focusedVaultPageForPath(location.pathname);
+  const isFocusedWorkspace = focusedPage !== null;
+  const isGraph = focusedPage === "graph";
   const isDocument = location.pathname.includes("/doc/");
   const isTable = location.pathname.includes("/table/");
   const isFile = location.pathname.includes("/file/");
   const isResourceViewer = isDocument || isTable || isFile;
-  const isPublications = location.pathname.endsWith("/publications");
+  const isPublications = focusedPage === "publish";
   const isSearch = location.pathname.endsWith("/search");
-  const isMembers = location.pathname.endsWith("/members");
-  const isSettings = location.pathname.endsWith("/settings");
+  const isMembers = focusedPage === "members";
+  const isSettings = focusedPage === "settings";
   const isActivity = location.pathname.endsWith("/activity");
   const overviewPath = name ? `/vault/${encodeURIComponent(name)}` : "";
   const isOverview =
@@ -203,8 +204,13 @@ export function VaultShell() {
 
   const workspaceNavigationWidth =
     (vaultCollapsed ? 56 : rail.width) +
-    (!vaultCollapsed && !!name ? 1 : 0) +
-    (name ? (effectiveTreeVisible ? tree.width : 40) : 0) + 1;
+    (!vaultCollapsed ? 1 : 0) +
+    (name && !isFocusedWorkspace ? (effectiveTreeVisible ? tree.width : 40) : 0) + 1;
+  // Freeze only the sizing input during a gesture, so crossing the responsive
+  // boundary cannot remove a handle while it still owns pointer capture.
+  const settledNavigationWidth =
+    (vaultCollapsed ? 56 : rail.settledWidth) + (!vaultCollapsed ? 1 : 0) +
+    (name && !isFocusedWorkspace ? (effectiveTreeVisible ? tree.settledWidth : 40) : 0) + 1;
   // Measure the workspace after the personal rail, not a viewport breakpoint.
   // A narrow reading surface temporarily uses the existing navigation drawer;
   // neither the saved widths nor the user's expanded/collapsed preference changes.
@@ -212,7 +218,9 @@ export function VaultShell() {
     const element = workspaceRef.current;
     if (!element) return;
     const measure = () => {
-      setWorkspaceWidth(element.getBoundingClientRect().width);
+      // Rail widths and header requirements are layout CSS pixels. A visual
+      // rect includes CSS zoom and would keep inline rails over a clipped header.
+      setWorkspaceWidth(element.clientWidth);
       setMinimumContentWidth(41 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16));
     };
     measure();
@@ -220,7 +228,7 @@ export function VaultShell() {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  const navigationOverlay = desktopNav && workspaceWidth > 0 && workspaceWidth - workspaceNavigationWidth < (layout?.minimumVaultWorkspaceWidth ?? minimumContentWidth);
+  const navigationOverlay = desktopNav && workspaceWidth > 0 && workspaceWidth - settledNavigationWidth < (layout?.minimumVaultWorkspaceWidth ?? minimumContentWidth);
   const inlineNavigation = desktopNav && !navigationOverlay;
   useEffect(() => {
     if (!collectionTarget) setRouteTreeOverride(null);
@@ -236,7 +244,9 @@ export function VaultShell() {
   useEffect(() => {
     if (inlineNavigation || !mobileNavOpen) return;
     const panel = document.getElementById("vault-workspace-navigation");
-    const frame = window.requestAnimationFrame(() => panel?.querySelector<HTMLElement>('button:not([disabled]), a[href]')?.focus());
+    const frame = window.requestAnimationFrame(() => {
+      if (!panel?.contains(document.activeElement)) panel?.querySelector<HTMLElement>('button:not([disabled]), a[href]')?.focus();
+    });
     const close = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       setMobileNavOpen(false);
@@ -261,8 +271,8 @@ export function VaultShell() {
     };
   }, [inlineNavigation, mobileNavOpen]);
 
-  // ⌘\ / ctrl+\ toggles Collections on desktop and the complete
-  // workspace navigator on compact screens.
+  // Focused tasks have no Collections to toggle. Their explicit shortcut
+  // toggles the Vault list instead, without changing the saved tree choice.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
@@ -271,32 +281,38 @@ export function VaultShell() {
           setMobileNavOpen((open) => !open);
           return;
         }
-        setEffectiveTreeVisible(!effectiveTreeVisible);
+        if (isFocusedWorkspace) toggleVaultCollapsed();
+        else setEffectiveTreeVisible(!effectiveTreeVisible);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inlineNavigation, effectiveTreeVisible, setEffectiveTreeVisible]);
+  }, [inlineNavigation, effectiveTreeVisible, setEffectiveTreeVisible, isFocusedWorkspace, toggleVaultCollapsed]);
 
   // No empty context column before a Vault is selected.
-  const showTree = !!name && effectiveTreeVisible;
+  const showTree = !!name && !isFocusedWorkspace && effectiveTreeVisible;
   const publishWidth = layout?.setVaultNavigationWidth;
   useLayoutEffect(() => {
     publishWidth?.(inlineNavigation ? workspaceNavigationWidth : 0);
   }, [inlineNavigation, workspaceNavigationWidth, publishWidth]);
   useLayoutEffect(() => () => publishWidth?.(0), [publishWidth]);
-  const effectiveVaultCollapsed = inlineNavigation
+  const effectiveVaultCollapsed = desktopNav
     ? vaultCollapsed
     : mobileRailCollapsed;
-  const toggleEffectiveVaultCollapsed = inlineNavigation
+  const toggleEffectiveVaultCollapsed = desktopNav
     ? toggleVaultCollapsed
     : () => setMobileRailCollapsed((collapsed) => !collapsed);
+  const cancelRailResize = rail.cancel;
+  const cancelTreeResize = tree.cancel;
+  useEffect(() => {
+    if (!desktopNav || effectiveVaultCollapsed) cancelRailResize();
+    if (!inlineNavigation || !showTree) cancelTreeResize();
+  }, [desktopNav, effectiveVaultCollapsed, inlineNavigation, showTree, cancelRailResize, cancelTreeResize]);
   const mobileTreeWidth = effectiveVaultCollapsed
     ? "calc(100vw - 3.5rem)"
     : "calc(100vw - 10rem)";
 
   return (
-    <VaultHeaderActionsProvider>
     <VaultCreateDialogProvider openCreateVault={openCreateVault}>
       <DocumentCreateDialogProvider openCreateDocument={openCreateDocument}>
         <VaultRefreshProvider
@@ -304,7 +320,7 @@ export function VaultShell() {
           refetchVaults={refetchVaults}
         >
         <div className="flex flex-col h-full min-h-0">
-        <div ref={workspaceRef} className="relative flex flex-1 min-h-0 min-w-0" data-navigation-mode={inlineNavigation ? "inline" : "overlay"}>
+        <div ref={workspaceRef} className="relative flex flex-1 min-h-0 min-w-0" data-navigation-mode={inlineNavigation ? "inline" : "overlay"} data-workspace-mode={isFocusedWorkspace ? "focused" : "content"}>
           {!inlineNavigation && mobileNavOpen && <button type="button" tabIndex={-1} aria-label="Dismiss vault navigation"
             onClick={() => { setMobileNavOpen(false); document.getElementById("vault-navigation-trigger")?.focus(); }}
             className="absolute inset-0 z-40 cursor-default bg-foreground/20" />}
@@ -319,31 +335,41 @@ export function VaultShell() {
               !showTree && "border-r border-border",
             )}
           >
+            <div id="vault-list-sidebar" className="flex min-h-0 shrink-0">
             <VaultRail
               current={name || ""}
               onRefetchReady={onVaultsRefetchReady}
               onCreateVault={openCreateVault}
               collapsed={effectiveVaultCollapsed}
               onToggleCollapsed={toggleEffectiveVaultCollapsed}
-              width={inlineNavigation ? rail.width : 160}
+              width={desktopNav ? rail.width : 160}
             />
-            {/* Resize the expanded Vault list beside Collections.
-                The collapsed list remains a fixed-width icon strip. */}
-            {inlineNavigation && !vaultCollapsed && !!name && (
+            </div>
+            {/* The desktop Vault list resizes independently of Collections,
+                both inline and in the temporary overlay. Mobile stays bounded. */}
+            {desktopNav && !effectiveVaultCollapsed && (
               <div
                 role="separator"
                 aria-orientation="vertical"
                 aria-label="Resize vault list"
-                title="Drag to resize · double-click to reset"
+                aria-controls="vault-list-sidebar"
+                aria-valuemin={192}
+                aria-valuemax={320}
+                aria-valuenow={rail.width}
+                aria-valuetext={`${rail.width}px`}
+                tabIndex={0}
+                onFocus={() => setMobileNavOpen(true)}
+                title="Drag or use arrow keys to resize · double-click to reset"
                 {...rail.handlers}
-                className="group relative z-10 w-px shrink-0 cursor-col-resize touch-none before:absolute before:inset-y-0 before:-left-1 before:w-2"
+                className="group relative z-10 w-px shrink-0 cursor-col-resize touch-none outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background before:absolute before:inset-y-0 before:-left-1.5 before:w-3"
               >
-                <div className="mx-auto h-full w-px bg-border transition-colors group-hover:bg-primary group-active:bg-primary" />
+                <div className="mx-auto h-full w-px bg-border transition-colors group-hover:bg-primary group-focus-visible:bg-primary group-active:bg-primary" />
               </div>
             )}
             {/* Collections is exclusively a content explorer, not a Vault menu. */}
-            {effectiveTreeVisible && !!name && (
+            {showTree && (
               <div
+                id="vault-collections-sidebar"
                 data-slot="vault-collections-sidebar"
                 className="flex h-full min-h-0 shrink-0 flex-col overflow-hidden bg-surface"
                 style={{ width: inlineNavigation ? tree.width : desktopNav ? 320 : mobileTreeWidth }}
@@ -353,7 +379,7 @@ export function VaultShell() {
                   onRefetchReady={onTreeRefetchReady} />
               </div>
             )}
-            {!effectiveTreeVisible && !!name && (
+            {!isFocusedWorkspace && !effectiveTreeVisible && !!name && (
               <nav
                 aria-label="Collections (collapsed)"
                 className="h-full w-10 shrink-0 border-r border-border"
@@ -371,11 +397,18 @@ export function VaultShell() {
               role="separator"
               aria-orientation="vertical"
               aria-label="Resize tree panel"
-              title="Drag to resize · double-click to reset"
+              aria-controls="vault-collections-sidebar"
+              aria-valuemin={220}
+              aria-valuemax={480}
+              aria-valuenow={tree.width}
+              aria-valuetext={`${tree.width}px`}
+              tabIndex={0}
+              onFocus={() => setMobileNavOpen(true)}
+              title="Drag or use arrow keys to resize · double-click to reset"
               {...tree.handlers}
-              className="group relative z-10 w-px shrink-0 cursor-col-resize touch-none before:absolute before:inset-y-0 before:-left-1 before:w-2 lg:-mt-14 lg:h-[calc(100%+3.5rem)]"
+              className="group relative z-10 w-px shrink-0 cursor-col-resize touch-none outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background before:absolute before:inset-y-0 before:-left-1.5 before:w-3 lg:-mt-14 lg:h-[calc(100%+3.5rem)]"
             >
-              <div className="mx-auto h-full w-px bg-border transition-colors group-hover:bg-primary group-active:bg-primary" />
+              <div className="mx-auto h-full w-px bg-border transition-colors group-hover:bg-primary group-focus-visible:bg-primary group-active:bg-primary" />
             </div>
           )}
 
@@ -410,8 +443,6 @@ export function VaultShell() {
               showBack={false}
             />}
 
-            {name && <VaultSectionNavigation vault={name} />}
-
             {isGraph || isResourceViewer || isSearch ? (
               <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
                 <ErrorBoundary resetKeys={[location.pathname]}>
@@ -423,21 +454,18 @@ export function VaultShell() {
                 data-slot="vault-route-viewport"
                 className={cn(
                   "min-h-0 min-w-0 flex-1 bg-background",
-                  isSettings
-                    ? "overflow-y-auto xl:overflow-hidden"
-                    : "overflow-y-auto",
+                  "overflow-y-auto",
                 )}
               >
                 <div
                   className={cn(
                     "w-full",
-                    isSettings
-                      ? "min-h-full xl:h-full xl:min-h-0"
-                      : isOverview
+                    isOverview
                         ? "min-h-full px-2 py-3 lg:p-0"
-                        : isActivity || isPublications || isMembers
-                          ? "px-3 py-5 lg:px-4 lg:py-6 xl:px-5"
-                          : "px-5 py-5 lg:px-7 lg:py-6 xl:px-8",
+                        : isPublications || isMembers || isSettings
+                          ? "px-4 py-5 sm:p-6"
+                          : isActivity ? "px-3 py-5 lg:px-4 lg:py-6 xl:px-5"
+                            : "px-5 py-5 lg:px-7 lg:py-6 xl:px-8",
                   )}
                 >
                   <ErrorBoundary resetKeys={[location.pathname]}>
@@ -473,6 +501,5 @@ export function VaultShell() {
         </VaultRefreshProvider>
       </DocumentCreateDialogProvider>
     </VaultCreateDialogProvider>
-    </VaultHeaderActionsProvider>
   );
 }

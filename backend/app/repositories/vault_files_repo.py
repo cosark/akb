@@ -384,7 +384,7 @@ async def lease_file_upload_confirmation(
         """
         WITH leased AS (
             UPDATE vault_files
-               SET updated_at = NOW()
+               SET updated_at = CASE WHEN upload_state = 'pending' THEN NOW() ELSE updated_at END
              WHERE id = $1
                AND vault_id = $2
                AND kind = 'file'
@@ -858,13 +858,31 @@ async def confirm_file_upload_metadata(
         WHERE id = $6
           AND vault_id = $7
           AND kind = 'file'
-          AND upload_state IN ('pending', 'confirmed')
+          AND upload_state = 'pending'
         RETURNING id
         """,
         size_bytes, content_hash, hash_algorithm, etag, storage_version, file_id,
         vault_id,
     )
     return row is not None
+
+
+async def delete_pending_file(conn, vault_id: uuid.UUID, file_id: uuid.UUID) -> dict | None:
+    """Atomically withdraw only an unconfirmed standalone File reservation.
+
+    The predicate is rechecked under the DELETE's row lock, so a concurrent
+    confirmation that wins is never turned into an ordinary File deletion.
+    """
+    row = await conn.fetchrow(
+        """
+        DELETE FROM vault_files
+         WHERE id = $1 AND vault_id = $2 AND kind = 'file'
+           AND upload_state = 'pending'
+        RETURNING id, s3_key
+        """,
+        file_id, vault_id,
+    )
+    return dict(row) if row else None
 
 
 async def repair_confirmed_file_metadata(

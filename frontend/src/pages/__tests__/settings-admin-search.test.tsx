@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -79,7 +79,7 @@ describe("Admin tab search + sort", () => {
     const usernames = screen.getAllByTestId("admin-user-row").map((el) =>
       el.querySelector("[data-testid='admin-user-name']")?.textContent
     );
-    expect(usernames).toEqual(["alice", "carol", "bob"]); // 3, 1, 0
+    expect(usernames).toEqual(["Alice", "Carol", "Bob"]); // 3, 1, 0
   });
 
   it("hides admin password reset controls in SSO mode", async () => {
@@ -105,6 +105,23 @@ describe("Admin tab search + sort", () => {
 
     await screen.findByText("bob");
     expect(screen.queryByRole("button", { name: /reset password/i })).toBeNull();
-    expect(screen.getByRole("button", { name: /delete user bob/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Actions for bob" }));
+    expect(screen.queryByRole("menuitem", { name: /reset password/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /delete user bob/i })).toBeInTheDocument();
   });
+});
+
+
+it("ignores an older user-list response after revisiting the section", async () => {
+  let resolveOld!: (data: unknown) => void;
+  vi.mocked(api.adminListUsers).mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve; }) as never);
+  const user = userEvent.setup();
+  render(wrap());
+  await waitFor(() => expect(api.adminListUsers).toHaveBeenCalledTimes(1));
+  await user.click(screen.getByRole("tab", { name: "Appearance" }));
+  await user.click(screen.getByRole("tab", { name: "Administration" }));
+  await screen.findByText("bob");
+  await act(async () => resolveOld({ users: [{ id: "obsolete", username: "Obsolete user", email: "old@x", owned_vaults: 0, created_at: "2026-01-01" }] }));
+  expect(screen.queryByText("Obsolete user")).toBeNull();
+  expect(screen.getByText("bob")).toBeVisible();
 });

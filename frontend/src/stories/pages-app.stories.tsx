@@ -198,9 +198,10 @@ export const SettingsProfile: Story = {
   render: () => <AkbRouteTree />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("heading", { name: "Account settings" })).toBeInTheDocument();
-    await expect(await canvas.findByText("Public profile")).toBeInTheDocument();
-    await expect(await canvas.findByRole("navigation", { name: "Workspace navigation" })).toBeInTheDocument();
+    const body = within(canvasElement.ownerDocument.body);
+    const dialog = await body.findByTestId("account-settings-dialog", {}, { timeout: 5000 });
+    await expect(await within(dialog).findByRole("heading", { name: /^Profile$/ })).toBeVisible();
+    await expect(within(dialog).getByLabelText("Display name")).toHaveValue(currentUser.display_name);
     await expect(canvas.queryByRole("navigation", { name: "Vaults" })).not.toBeInTheDocument();
   },
 };
@@ -224,8 +225,9 @@ export const SettingsTokensError: Story = {
   render: () => <AkbRouteTree />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("Couldn't load tokens")).toBeInTheDocument();
-    await expect(await canvas.findByRole("navigation", { name: "Workspace navigation" })).toBeInTheDocument();
+    const dialog = await within(canvasElement.ownerDocument.body).findByTestId("account-settings-dialog", {}, { timeout: 5000 });
+    await expect(await within(dialog).findByText("Couldn't load tokens")).toBeVisible();
+    await expect(within(dialog).getByRole("button", { name: /^Retry$/ })).toBeEnabled();
     await expect(canvas.queryByRole("navigation", { name: "Vaults" })).not.toBeInTheDocument();
   },
 };
@@ -244,10 +246,8 @@ export const SettingsAdminRoster: Story = {
   },
   render: () => <AkbRouteTree />,
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await expect(await canvas.findByText("Users")).toBeInTheDocument();
-    await expect(await canvas.findByText("writer")).toBeInTheDocument();
-    await expect(await canvas.findByRole("navigation", { name: "Workspace navigation" })).toBeInTheDocument();
+    await expect(await within(canvasElement.ownerDocument.body).findByRole("heading", { name: /^Users$/ }, { timeout: 5000 })).toBeInTheDocument();
+    await expect(await within(canvasElement.ownerDocument.body).findByText("writer")).toBeInTheDocument();
   },
 };
 
@@ -264,9 +264,9 @@ export const SettingsAdminPermissionFallback: Story = {
   },
   render: () => <AkbRouteTree />,
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await expect(await canvas.findByText("Public profile")).toBeInTheDocument();
-    await expect(canvas.queryByRole("tab", { name: "Admin" })).not.toBeInTheDocument();
-    await expect(await canvas.findByRole("navigation", { name: "Workspace navigation" })).toBeInTheDocument();
+    const dialog = await within(canvasElement.ownerDocument.body).findByTestId("account-settings-dialog", {}, { timeout: 5000 });
+    await expect(await within(dialog).findByRole("heading", { name: /^Profile$/ })).toBeVisible();
+    await expect(within(dialog).getByLabelText("Display name")).toHaveValue(nonAdminUser.display_name);
+    await expect(within(dialog).queryByRole("tab", { name: "Administration" })).not.toBeInTheDocument();
   },
 };

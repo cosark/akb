@@ -5,6 +5,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { HomeRecentUpdates } from "@/components/home-recent-updates";
 import { getRecent, ApiError } from "@/lib/api";
 import { CurrentUserProvider } from "@/contexts/current-user-context";
+import { registerModal } from "@/lib/modal-visibility";
 
 vi.mock("@/lib/api", async () => ({ ...await vi.importActual("@/lib/api"), getRecent: vi.fn() }));
 const recent = vi.mocked(getRecent);
@@ -94,5 +95,73 @@ describe("Home recent updates", () => {
     recent.mockResolvedValue({ scope: "watching", changes: [], next_cursor: null });
     act(() => window.dispatchEvent(new Event("akb:watch-changed")));
     await waitFor(() => expect(screen.queryByText("Current watched")).not.toBeInTheDocument());
+  });
+  it.each([true, false])("preserves focus when a refresh removes the focused row (fixed scope=%s)", async fixed => {
+    recent.mockResolvedValue({ scope: "watching", changes: [row("Watched document")] });
+    localStorage.setItem("akb.homeRecentScope:first", "watching");
+    render(<MemoryRouter><CurrentUserProvider user={user}><HomeRecentUpdates scope={fixed ? "watching" : undefined} /></CurrentUserProvider></MemoryRouter>);
+    const source = await screen.findByRole("link", { name: "Preview Watched document" });
+    source.focus();
+    // Starting a refresh rerenders the row but must keep its existing focus.
+    let finish!: (value: Awaited<ReturnType<typeof getRecent>>) => void;
+    recent.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    act(() => window.dispatchEvent(new Event("akb:watch-changed")));
+    expect(source).toHaveFocus();
+    await act(async () => finish({ scope: "watching", changes: [] }));
+    expect(source).not.toBeInTheDocument();
+    expect(screen.getByRole(fixed ? "heading" : "tab", { name: "Watched documents" })).toHaveFocus();
+  });
+  it("retains focus when the refreshed row is still present", async () => {
+    renderFeed();
+    const source = await screen.findByRole("link", { name: "Preview All document" });
+    source.focus();
+    recent.mockResolvedValue({ scope: "all", changes: [row("All document"), row("New document")] });
+    act(() => window.dispatchEvent(new Event("akb:watch-changed")));
+    await screen.findByText("New document");
+    expect(source).toHaveFocus();
+  });
+  it("keeps focus on another control when a refresh removes a row", async () => {
+    render(<MemoryRouter><CurrentUserProvider user={user}><HomeRecentUpdates scope="all" /><button>Preview action</button></CurrentUserProvider></MemoryRouter>);
+    await screen.findByText("All document");
+    const action = screen.getByRole("button", { name: "Preview action" });
+    action.focus();
+    recent.mockResolvedValue({ scope: "all", changes: [] });
+    act(() => window.dispatchEvent(new Event("akb:watch-changed")));
+    await screen.findByText("Nothing updated yet");
+    expect(action).toHaveFocus();
+  });
+  it("does not move focus behind an open modal when a refresh removes a row", async () => {
+    renderFeed();
+    const source = await screen.findByRole("link", { name: "Preview All document" });
+    source.focus();
+    const unregister = registerModal();
+    try {
+      recent.mockResolvedValue({ scope: "all", changes: [] });
+      act(() => window.dispatchEvent(new Event("akb:watch-changed")));
+      await screen.findByText("Nothing updated yet");
+      expect(screen.getByRole("tab", { name: "All documents" })).not.toHaveFocus();
+    } finally { unregister(); }
+  });
+  it("F01: clears private updates during same-account verification and rejects old revision responses", async () => {
+    let finish!: (value: Awaited<ReturnType<typeof getRecent>>) => void;
+    const tree = (checking: boolean, revision: number) => <MemoryRouter><CurrentUserProvider user={user} checking={checking} revision={revision}><HomeRecentUpdates scope="all" /></CurrentUserProvider></MemoryRouter>;
+    recent.mockResolvedValueOnce({ scope: "all", changes: [row("Private old update")] });
+    const view = render(tree(false, 0)); await screen.findByText("Private old update");
+    recent.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    act(() => window.dispatchEvent(new Event("focus")));
+    view.rerender(tree(true, 0));
+    expect(screen.queryByText("Private old update")).not.toBeInTheDocument();
+    recent.mockResolvedValue({ scope: "all", changes: [], next_cursor: null });
+    view.rerender(tree(false, 1));
+    await screen.findByText("Nothing updated yet");
+    await act(async () => finish({ scope: "all", changes: [row("Revoked late update")] }));
+    expect(screen.queryByText("Revoked late update")).not.toBeInTheDocument();
+  });
+  it("clears current rows if a refresh reports revoked access", async () => {
+    renderFeed(); await screen.findByText("All document");
+    recent.mockRejectedValue(new ApiError("Access revoked", 403, {}));
+    act(() => window.dispatchEvent(new Event("akb:inventory-changed")));
+    await screen.findByText("Could not load recent updates.");
+    expect(screen.queryByText("All document")).not.toBeInTheDocument();
   });
 });

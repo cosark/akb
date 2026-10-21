@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
+  act,
   render,
   screen,
   waitFor,
@@ -10,6 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import VaultActivityPage from "@/pages/vault-activity";
+import { CurrentUserProvider } from "@/contexts/current-user-context";
 
 vi.mock("@/lib/api", () => ({
   getVaultActivity: vi.fn(),
@@ -48,6 +50,22 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Activity page redesign", () => {
+  it("hides the ledger during access proof and rejects old-revision rows and errors", async () => {
+    let reject!: (error: Error) => void;
+    getVaultActivityMock.mockResolvedValueOnce({ activity: [activity(0)] }).mockReturnValueOnce(new Promise((_r, j) => { reject = j; })).mockResolvedValue({ activity: [activity(1)] });
+    const view = (checking: boolean, revision: number) => <MemoryRouter initialEntries={["/vault/platform-docs/activity"]}><CurrentUserProvider user={{ user_id: "a", username: "a", email: "a@x.test", display_name: null, is_admin: false, auth_method: "local", key_class: null }} checking={checking} revision={revision}><Routes><Route path="/vault/:name/activity" element={<VaultActivityPage />} /></Routes></CurrentUserProvider></MemoryRouter>;
+    const { rerender } = render(view(false, 0));
+    await screen.findByText("Change 1");
+    rerender(view(true, 0));
+    expect(screen.queryByText("Change 1")).not.toBeInTheDocument();
+    rerender(view(false, 1));
+    await waitFor(() => expect(getVaultActivityMock).toHaveBeenCalledTimes(2));
+    rerender(view(true, 1));
+    await act(async () => reject(new Error("Old permission error")));
+    rerender(view(false, 2));
+    await screen.findByText("Change 2");
+    expect(screen.queryByText("Old permission error")).not.toBeInTheDocument();
+  });
   it("uses the compact Publish-style ledger and native activity date", async () => {
     getVaultActivityMock.mockResolvedValue({
       vault: "platform-docs",
@@ -65,11 +83,11 @@ describe("Activity page redesign", () => {
       "border-border-strong",
     );
     const summary = screen.getByTestId("activity-summary");
-    expect(within(summary).getByText("Git-backed")).toBeInTheDocument();
+    expect(within(summary).getByText("Document history")).toBeInTheDocument();
     expect(within(summary).getByText("People")).toBeInTheDocument();
     expect(within(summary).getByText("Agents")).toBeInTheDocument();
     expect(
-      within(summary).getByText(/Every commit in this vault is recorded here/i),
+      within(summary).getByText(/Author filters search this recent window/i),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("searchbox", { name: "Filter activity by author" }),
@@ -177,4 +195,34 @@ describe("Activity page redesign", () => {
       screen.getByText("Activity service unavailable"),
     ).toBeInTheDocument();
   });
+
+  it("F16: author misses outside the recent 50 stay honest for Native and Git histories", async () => {
+    getVaultActivityMock.mockResolvedValueOnce({ total: 50, activity: Array.from({ length: 50 }, (_, index) => activity(index)) }).mockResolvedValueOnce({ total: 0, activity: [] });
+    const actor = userEvent.setup(); renderPage();
+    await within(screen.getByTestId("activity-ledger-header")).findByText("50 loaded changes");
+    expect(screen.queryByText("Git-backed")).not.toBeInTheDocument();
+    expect(screen.getByText(/supports Git commits and Native revisions/)).toBeVisible();
+    await actor.type(screen.getByRole("searchbox"), "Older author");
+    expect(await screen.findByText(/No matches in the latest 50/)).toBeVisible();
+    expect(screen.getByText(/Older matches may exist/)).toBeVisible();
+  });
+  it("ends busy after initial failure and offers recovery", async () => {
+    getVaultActivityMock.mockRejectedValueOnce(new Error("Offline")).mockResolvedValueOnce({ activity: [activity(0)] });
+    const actor = userEvent.setup(); const { container } = renderPage();
+    await screen.findByText("Failed to load");
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    await actor.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Change 1")).toBeVisible();
+  });
+  it("retains rows after a filter failure and retries the requested filter", async () => {
+    getVaultActivityMock.mockResolvedValueOnce({ activity: [activity(0)] }).mockRejectedValueOnce(new Error("Offline")).mockResolvedValueOnce({ activity: [activity(1)] });
+    const actor = userEvent.setup(); renderPage();
+    await actor.click(await screen.findByRole("button", { name: "Filter by JY Kim (1 change)" }));
+    await screen.findByText("Activity could not be refreshed");
+    expect(screen.getByText("Change 1")).toBeVisible();
+    await actor.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Change 2")).toBeVisible();
+    expect(getVaultActivityMock).toHaveBeenLastCalledWith("platform-docs", { author: "JY Kim", limit: 50 });
+  });
+
 });
